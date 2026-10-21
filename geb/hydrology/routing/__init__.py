@@ -40,7 +40,6 @@ if TYPE_CHECKING:
 
 def get_discharge_per_river(
     rivers: gpd.GeoDataFrame,
-    all_rivers: pd.DataFrame,
     source: Literal["file", "memory"] = "file",
     folder: Path | None = None,
     variables_to_report: dict[str, Any] | None = None,
@@ -53,8 +52,6 @@ def get_discharge_per_river(
 
     Args:
         rivers: Rivers to read, indexed by integer river ID.
-        all_rivers: Full river network. Kept for compatibility; saved report
-            names determine which branches to sum.
         source: Whether to read files or in-memory report buffers.
         folder: Directory containing consolidated or legacy discharge files.
         variables_to_report: In-memory discharge report buffers (m³/s).
@@ -560,7 +557,7 @@ class Routing(Module):
                 waterbodies are loaded, use their construction years instead.
 
         Returns:
-            River geometries, river IDs excluding reservoirs that have been activated at GDW constuction year, and
+            River geometries, river IDs excluding active waterbodies, and
             the original river IDs.
         """
         waterbody_ids_grid: TwoDArrayInt32 = self.grid.load2d(
@@ -685,10 +682,7 @@ class Routing(Module):
         """Update river cells when reservoirs become active.
 
         Keep saved discharge statistics and water storage.
-
-        Returns:
-            None. Updates the river geometries and cell indices.
-        """  # noqa: DOC202
+        """
         active_waterbody_ids: ArrayInt32 = (
             self.hydrology.waterbodies.var.waterbodies.index.to_numpy(dtype=np.int32)[
                 self.hydrology.waterbodies.is_active
@@ -1247,25 +1241,16 @@ class Routing(Module):
         return bankfull_depth_m
 
     def set_router(self, initialize_storage: bool = True) -> None:
-        """Set up routing geometry, connections, and water levels.
+        """Prepare river routing for the current waterbodies and stored state.
 
-        Derive channel dimensions from discharge and observed widths, then
-        create the solver using the active waterbody and retention-basin maps.
-        Call after waterbody initialization or checkpoint loading so the solver
-        uses the current storage and connections.
+        Set channel dimensions and connections after waterbody initialization,
+        reservoir activation, or checkpoint loading.
 
         Args:
             initialize_storage: Initialize river storage during spinup. Set False
                 when rebuilding connections after reservoir construction.
-
-        Returns:
-            None.
-
-        Raises:
-            ValueError: If channel geometry is invalid.
-        """  # noqa: DOC202, DOC502
-        # A new reservoir changes which cells are rivers. Update these before
-        # creating the solver, including when loading a saved model.
+        """
+        # Keep routing consistent with the reservoirs operating this year.
         self.update_river_cells()
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
@@ -2243,7 +2228,6 @@ class Routing(Module):
         if self.model.in_spinup:
             discharge_by_river = get_discharge_per_river(
                 rivers=active_rivers,
-                all_rivers=self.var.rivers,
                 source="memory",
                 variables_to_report=self.variables_to_report,
             )
@@ -2256,7 +2240,6 @@ class Routing(Module):
             )
             discharge_by_river = get_discharge_per_river(
                 rivers=active_rivers,
-                all_rivers=self.var.rivers,
                 source="file",
                 folder=folder,
             )
@@ -2264,12 +2247,11 @@ class Routing(Module):
             if self.model.current_timestep > 0:
                 if self.variables_to_report is not None and any(
                     name.startswith("river_outflow_hourly_m3_per_s_")
-                    and report.get("_var_index", 0) > 0
+                    and report["_var_index"] > 0
                     for name, report in self.variables_to_report.items()
                 ):
                     discharge_by_river_run: pd.DataFrame = get_discharge_per_river(
                         rivers=active_rivers,
-                        all_rivers=self.var.rivers,
                         source="memory",
                         variables_to_report=self.variables_to_report,
                     )

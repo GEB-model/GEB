@@ -15,13 +15,7 @@ def test_reservoir_activation_preserves_storage(year: int) -> None:
 
     Args:
         year: Simulation year relative to construction in 2000.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If activation loses water or rebuilds routing unnecessarily.
-    """  # noqa: DOC202, DOC502
+    """
     waterbodies: WaterBodies = WaterBodies.__new__(WaterBodies)
     waterbodies.var = WaterBodyVariables()
     waterbodies.var.construction_year = np.array([0, 2000], dtype=np.int32)

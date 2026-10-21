@@ -1594,10 +1594,10 @@ class Hydrography(BuildModelBase):
         calculate_command_areas: bool = False,
         custom_reservoir_capacity: None | str = None,
     ) -> None:
-        """Setup waterbodies from HydroLAKES and GDW data.
+        """Set up waterbodies from HydroLAKES and GDW data.
 
         Controlled lakes become reservoirs. Natural lakes become reservoirs when
-        an intersecting GDW Dam or Lake Control Dam is present and the IDs overlap.
+        an intersecting GDW Dam or Lake Control Dam has a matching or missing ID.
         Save waterbody parameters and matching results.
 
         Args:
@@ -1609,13 +1609,10 @@ class Hydrography(BuildModelBase):
             custom_reservoir_capacity: Optional CSV or Excel file with
                 waterbody_id and volume_total (m3).
 
-        Returns:
-            None.
-
         Raises:
             ValueError: If options conflict, input data are invalid, or a dam
                 cannot be placed on an unoccupied river cell.
-        """  # noqa: DOC202
+        """
         if mode not in ["on", "off", "lakes_only", "reservoirs_only"]:
             raise ValueError(
                 f"Invalid mode: {mode}. Must be 'on', 'off', 'lakes_only', or 'reservoirs_only'."
@@ -1654,9 +1651,6 @@ class Hydrography(BuildModelBase):
         elif mode == "reservoirs_only":
             waterbodies = waterbodies[waterbodies["waterbody_type"] == RESERVOIR]
 
-        # only select waterbodies that intersect with the region
-        waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
-
         waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies[waterbodies.geometry.geom_type != "Point"],
             column="waterbody_id",
@@ -1685,8 +1679,6 @@ class Hydrography(BuildModelBase):
             waterbodies["elevation"] = original_d8_elevation.sel(
                 x=xs, y=ys, method="nearest"
             ).values.astype(np.float32)
-
-        waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         waterbody_id_array: TwoDArrayInt32 = waterbody_id.values.copy()
         if np.any(waterbody_id_array != -1):

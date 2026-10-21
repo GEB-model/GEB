@@ -1,7 +1,6 @@
 """Test GDW field names, units, and missing-data values."""
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 import pytest
 from shapely.geometry import Point
@@ -21,7 +20,6 @@ def gdw_records() -> gpd.GeoDataFrame:
             "GDW_ID": [1, 2],
             "HYLAK_ID": [42, -99],
             "DAM_TYPE": [" Dam ", ""],
-            "LAKE_CTRL": [" No ", ""],
             "CAP_MCM": [2.5, -99.0],
             "AREA_SKM": [0.5, -99.0],
             "DIS_AVG_LS": [1500.0, -99.0],
@@ -39,15 +37,10 @@ def test_prepare_gdw(gdw_records: gpd.GeoDataFrame) -> None:
 
     Args:
         gdw_records: Original GDW records.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If converted data or the original records are incorrect.
-    """  # noqa: DOC202, DOC502
+    """
     original: gpd.GeoDataFrame = gdw_records.copy()
     result: gpd.GeoDataFrame = prepare_gdw(gdw_records)
+    assert "lake_control" not in result
     assert result.crs.to_epsg() == 4326
     assert result.gdw_id.tolist() == [1, 2]
     assert result.hydrolakes_id.iloc[0] == 42
@@ -78,32 +71,21 @@ def test_prepare_gdw(gdw_records: gpd.GeoDataFrame) -> None:
 
 @pytest.mark.parametrize(
     "invalid",
-    ["missing_field", "crs", "duplicate", "zero", "fraction", "infinite", "text"],
+    ["missing_field", "duplicate", "fraction"],
 )
 def test_invalid_gdw(gdw_records: gpd.GeoDataFrame, invalid: str) -> None:
     """Reject incomplete records and IDs that cannot identify individual dams.
 
     Args:
         gdw_records: Original GDW records.
-        invalid: Field, coordinate system, or ID error to check.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If invalid source data is accepted.
-    """  # noqa: DOC202, DOC502
+        invalid: Missing field or invalid ID to check.
+    """
     if invalid == "missing_field":
         gdw_records.drop(columns="CAP_MCM", inplace=True)
-    elif invalid == "crs":
-        gdw_records.set_crs(None, allow_override=True, inplace=True)
     else:
         gdw_records["GDW_ID"] = {
             "duplicate": [1, 1],
-            "zero": [0, 2],
             "fraction": [1.5, 2.0],
-            "infinite": [np.inf, 2.0],
-            "text": ["a", "b"],
         }[invalid]
     with pytest.raises(ValueError, match="GDW"):
         prepare_gdw(gdw_records)

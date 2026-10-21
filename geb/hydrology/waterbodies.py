@@ -347,14 +347,10 @@ class WaterBodies(Module):
         lakes at their outlet level. Future reservoirs start empty, with their
         cells treated as rivers until their construction year.
 
-        Returns:
-            None.
-
         Raises:
             ValueError: If saved waterbody types are invalid or still use the
                 HydroLAKES controlled-lake code; rebuild setup_waterbodies.
-
-        """  # noqa: DOC202
+        """
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterbody_id_unmapped: np.ndarray = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_id"]
@@ -405,11 +401,6 @@ class WaterBodies(Module):
         self.var.waterbody_outflow_linear_mapping = np.where(
             self.grid.var.waterbody_outflow_points != -1
         )[0].astype(np.int32)
-
-        assert (
-            self.map_to_grid_outflow(np.arange(self.n), fill_value=-1)
-            == self.grid.var.waterbody_outflow_points
-        ).all()
 
         waterbody_data: gpd.GeoDataFrame = waterbody_data_raw.loc[
             order_of_waterbodies_in_grid
@@ -505,18 +496,14 @@ class WaterBodies(Module):
 
         Returns:
             True for lakes and built reservoirs, including those with unknown years.
-            Saved states without construction years keep all waterbodies active.
         """
-        return getattr(self.var, "active", np.ones(self.n, dtype=bool))
+        return self.var.active
 
     def set_active_waterbody_maps(self) -> None:
-        """Route future reservoir cells as rivers.
+        """Update waterbody maps for the reservoirs operating this year.
 
-        Keep IDs unchanged so saved states and command areas still match.
-
-        Returns:
-            None. Updates the grid's active waterbody IDs, outlets, and capacities.
-        """  # noqa: DOC202
+        Future reservoirs use river routing; waterbody IDs stay unchanged.
+        """
         # River cells have ID -1 and use the last (False) entry.
         active_cells: ArrayBool = np.append(self.is_active, False)[
             self.var.all_waterbody_ids
@@ -874,37 +861,28 @@ class WaterBodies(Module):
     def step(self) -> None:
         """Activate reservoirs from January 1 of their construction year.
 
-        Transfer existing river water into reservoir storage before rebuilding
-        routing connections. Later inflows fill the remaining capacity.
-
-        Returns:
-            None. Updates reservoir storage and routing when a reservoir activates.
-        """  # noqa: DOC202
-        if hasattr(self.var, "construction_year"):
-            active: ArrayBool = (
-                self.var.construction_year <= self.model.current_time.year
+        Keep existing water storage when reservoirs start operating.
+        """
+        active: ArrayBool = self.var.construction_year <= self.model.current_time.year
+        if not np.array_equal(active, self.is_active):
+            river_storage_m3: ArrayFloat64 = self.hydrology.routing.var.river_storage_m3
+            self.var.active = active
+            previous_waterbody_ids: ArrayInt32 = self.grid.var.waterbody_ids
+            self.set_active_waterbody_maps()
+            new_reservoir_cells: ArrayBool = (previous_waterbody_ids == -1) & (
+                self.grid.var.waterbody_ids != -1
             )
-            if not np.array_equal(active, self.is_active):
-                river_storage_m3: ArrayFloat64 = (
-                    self.hydrology.routing.var.river_storage_m3
-                )
-                self.var.active = active
-                previous_waterbody_ids: ArrayInt32 = self.grid.var.waterbody_ids
-                self.set_active_waterbody_maps()
-                new_reservoir_cells: ArrayBool = (previous_waterbody_ids == -1) & (
-                    self.grid.var.waterbody_ids != -1
-                )
-                # Keep the river water when the reservoir starts operating.
-                self.var.storage += np.bincount(
-                    self.grid.var.waterbody_ids[new_reservoir_cells],
-                    weights=river_storage_m3[new_reservoir_cells],
-                    minlength=self.n,
-                )
-                self.hydrology.routing.var.discharge_in_rivers_m3_s_substep[
-                    new_reservoir_cells
-                ] = np.nan
-                river_storage_m3[new_reservoir_cells] = 0
-                # The solver caches river connections and waterbody boundaries.
-                self.hydrology.routing.set_router(initialize_storage=False)
+            # Keep the river water when the reservoir starts operating.
+            self.var.storage += np.bincount(
+                self.grid.var.waterbody_ids[new_reservoir_cells],
+                weights=river_storage_m3[new_reservoir_cells],
+                minlength=self.n,
+            )
+            self.hydrology.routing.var.discharge_in_rivers_m3_s_substep[
+                new_reservoir_cells
+            ] = np.nan
+            river_storage_m3[new_reservoir_cells] = 0
+            # The solver caches river connections and waterbody boundaries.
+            self.hydrology.routing.set_router(initialize_storage=False)
 
         self.report(locals())

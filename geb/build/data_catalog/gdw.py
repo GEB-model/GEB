@@ -32,7 +32,6 @@ def prepare_gdw(data: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         "gdw_id",
         "hylak_id",
         "dam_type",
-        "lake_ctrl",
         "cap_mcm",
         "area_skm",
         "dis_avg_ls",

@@ -44,13 +44,6 @@ Lakes and reservoirs without a known construction year are always active.
 
 ## Data and setup
 
-GEB uses HydroLAKES for lake outlines and Global Dam Watch (GDW) for dam and
-reservoir data. GDW records identify regulated lakes and provide reservoir construction years. Controlled lakes always use reservoir behavior. Natural
-lakes become reservoirs when a GDW Dam or Lake Control Dam intersects them and
-its HydroLAKES ID matches or is missing. Existing reservoirs stay reservoirs.
-Other GDW attributes do not determine the type. Command areas can separately
-classify waterbodies as reservoirs.
-
-See [Waterbody setup](../getting_started/build/waterbodies.md) for info on how the waterbodies are build. 
-
-See [Weirs and gates](weirs.md) for river barriers.
+GEB combines HydroLAKES with GDW to identify reservoirs and add dam metadata
+and construction years. See [Waterbody setup](../getting_started/build/waterbodies.md)
+for classification and build settings, and [Weirs and gates](weirs.md) for river barriers.

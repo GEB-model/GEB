@@ -6228,13 +6228,7 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
 
     Args:
         monkeypatch: Fixture for replacing the solver and its diagnostic export.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If channel widths do not match hydraulic geometry (m).
-    """  # noqa: DOC202, DOC502
+    """
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing = Routing.__new__(Routing)
@@ -7621,13 +7615,7 @@ def test_routing_with_future_reservoirs(reservoir_active: bool) -> None:
 
     Args:
         reservoir_active: Whether reservoir 1 is active; reservoir 0 stays inactive.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If routing loses water or changes the waterbody array size.
-    """  # noqa: DOC202, DOC502
+    """
     river_network: pyflwdir.FlwdirRaster = create_river_network(
         np.array([[2], [5]], dtype=np.uint8),
         np.ones((2, 1), dtype=bool),

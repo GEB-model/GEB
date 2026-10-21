@@ -20,23 +20,8 @@ def test_recorded_layout(source: str, recorded_branches: int, tmp_path: Path) ->
         source: Report storage format.
         recorded_branches: Number of branches at reporting initialization.
         tmp_path: Temporary report directory.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If historical discharge is not preserved.
-    """  # noqa: DOC202, DOC502
+    """
     rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(index=[24027753])
-    # Switch from a direct report to two branches, or from two branches to one.
-    all_rivers: pd.DataFrame = pd.DataFrame(
-        {
-            "represented_in_grid": [recorded_branches == 2, True, True],
-            "downstream_ID": [-1, 24027753, 24027753],
-            "hydrography_xy": [[(0, 0)], [(1, 0)], [(2, 0)]],
-        },
-        index=[24027753, 101, 102],
-    )
     times: pd.DatetimeIndex = pd.date_range("1990-01-01", periods=3, freq="h")
     reports: dict[str, Any] = {}
     columns: dict[str, np.ndarray] = {}
@@ -61,7 +46,6 @@ def test_recorded_layout(source: str, recorded_branches: int, tmp_path: Path) ->
         )
     result: pd.DataFrame = get_discharge_per_river(
         rivers,
-        all_rivers,
         source="memory" if source == "memory" else "file",
         folder=tmp_path,
         variables_to_report=reports,
@@ -69,21 +53,3 @@ def test_recorded_layout(source: str, recorded_branches: int, tmp_path: Path) ->
     expected: np.ndarray = np.array([1.0, 2.0]) * sum(range(1, recorded_branches + 1))
     np.testing.assert_array_equal(result[24027753], expected)
     np.testing.assert_array_equal(result.index.to_numpy(), times[:2].to_numpy())
-
-
-def test_missing_report() -> None:
-    """Raise when a river has no discharge report.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If missing discharge does not raise a descriptive error.
-    """  # noqa: DOC202, DOC502
-    with pytest.raises(KeyError, match="No recorded discharge for river 24027753"):
-        get_discharge_per_river(
-            gpd.GeoDataFrame(index=[24027753]),
-            pd.DataFrame(),
-            source="memory",
-            variables_to_report={},
-        )

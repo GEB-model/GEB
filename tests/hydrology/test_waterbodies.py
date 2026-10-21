@@ -294,13 +294,7 @@ def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
 
     Args:
         input_type: First waterbody's input type (dimensionless integer code).
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If runtime classification or initialization is incorrect.
-    """  # noqa: DOC202, DOC502
+    """
     from datetime import datetime
     from unittest.mock import MagicMock
 
