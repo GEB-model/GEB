@@ -11,6 +11,7 @@
 - Implement capillary rise in the Ross solver.
 - Fixed rare floating-point precision underflow in `infiltration` during profile saturation recharge subtraction that caused slightly negative `topwater_m` and false `direct_runoff` in the land surface model.
 - Fixed a build failure when a coastline is already a single `LineString` and cannot be passed to `shapely.ops.linemerge`.
+- Replace the GTSM sea-level projections with IPCC AR6 projections, allowing selection of additional SSP scenarios and uncertainty quantiles.
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
