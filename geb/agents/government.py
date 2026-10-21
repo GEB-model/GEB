@@ -197,37 +197,15 @@ class Government(AgentBaseClass):
     def prepare_modified_soil_maps_for_forest(self) -> None:
         """Plant forest: update soil properties in memory and remove displaced farmers.
 
-        Loads the forest restoration potential at grid scale, applies a threshold
-        to identify suitable HRUs, then changes exactly two of the five primary
-        soil properties for those HRUs: soil organic carbon content and bulk
-        density. Sand, silt and clay content are left untouched. All soil
-        hydraulic properties are then recalculated from the updated primary
-        properties with the same pedotransfer functions used at model
-        initialization. Finally a figure is saved and farmers are removed from
-        converted areas. The threshold is read from the config key
-        ``forest_restoration_potential_threshold``.
+        HRUs with a forest restoration potential of at least
+        ``forest_restoration_potential_threshold`` become forest, except sealed,
+        open water and existing forest HRUs. Their soil organic carbon and bulk
+        density are adjusted towards the existing forest in the basin, and the soil
+        hydraulic properties are recalculated.
 
-        Soil organic carbon is set to the area-weighted mean over HRUs currently
-        under forest in the basin, per soil layer (see
-        :meth:`_compute_forest_mean_soc`), floored at the HRU's original value so
-        conversion can never *decrease* organic carbon. This is asserted on the
-        values written to the model.
-
-        Bulk density is changed *relatively*: the HRU's original value is scaled by
-        a per-soil-layer, per-previous-land-use factor measured from the
-        model's own soil maps (see :meth:`_compute_bulk_density_ratios`), so
-        each HRU keeps its own soil signal and no factor is hard-coded.
-
-        Sealed (built-up), open water and existing forest HRUs are never
-        converted.
-
-        When ``increment_fraction`` is set, the model automatically determines which
-        chunk to plant based on current land use. Suitable HRUs are sorted by potential
-        value (highest first); those already classified as FOREST (from previous years
-        or the initial state) are skipped, and the next
-        ``increment_fraction * remaining`` HRUs are planted. Calling the function again
-        the following year therefore plants the next batch automatically — compatible
-        with the annual adaptation pathway that calls this on every January 1st.
+        When ``increment_fraction`` is set, only that fraction of the remaining
+        suitable HRUs is planted, highest potential first. Each call plants the
+        next batch.
 
         Raises:
             ValueError: If ``increment_fraction`` is not in (0, 1].
