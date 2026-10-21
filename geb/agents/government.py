@@ -327,8 +327,6 @@ class Government(AgentBaseClass):
 
         land_use_type_before = hydrology.HRU.var.land_use_type.copy()
 
-        # --- Update soil properties for the newly forested HRUs ---
-        #
         # Only the two primary soil properties that actually change under
         # afforestation are modified: soil organic carbon content and bulk
         # density. Sand, silt and clay content (soil texture) are left
