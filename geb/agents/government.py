@@ -205,7 +205,7 @@ class Government(AgentBaseClass):
         properties with the same pedotransfer functions used at model
         initialization. Finally a figure is saved and farmers are removed from
         converted areas. The threshold is read from the config key
-        ``forest_restoration_potential_threshold`` and defaults to 0.5.
+        ``forest_restoration_potential_threshold``.
 
         Soil organic carbon is set to the area-weighted mean over HRUs currently
         under forest in the basin, per soil layer (see
