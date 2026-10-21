@@ -247,7 +247,7 @@ class Government(AgentBaseClass):
             self.model.files["grid"]["landsurface/forest_restoration_potential_ratio"]
         )
         suitability_grid = forest_potential >= threshold
-        suitability_HRU = hydrology.to_HRU(data=suitability_grid).astype(bool)
+        suitability_HRU = hydrology.to_HRU(data=suitability_grid)
 
         # Sealed (built-up) and open water are not realistic reforestation
         # targets -- exclude them from eligibility regardless of what the
