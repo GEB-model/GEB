@@ -16,8 +16,7 @@ setup_assets:
   - rails
 
 setup_gtsm_station_data:
-  scenario: 245
-  percentile: 0.9
+  percentile: 0.5
 
 setup_cell_area:
 

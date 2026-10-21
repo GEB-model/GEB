@@ -1923,7 +1923,7 @@ class Hydrography(BuildModelBase):
         # also set stations (only those that are in coast_rp)
         self.set_geom(stations, "gtsm/stations_coast_rp")
 
-    def setup_sea_level_projections(self, scenario: int, percentile: float) -> None:
+    def setup_sea_level_projections(self, percentile: float) -> None:
         """Sets up the AR6 sea level projections for the model.
 
         For each GTSM station the nearest AR6 location (great-circle distance) is
@@ -1931,10 +1931,13 @@ class Hydrography(BuildModelBase):
         interpolated (and linearly extrapolated) to annual values for 2000-2100.
 
         Args:
-            scenario: SSP scenario identifier used to select the AR6 file (e.g., 245).
-            percentile: AR6 quantile to select (fraction between 0 and 1).
+            percentile: AR6 quantile to select (fraction between 0 and 1). Default is 0.5 (median projection).
         """
-        self.logger.info("Setting up sea level rise data")
+        # get the scenario from the model configuration
+        scenario = self.ssp_rcp
+        self.logger.info(
+            f"Setting up sea level rise data for {scenario}, using {percentile} percentile of AR6 projections"
+        )
         sea_level_change_m: xr.Dataset = self.data_catalog.fetch("ar6").read(
             scenario, percentile
         )
@@ -2023,22 +2026,20 @@ class Hydrography(BuildModelBase):
         self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
 
     @build_method(required=True)
-    def setup_gtsm_station_data(self, scenario: int, percentile: float) -> None:
+    def setup_gtsm_station_data(self, percentile: float = 0.5) -> None:
         """Set up COAST-RP and GTSM station data for the model.
 
         Args:
-            scenario: SSP scenario identifier used for AR6 projections (for example, 245).
-            percentile: AR6 projection quantile as a fraction between 0 and 1.
+            percentile: AR6 projection quantile as a fraction between 0 and 1. Default is 0.5 (median projection).
         """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
-
         # Continue with GTSM setup
-        # self.setup_gtsm_water_levels()
-        # self.setup_gtsm_surge_levels()
-        # self.setup_coast_rp()
-        self.setup_sea_level_projections(scenario, percentile)
+        self.setup_gtsm_water_levels()
+        self.setup_gtsm_surge_levels()
+        self.setup_coast_rp()
+        self.setup_sea_level_projections(percentile)
 
     @build_method(required=False)
     def setup_inflow(
