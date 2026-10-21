@@ -1893,7 +1893,7 @@ class Hydrography(BuildModelBase):
         self.logger.info("Water level stations and total water levels set")
 
     def setup_surge_levels(self) -> None:
-        """Sets up the GTSM hydrographs for station within the model bounds."""
+        """Sets up the storm surge residual hydrographs for station within the model bounds."""
         surge_data_region, _ = self.data_catalog.fetch(
             "gtsm_timeseries", variable="storm_surge_residual"
         ).read(bounds=self.bounds, variable="storm_surge_residual")
@@ -1926,7 +1926,7 @@ class Hydrography(BuildModelBase):
     def setup_sea_level_projections(self, percentile: float) -> None:
         """Sets up the AR6 sea level projections for the model.
 
-        For each GTSM station the nearest AR6 location (great-circle distance) is
+        For each water level station the nearest sea level projection location (great-circle distance) is
         selected. Its projected sea level change is expressed relative to 2020 and
         interpolated (and linearly extrapolated) to annual values for 2000-2100.
 
@@ -1942,8 +1942,8 @@ class Hydrography(BuildModelBase):
             scenario, percentile
         )
 
-        gtsm_stations: gpd.GeoDataFrame = gpd.read_parquet(
-            os.path.join("input", self.files["geom"]["gtsm/stations"])
+        stations: gpd.GeoDataFrame = gpd.read_parquet(
+            os.path.join("input", self.files["geom"]["water_levels/stations"])
         )
 
         lon_deg: npt.NDArray[np.floating] = sea_level_change_m["lon"].values
@@ -1983,8 +1983,8 @@ class Hydrography(BuildModelBase):
         )
         _, nearest_valid_index = tree.query(
             to_unit_vectors(
-                gtsm_stations.geometry.x.to_numpy(),
-                gtsm_stations.geometry.y.to_numpy(),
+                stations.geometry.x.to_numpy(),
+                stations.geometry.y.to_numpy(),
             )
         )
         nearest_location_indices: npt.NDArray[np.intp] = nearest_valid_index
@@ -2021,21 +2021,23 @@ class Hydrography(BuildModelBase):
         sea_level_rise_stations: pd.DataFrame = pd.DataFrame(
             data=interpolated_values.T,
             index=pd.to_datetime([f"{year}-01-01" for year in target_years]),
-            columns=gtsm_stations.index,
+            columns=stations.index,
         )
         self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
 
     @build_method(required=True)
     def setup_coastal_water_levels(self, percentile: float = 0.5) -> None:
-        """Set up COAST-RP and GTSM station data for the model.
+        """Set up water levels and station data for the model.
 
         Args:
-            percentile: AR6 projection quantile as a fraction between 0 and 1. Default is 0.5 (median projection).
+            percentile: Sea level rise projection quantile as a fraction between 0 and 1. Default is 0.5 (median projection).
         """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
-            self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
+            self.logger.info(
+                "No coastal basins found, skipping coastal water levels setup"
+            )
             return
-        # Continue with GTSM setup
+        # Continue with coastal water levels setup
         self.setup_total_water_levels()
         self.setup_surge_levels()
         self.setup_coast_rp()
