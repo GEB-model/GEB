@@ -1878,32 +1878,32 @@ class Hydrography(BuildModelBase):
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_geom(waterbodies, name="waterbodies/waterbody_data")
 
-    def setup_gtsm_water_levels(self) -> None:
-        """Sets up the GTSM hydrographs for station within the model bounds."""
-        gtsm_data_region, stations = self.data_catalog.fetch(
+    def setup_total_water_levels(self) -> None:
+        """Sets up the coastal water levels for within the model bounds."""
+        water_level_data_region, stations = self.data_catalog.fetch(
             "gtsm_timeseries", variable="total_water_level"
         ).read(bounds=self.bounds, variable="total_water_level")
         self.set_other(
-            gtsm_data_region,
-            name="gtsm/waterlevels",
+            water_level_data_region,
+            name="water_levels/total_water_levels",
             filters=gtsm_filters,
             shards={"stations": 100},
         )
-        self.set_geom(stations, name="gtsm/stations")
-        self.logger.info("GTSM station waterlevels and geometries set")
+        self.set_geom(stations, name="water_levels/stations")
+        self.logger.info("Water level stations and total water levels set")
 
-    def setup_gtsm_surge_levels(self) -> None:
+    def setup_surge_levels(self) -> None:
         """Sets up the GTSM hydrographs for station within the model bounds."""
-        gtsm_data_region, _ = self.data_catalog.fetch(
+        surge_data_region, _ = self.data_catalog.fetch(
             "gtsm_timeseries", variable="storm_surge_residual"
         ).read(bounds=self.bounds, variable="storm_surge_residual")
         self.set_other(
-            gtsm_data_region,
-            name="gtsm/surge",
+            surge_data_region,
+            name="water_levels/surge",
             filters=gtsm_filters,
             shards={"stations": 100},
         )
-        self.logger.info("GTSM station surge levels set")
+        self.logger.info("Water level surge levels set")
 
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
@@ -1912,7 +1912,7 @@ class Hydrography(BuildModelBase):
         coast_rp = self.data_catalog.fetch("coast_rp").read()
 
         stations = gpd.read_parquet(
-            os.path.join("input", self.files["geom"]["gtsm/stations"])
+            os.path.join("input", self.files["geom"]["water_levels/stations"])
         )
         # remove stations that are not in coast_rp index
         stations = stations[stations.index.astype(int).isin(coast_rp.index)]
@@ -1921,7 +1921,7 @@ class Hydrography(BuildModelBase):
         self.set_table(coast_rp, name="coast_rp")
 
         # also set stations (only those that are in coast_rp)
-        self.set_geom(stations, "gtsm/stations_coast_rp")
+        self.set_geom(stations, "water_levels/stations_coast_rp")
 
     def setup_sea_level_projections(self, percentile: float) -> None:
         """Sets up the AR6 sea level projections for the model.
@@ -2026,7 +2026,7 @@ class Hydrography(BuildModelBase):
         self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
 
     @build_method(required=True)
-    def setup_gtsm_station_data(self, percentile: float = 0.5) -> None:
+    def setup_coastal_water_levels(self, percentile: float = 0.5) -> None:
         """Set up COAST-RP and GTSM station data for the model.
 
         Args:
@@ -2036,8 +2036,8 @@ class Hydrography(BuildModelBase):
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
         # Continue with GTSM setup
-        self.setup_gtsm_water_levels()
-        self.setup_gtsm_surge_levels()
+        self.setup_total_water_levels()
+        self.setup_surge_levels()
         self.setup_coast_rp()
         self.setup_sea_level_projections(percentile)
 

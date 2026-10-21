@@ -15,7 +15,7 @@ setup_assets:
   - roads
   - rails
 
-setup_gtsm_station_data:
+setup_coastal_water_levels:
   percentile: 0.5
 
 setup_cell_area:
