@@ -242,7 +242,8 @@ def run_setup_sea_level_projections_ar6(
 
     mock_hydrography: MagicMock = MagicMock()
     mock_hydrography.logger = logging.getLogger("test")
-    mock_hydrography.files = {"geom": {"gtsm/stations": STATIONS_FILE}}
+    mock_hydrography.files = {"geom": {"water_levels/stations": STATIONS_FILE}}
+    mock_hydrography.ssp_rcp = 370
     mock_hydrography.data_catalog.fetch.return_value.read.return_value = ar6
 
     Hydrography.setup_sea_level_projections(mock_hydrography, percentile=percentile)
