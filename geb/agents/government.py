@@ -362,10 +362,6 @@ class Government(AgentBaseClass):
             )
         }
 
-        # All new values are first computed into candidate arrays and only
-        # written to the model once the pedotransfer functions have succeeded,
-        # so a failure cannot leave the model with half-converted soils.
-
         # 1) Soil organic carbon: set to the basin forest mean per soil layer,
         # floored at the HRU's original value so conversion can never *decrease*
         # organic carbon (without the floor, HRUs already richer than the
