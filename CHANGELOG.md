@@ -1,6 +1,6 @@
 # dev
-- Add GDW reservoirs and use GDW dams to classify HydroLAKES waterbodies. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
-- Activate reservoirs in their GDW construction year. Before construction, their cells route water as rivers; activation preserves existing water storage.
+- Add GDW reservoirs. All HydroLAKES controlled lakes are modelled as reservoirs, and natural lakes are converted to reservoirs when an intersecting GDW Dam or Lake Control Dam has a matching or missing HydroLAKES ID. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
+- Reservoirs are only activated at the recorded GDW construction year. Before construction, their cells route water as rivers and at construction the reservoir starts filling up. 
 - Stop when automatic input migrations fail.
 - Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.
 

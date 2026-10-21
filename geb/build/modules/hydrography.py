@@ -1594,37 +1594,27 @@ class Hydrography(BuildModelBase):
         calculate_command_areas: bool = False,
         custom_reservoir_capacity: None | str = None,
     ) -> None:
-        """Set up waterbodies, reservoirs, and command areas.
+        """Setup waterbodies from HydroLAKES and GDW data.
 
-        Combine HydroLAKES with Global Dam Watch (GDW) reservoir data.
-        Save waterbody IDs, capacities, construction years, and
-        command areas on the model grid. GDW matching results are saved for review.
+        Controlled lakes become reservoirs. Natural lakes become reservoirs when
+        an intersecting GDW Dam or Lake Control Dam is present and the IDs overlap.
+        Save waterbody parameters and matching results.
 
         Args:
-            mode: Whether to enable waterbodies ("on"), disable them ("off"),
-                or include only lakes ("lakes_only") or only reservoirs ("reservoirs_only").
-            command_areas: Identifier of the preset command area data in the
-                data catalog. If None, command areas can be calculated from the
-                routing network instead.
-            calculate_command_areas: Flag or identifier indicating that command areas
-                should be calculated based on the routing network. If false, command
-                areas are not calculated and default to a missing value.
-            custom_reservoir_capacity: Identifier of the custom reservoir capacity
-                data in the data catalog. If None, the default reservoir capacities
-                from the waterbody dataset are used. The table must have
-                ``waterbody_id`` as the index and a ``volume_total`` column defining
-                the reservoir capacity (m3).
+            mode: 'on', 'off', 'lakes_only', or 'reservoirs_only'.
+            command_areas: Optional polygon file with waterbody_id. Linked
+                waterbodies use reservoir behavior.
+            calculate_command_areas: Derive command areas from river routing.
+                Cannot be combined with command_areas.
+            custom_reservoir_capacity: Optional CSV or Excel file with
+                waterbody_id and volume_total (m3).
 
         Returns:
             None.
 
         Raises:
-            ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
-            ValueError: If command_areas and calculate_command_areas are both provided.
-            ValueError: If mode is not "on", "off", "lakes_only", or "reservoirs_only".
-            ValueError: If command areas are requested but mode is "off" or "lakes_only".
-            ValueError: If source waterbody IDs or types are invalid.
-            ValueError: If a dam cannot be snapped or its river cell is occupied.
+            ValueError: If options conflict, input data are invalid, or a dam
+                cannot be placed on an unoccupied river cell.
         """  # noqa: DOC202
         if mode not in ["on", "off", "lakes_only", "reservoirs_only"]:
             raise ValueError(
@@ -1768,7 +1758,7 @@ class Hydrography(BuildModelBase):
                 by="waterbody_id", as_index=False
             )
 
-            # Command areas require reservoir operations for irrigation releases.
+            # Command areas require reservoir operations, regardless of source type.
             ids_with_command: set[int] = set(command_areas_gdf["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),

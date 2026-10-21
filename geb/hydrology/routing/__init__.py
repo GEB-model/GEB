@@ -560,61 +560,63 @@ class Routing(Module):
                 waterbodies are loaded, use their construction years instead.
 
         Returns:
-            A GeoDataFrame containing the river network geometries, the updated river IDs and the original river IDs before removing waterbodies.
+            River geometries, river IDs excluding reservoirs that have been activated at GDW constuction year, and
+            the original river IDs.
         """
-        raw_wb_id: TwoDArrayInt32 = self.grid.load2d(
+        waterbody_ids_grid: TwoDArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_id"], compress=False
         )
         if active_waterbody_ids is None:
-            wb_geom_file: Path = self.model.files["geom"]["waterbodies/waterbody_data"]
-            wb_data_df: pd.DataFrame = read_geom(wb_geom_file).set_index("waterbody_id")
+            waterbody_data_path: Path = self.model.files["geom"][
+                "waterbodies/waterbody_data"
+            ]
+            waterbody_data: pd.DataFrame = read_geom(waterbody_data_path).set_index(
+                "waterbody_id"
+            )
             # Lakes and reservoirs with unknown dates are active from the start.
-            construction_years: pd.Series = wb_data_df.get(
-                "gdw_construction_year", pd.Series(0, index=wb_data_df.index)
+            construction_years: pd.Series = waterbody_data.get(
+                "gdw_construction_year", pd.Series(0, index=waterbody_data.index)
             ).fillna(0)
-            enabled: pd.Series = wb_data_df["waterbody_type"] != OFF
-            built: pd.Series = (wb_data_df["waterbody_type"] != RESERVOIR) | (
+            is_enabled: pd.Series = waterbody_data["waterbody_type"] != OFF
+            is_built: pd.Series = (waterbody_data["waterbody_type"] != RESERVOIR) | (
                 construction_years <= self.model.current_time.year
             )
-            active_mask: ArrayBool = (enabled & built).to_numpy()
-            active_waterbody_ids = wb_data_df.index.to_numpy(dtype=np.int32)[
+            active_mask: ArrayBool = (is_enabled & is_built).to_numpy()
+            active_waterbody_ids = waterbody_data.index.to_numpy(dtype=np.int32)[
                 active_mask
             ]
-        is_waterbody: TwoDArrayBool = np.isin(raw_wb_id, active_waterbody_ids)
+        is_waterbody: TwoDArrayBool = np.isin(waterbody_ids_grid, active_waterbody_ids)
 
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
         rivers["return_period_2_years_daily_m3_per_s"] = np.nan
         rivers["width_is_observed"] = rivers["width"].notnull()
 
-        # set river ID to -1 for waterbody cells
         river_ids: TwoDArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["routing/river_ids"], compress=False
         )
-        # keep a copy of the original river IDs before removing waterbodies,
-        # which is needed for some output variables
+        # Reports also need the original river IDs.
         river_ids_no_waterbodies_removed: ArrayInt32 = self.grid.compress(river_ids)
-        river_ids[is_waterbody] = -1  # set river ID to -1 for waterbody cells
+        river_ids[is_waterbody] = -1
 
-        # Load waterbody outflow points to identify active outflows
-        raw_wb_outflows: TwoDArrayInt32 = self.grid.load2d(
+        waterbody_outlet_ids_grid: TwoDArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_outflow_points"],
             compress=False,
         )
         is_active_outflow: TwoDArrayBool = np.isin(
-            raw_wb_outflows, active_waterbody_ids
+            waterbody_outlet_ids_grid, active_waterbody_ids
         )
-        active_wb_outflows: TwoDArrayInt32 = np.where(
-            is_active_outflow, raw_wb_outflows, -1
+        active_waterbody_outlets: TwoDArrayInt32 = np.where(
+            is_active_outflow, waterbody_outlet_ids_grid, -1
         ).astype(np.int32)
-        active_wb_id: TwoDArrayInt32 = np.where(is_waterbody, raw_wb_id, -1).astype(
-            np.int32
-        )
+        active_waterbody_ids_grid: TwoDArrayInt32 = np.where(
+            is_waterbody, waterbody_ids_grid, -1
+        ).astype(np.int32)
 
         # Prune river cells downstream of non-outflow waterbody cells that receive no river inflow
         n_river_cells_before: int = int(np.sum(river_ids != -1))
         river_ids = prune_starved_river_cells(
-            waterbody_id=active_wb_id,
-            waterbody_outflows=active_wb_outflows,
+            waterbody_id=active_waterbody_ids_grid,
+            waterbody_outflows=active_waterbody_outlets,
             river_ids=river_ids,
             flow_raster=self.river_network,
         )

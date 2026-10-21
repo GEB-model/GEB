@@ -16,7 +16,7 @@ VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b37": [
         "[update-method;setup_gtsm_station_data]",
         "[update-method;setup_waterbodies]",
-        "[manual] Rerun spinup and simulation after rebuilding waterbodies for GDW reservoir data and construction years.",
+        "[manual] Rerun spinup and simulation after rebuilding waterbodies for updated lake/reservoir types, GDW data, and construction years.",
     ],
     "1.0.0b36": [
         "[update-method;setup_karst]",

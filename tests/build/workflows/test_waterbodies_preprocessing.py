@@ -45,8 +45,21 @@ def test_gdw_polygon_coverage(longitude: float, covered: bool) -> None:
 
 @pytest.mark.parametrize("capacity", [1000.0, 0.0])
 @pytest.mark.parametrize("has_polygon", [True, False])
-def test_add_reservoir(capacity: float, has_polygon: bool) -> None:
-    """Only add reservoirs covered by GDW polygons with valid capacity."""
+@pytest.mark.parametrize("dam_type", ["Dam", "Lake Control Dam", "Lock"])
+def test_add_reservoir(capacity: float, has_polygon: bool, dam_type: str) -> None:
+    """Add supported GDW reservoirs when geometry and model parameters are available.
+
+    Args:
+        capacity: GDW capacity (m3).
+        has_polygon: Whether a GDW outline covers the dam.
+        dam_type: GDW structure type.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If addition or the exclusion reason is incorrect.
+    """  # noqa: DOC202, DOC502
     waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {"waterbody_id": [1], "waterbody_type": [1]},
         geometry=[box(5, 5, 6, 6)],
@@ -56,8 +69,8 @@ def test_add_reservoir(capacity: float, has_polygon: bool) -> None:
         {
             "gdw_id": [42],
             "waterbody_id": [np.nan],
-            "dam_type": ["Dam"],
-            "lake_control": [None],
+            "dam_type": [dam_type],
+            "lake_control": ["Yes"],
             "capacity_m3": [capacity],
             "area_m2": [100.0],
             "average_discharge_m3_per_s": [2.0],
@@ -76,6 +89,9 @@ def test_add_reservoir(capacity: float, has_polygon: bool) -> None:
     if not has_polygon:
         assert len(result) == 1
         assert checks.iloc[0].addition_reason == "outside_gdw_polygon"
+    elif dam_type == "Lock":
+        assert len(result) == 1
+        assert checks.iloc[0].addition_reason == "review_barrier_type"
     elif capacity == 0:
         assert len(result) == 1
         assert checks.iloc[0].addition_reason == "missing_model_values"
@@ -134,54 +150,49 @@ def test_snap_reservoir(case: str) -> None:
         assert waterbodies.geometry.iloc[0] == Point(0, 0)
 
 
+@pytest.mark.parametrize("source_type", [1, 2, 3])
 @pytest.mark.parametrize(
-    "dam_type,lake_control",
-    [
-        (dam_type, flag)
-        for dam_type in ("Dam", "Lake Control Dam")
-        for flag in (None, "", "Yes", "Enlarged", "Maybe")
-    ],
+    "dam_type", ["Dam", "Lake Control Dam", "Lock", "Low Permeable Dam"]
 )
 @pytest.mark.parametrize(
     "case",
     [
-        "valid",
-        "natural",
+        "id",
+        "unknown_id",
+        "conflicting_id",
+        "outside",
+        "boundary",
+        "multiple",
+        "missing_attributes",
+        "no_control",
         "zero_capacity",
         "nan_capacity",
-        "outside",
-        "id_conflict",
-        "multiple",
-        "unknown_flag",
-        "no_control",
-        "lock",
     ],
 )
 @pytest.mark.parametrize("volume_dtype", ["float32", "float64"])
-def test_controlled_lake_conversion(
-    dam_type: str, lake_control: str | None, case: str, volume_dtype: str
+def test_waterbody_classification(
+    source_type: int, dam_type: str, case: str, volume_dtype: str
 ) -> None:
-    """Classify controlled lakes from dam type, capacity, and location.
+    """Classify lakes from dam type, geometry, and ID, independent of sparse attributes.
 
     Args:
-        dam_type: GDW barrier classification.
-        lake_control: GDW lake-control flag, including uncertain classifications.
-        case: Matching or capacity scenario to verify.
-        volume_dtype: Input storage dtype.
+        source_type: Original HydroLAKES type code.
+        dam_type: GDW structure type.
+        case: Dam match or missing-attribute scenario.
+        volume_dtype: HydroLAKES volume storage type.
 
     Returns:
         None.
 
     Raises:
-        AssertionError: If conversion or capacity precision is incorrect.
+        AssertionError: If classification or capacity fallback is incorrect.
     """  # noqa: DOC202, DOC502
-    original_type: int = 1 if case == "natural" else 3
     capacity_m3: float = {"zero_capacity": 0.0, "nan_capacity": np.nan}.get(case, 5.9e9)
     dam_count: int = 2 if case == "multiple" else 1
     waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {
             "waterbody_id": [1],
-            "waterbody_type": [original_type],
+            "waterbody_type": [source_type],
             "volume_total": np.array([1000.0], dtype=volume_dtype),
         },
         geometry=[box(0, 0, 1, 1)],
@@ -189,36 +200,46 @@ def test_controlled_lake_conversion(
     )
     barriers: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {
-            "gdw_id": list(range(dam_count)),
-            "hydrolakes_id": [99 if case == "id_conflict" else 1] * dam_count,
-            "dam_type": ["Lock" if case == "lock" else dam_type] * dam_count,
-            "lake_control": [
-                "Unknown"
-                if case == "unknown_flag"
-                else "No"
-                if case == "no_control"
-                else lake_control
+            "gdw_id": list(range(1, dam_count + 1)),
+            "hydrolakes_id": [
+                None if case == "unknown_id" else 99 if case == "conflicting_id" else 1
             ]
             * dam_count,
-            "capacity_m3": [capacity_m3] * dam_count,
+            "dam_type": [dam_type] * dam_count,
         },
-        geometry=[Point(2 if case == "outside" else 0.5, 0.5)] * dam_count,
+        geometry=[
+            Point(2.0 if case == "outside" else 1.0 if case == "boundary" else 0.5, 0.5)
+        ]
+        * dam_count,
         crs=4326,
     )
+    if case != "missing_attributes":
+        barriers["capacity_m3"] = capacity_m3
+        barriers["lake_control"] = "No" if case == "no_control" else "Maybe"
     result: gpd.GeoDataFrame
     checks: gpd.GeoDataFrame
     result, checks = enrich_waterbodies(waterbodies, barriers)
-    converted: bool = case == "valid"
-    assert result.iloc[0].waterbody_type == (RESERVOIR if converted else LAKE)
-    assert result.iloc[0].volume_total == (capacity_m3 if converted else 1000.0)
-    assert result.volume_total.dtype == (
-        np.dtype("float64") if converted else np.dtype(volume_dtype)
+    qualifying_match: bool = dam_type in ("Dam", "Lake Control Dam") and case not in {
+        "conflicting_id",
+        "outside",
+    }
+    converted: bool = source_type == 3 or (source_type == 1 and qualifying_match)
+    assert result.waterbody_type.tolist() == [
+        RESERVOIR if source_type != 1 or converted else LAKE
+    ]
+    use_gdw_capacity: bool = (
+        converted
+        and qualifying_match
+        and case
+        not in {"multiple", "missing_attributes", "zero_capacity", "nan_capacity"}
     )
-    assert result.iloc[0].hydrolakes_type == original_type
-    assert result.iloc[0].hydrolakes_volume_total == 1000.0
+    assert result.volume_total.tolist() == [capacity_m3 if use_gdw_capacity else 1000.0]
+    assert result.volume_total.dtype == np.dtype(
+        "float64" if use_gdw_capacity else volume_dtype
+    )
+    assert result.hydrolakes_type.tolist() == [source_type]
+    assert result.hydrolakes_volume_total.tolist() == [1000.0]
     assert checks.changed_to_reservoir.eq(converted).all()
-    if lake_control == "Maybe" and case not in {"unknown_flag", "no_control"}:
-        assert checks.type_check.eq("uncertain_lake_control").all()
 
 
 @pytest.mark.parametrize("source_type", [1, 2, 3])
@@ -256,7 +277,7 @@ def test_waterbody_types_without_dams(source_type: int) -> None:
     result: gpd.GeoDataFrame
     checks: gpd.GeoDataFrame
     result, checks = enrich_waterbodies(waterbodies, barriers)
-    assert result.waterbody_type.tolist() == [RESERVOIR if source_type == 2 else LAKE]
+    assert result.waterbody_type.tolist() == [LAKE if source_type == 1 else RESERVOIR]
     assert result.waterbody_type.dtype == np.int32
     assert result.hydrolakes_type.tolist() == [source_type]
     assert waterbodies.waterbody_type.tolist() == [source_type]
@@ -303,7 +324,7 @@ def test_dam_matching(case: str) -> None:
     waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {
             "waterbody_id": [1, 2],
-            "waterbody_type": [3, 3],
+            "waterbody_type": [1, 1],
             "volume_total": [1000.0, 1000.0],
         },
         geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
@@ -373,3 +394,43 @@ def test_invalid_lake_ids(lake_ids: list[int | None]) -> None:
     )
     with pytest.raises(ValueError, match="IDs must be present and unique"):
         enrich_waterbodies(waterbodies, gpd.GeoDataFrame())
+
+
+@pytest.mark.parametrize("source_type", [1, 2, 3])
+def test_gdw_promotes_natural_and_controlled_lakes(source_type: int) -> None:
+    """Use reservoir behavior for lakes regulated by a matching GDW dam.
+
+    Args:
+        source_type: Original HydroLAKES type code.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If a matching dam fails to promote a lake or changes an existing capacity.
+    """  # noqa: DOC202, DOC502
+    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "waterbody_id": [1],
+            "waterbody_type": [source_type],
+            "volume_total": [1000.0],
+        },
+        geometry=[box(0, 0, 1, 1)],
+        crs=4326,
+    )
+    dams: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "hydrolakes_id": [1],
+            "dam_type": ["Dam"],
+            "lake_control": ["Yes"],
+            "capacity_m3": [2000.0],
+        },
+        geometry=[Point(0.5, 0.5)],
+        crs=4326,
+    )
+    result: gpd.GeoDataFrame
+    checks: gpd.GeoDataFrame
+    result, checks = enrich_waterbodies(waterbodies, dams)
+    assert result.waterbody_type.tolist() == [RESERVOIR]
+    assert result.volume_total.tolist() == [1000.0 if source_type == 2 else 2000.0]
+    assert checks.changed_to_reservoir.tolist() == [source_type != 2]

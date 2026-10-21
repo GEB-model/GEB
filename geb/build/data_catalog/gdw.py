@@ -20,11 +20,11 @@ def prepare_gdw(data: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         data: One layer from the GDW v1.0 geodatabase.
 
     Returns:
-        Data in EPSG:4326 with missing-data codes replaced by nulls. Area uses m2,
-        capacity m3, and discharge m3/s. Other units stay as given by GDW.
+        GDW records in EPSG:4326 with missing values cleared. Area, capacity,
+        and discharge use m2, m3, and m3/s; other units are unchanged.
 
     Raises:
-        ValueError: If required fields, a CRS, or unique positive IDs are missing.
+        ValueError: If required fields, the CRS, or dam IDs are invalid.
     """
     data = data.copy()
     data.columns = data.columns.str.lower()
@@ -86,10 +86,10 @@ def prepare_gdw(data: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 class GlobalDamWatch(Adapter):
-    """Download GDW once and save its dam points and reservoir outlines."""
+    """Cache GDW dam points and reservoir outlines."""
 
     def fetch(self, url: str) -> GlobalDamWatch:
-        """Download GDW v1.0 and save its points and outlines as GeoParquet.
+        """Download GDW v1.0 and cache both layers as GeoParquet.
 
         Args:
             url: Download URL for the GDW v1.0 geodatabase ZIP archive.
