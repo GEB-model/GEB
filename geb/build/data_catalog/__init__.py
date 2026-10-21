@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from .aquastat import AQUASTAT
+from .ar6 import AR6
 from .base import Adapter
 from .cmip6 import CMIP6
 from .coast_rp import CoastRP
@@ -110,6 +111,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "ECMWF",
             "url": "https://confluence.ecmwf.int/display/CKB/ERA5-Land%3A+data+documentation#ERA5Land:datadocumentation-parameterlistingParameterlistings",
             "license": "CC BY 4.0",
+        },
+    },
+    "ar6": {
+        "adapter": AR6(
+            folder="ar6",
+            filename="ar6-regional-confidence.zip",
+            local_version=1,
+            cache="global",
+        ),
+        "url": "https://zenodo.org/records/6382554/files/ar6-regional-confidence.zip?download=1",
+        "source": {
+            "name": "IPCC AR6 Sea Level Projections",
+            "author": "IPCC",
+            "url": "https://doi.org/10.5281/zenodo.6382554",
+            "license": "Creative Commons Attribution 4.0 International",
         },
     },
     "ecmwf_forecasts": {

@@ -19,7 +19,9 @@ import xarray as xr
 from networkx.classes.digraph import DiGraph
 from pyflwdir import FlwdirRaster
 from rasterio.enums import MergeAlg
+from scipy import interpolate
 from scipy.ndimage import value_indices
+from scipy.spatial import cKDTree
 from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import DataCatalog
@@ -1911,96 +1913,6 @@ class Hydrography(BuildModelBase):
         )
         self.logger.info("GTSM station surge levels set")
 
-    def setup_gtsm_sea_level_rise(self) -> None:
-        """Sets up the GTSM sea level rise data for the model.
-
-        Raises:
-            ValueError: If the extrapolated sea level rise data is not monotonically increasing
-                or exceeds 2 meters by 2100 for any station.
-        """
-        self.logger.info("Setting up GTSM sea level rise data")
-        # get the model bounds and buffer by ~2km
-        model_bounds = self.bounds
-        model_bounds = (
-            model_bounds[0] - 0.0166,  # min_lon
-            model_bounds[1] - 0.0166,  # min_lat
-            model_bounds[2] + 0.0166,  # max_lon
-            model_bounds[3] + 0.0166,  # max_lat
-        )
-
-        gtsm_sea_level_rise = self.data_catalog.fetch("gtsm").read(bounds=model_bounds)
-
-        # extract data arrays
-        mean_sea_level = gtsm_sea_level_rise.mean_sea_level.data
-        time = gtsm_sea_level_rise.time.data
-        stations = gtsm_sea_level_rise.stations.data
-
-        # create dataframe
-        mean_sea_level_df = pd.DataFrame(
-            data=mean_sea_level.T,
-            index=pd.to_datetime(time),
-            columns=stations,
-        )
-        # sort by datetime index
-        mean_sea_level_df = mean_sea_level_df.sort_index()
-
-        # we do not model receding sea levels, so enforce that the absolute mean sea level
-        # for each time step is at least as high as in the previous step, i.e. mean sea level is monotonically increasing
-        mean_sea_level_df = mean_sea_level_df.cummax(axis=0)
-
-        # set table for model
-        self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
-
-        # calculate the increment in mean sea level in the time series  based on a reference year
-        reference_year = 2020
-        sea_level_rise_df = mean_sea_level_df.subtract(
-            mean_sea_level_df.loc[f"{reference_year}-01-01"], axis=1
-        )
-
-        # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[unresolved-attribute]
-        future_years = np.arange(last_year + 1, 2101)
-        future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
-        future_data = {}
-        for station in sea_level_rise_df.columns:
-            series = sea_level_rise_df[station]
-            # fit nonlinear trend all years
-            recent_series = series
-            coeffs = np.polyfit(
-                recent_series.index.year,
-                recent_series.values,
-                deg=2,
-            )
-            trend = np.poly1d(coeffs)
-            future_values = trend(future_years)
-            future_data[station] = future_values
-        future_df = pd.DataFrame(
-            data=future_data,
-            index=future_dates,
-        )
-        # append future data to sea_level_rise_df
-        sea_level_rise_df = pd.concat([sea_level_rise_df, future_df], axis=0)
-
-        # do some check on the extrapolated data
-        for station in sea_level_rise_df.columns:
-            series = sea_level_rise_df[station]
-            # check that the values are either monotonically increasing or decreasing
-            # There are some rare places where we see a slight decrease in sea level, for example
-            # in the Arctic, so we allow for both monotonically increasing and decreasing series,
-            # but we want to make sure that they are not fluctuating up and down.
-            if not (series.is_monotonic_increasing or series.is_monotonic_decreasing):
-                raise ValueError(
-                    f"Sea level rise data for station {station} is neither monotonically increasing nor monotonically decreasing after extrapolation."
-                )
-            # check that the values are reasonable (less than 2 meters by 2100)
-            if series.iloc[-1] >= 2:
-                raise ValueError(
-                    f"Sea level rise data for station {station} exceeds 2 meters by 2100."
-                )
-
-        # set table for model
-        self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise_rcp8p5")
-
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")
@@ -2019,18 +1931,122 @@ class Hydrography(BuildModelBase):
         # also set stations (only those that are in coast_rp)
         self.set_geom(stations, "gtsm/stations_coast_rp")
 
+    def setup_sea_level_projections(self, scenario: int, percentile: float) -> None:
+        """Sets up the AR6 sea level projections for the model.
+
+        For each GTSM station the nearest AR6 location (great-circle distance) is
+        selected. Its projected sea level change is expressed relative to 2020 and
+        interpolated (and linearly extrapolated) to annual values for 2000-2100.
+
+        Args:
+            scenario: SSP scenario identifier used to select the AR6 file (e.g., 245).
+            percentile: AR6 quantile to select (fraction between 0 and 1).
+        """
+        self.logger.info("Setting up sea level rise data")
+        sea_level_change_m: xr.Dataset = self.data_catalog.fetch("ar6").read(
+            scenario, percentile
+        )
+
+        gtsm_stations: gpd.GeoDataFrame = gpd.read_parquet(
+            os.path.join("input", self.files["geom"]["gtsm/stations"])
+        )
+
+        lon_deg: npt.NDArray[np.floating] = sea_level_change_m["lon"].values
+        lat_deg: npt.NDArray[np.floating] = sea_level_change_m["lat"].values
+        years: npt.NDArray[np.int64] = sea_level_change_m["years"].values
+
+        def to_unit_vectors(
+            lon_deg: npt.NDArray[np.floating], lat_deg: npt.NDArray[np.floating]
+        ) -> npt.NDArray[np.floating]:
+            """Convert longitude and latitude in degrees to 3D unit vectors.
+
+            Args:
+                lon_deg: Longitude in degrees.
+                lat_deg: Latitude in degrees.
+            Returns:
+                3D unit vectors corresponding to the input coordinates.
+            """
+            lon_rad: npt.NDArray[np.floating] = np.radians(lon_deg)
+            lat_rad: npt.NDArray[np.floating] = np.radians(lat_deg)
+            return np.column_stack(
+                (
+                    np.cos(lat_rad) * np.cos(lon_rad),
+                    np.cos(lat_rad) * np.sin(lon_rad),
+                    np.sin(lat_rad),
+                )
+            )
+
+        # Euclidean distance between points on the unit sphere increases monotonically
+        # with great-circle distance, so a KD-tree on 3D unit vectors gives the same
+        # nearest neighbour as the Haversine distance, without an
+        # (n_stations x n_locations) distance matrix.
+        tree: cKDTree = cKDTree(
+            to_unit_vectors(
+                lon_deg,
+                lat_deg,
+            )
+        )
+        _, nearest_valid_index = tree.query(
+            to_unit_vectors(
+                gtsm_stations.geometry.x.to_numpy(),
+                gtsm_stations.geometry.y.to_numpy(),
+            )
+        )
+        nearest_location_indices: npt.NDArray[np.intp] = nearest_valid_index
+
+        # Load only the nearest locations (stations may share a location)
+        unique_location_indices: npt.NDArray[np.intp]
+        inverse_indices: npt.NDArray[np.intp]
+        unique_location_indices, inverse_indices = np.unique(
+            nearest_location_indices, return_inverse=True
+        )
+
+        sea_level_change_m_transposed: npt.NDArray[np.floating] = (
+            sea_level_change_m["sea_level_change"]
+            .transpose("locations", "years")
+            .isel(locations=unique_location_indices)
+            .values[inverse_indices]
+        )
+
+        unique_location_indices: npt.NDArray[np.intp]
+        inverse_indices: npt.NDArray[np.intp]
+        unique_location_indices, inverse_indices = np.unique(
+            nearest_location_indices, return_inverse=True
+        )
+
+        target_years: npt.NDArray[np.int64] = np.arange(2000, 2101)
+        interpolated_values: npt.NDArray[np.floating] = interpolate.interp1d(
+            x=years,
+            y=sea_level_change_m_transposed,
+            axis=1,
+            fill_value="extrapolate",
+            bounds_error=False,
+        )(target_years)
+
+        sea_level_rise_stations: pd.DataFrame = pd.DataFrame(
+            data=interpolated_values.T,
+            index=pd.to_datetime([f"{year}-01-01" for year in target_years]),
+            columns=gtsm_stations.index,
+        )
+        self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
+
     @build_method(required=True)
-    def setup_gtsm_station_data(self) -> None:
-        """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
+    def setup_gtsm_station_data(self, scenario: int, percentile: float) -> None:
+        """Set up COAST-RP and GTSM station data for the model.
+
+        Args:
+            scenario: SSP scenario identifier used for AR6 projections (for example, 245).
+            percentile: AR6 projection quantile as a fraction between 0 and 1.
+        """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
 
         # Continue with GTSM setup
-        self.setup_gtsm_water_levels()
-        self.setup_gtsm_surge_levels()
-        self.setup_gtsm_sea_level_rise()
-        self.setup_coast_rp()
+        # self.setup_gtsm_water_levels()
+        # self.setup_gtsm_surge_levels()
+        # self.setup_coast_rp()
+        self.setup_sea_level_projections(scenario, percentile)
 
     @build_method(required=False)
     def setup_inflow(
