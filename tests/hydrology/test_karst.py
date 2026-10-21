@@ -1,0 +1,188 @@
+"""Unit tests for karst capture, release and storage conservation."""
+
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import numpy as np
+import pytest
+
+from geb.config_schema import KarstConfig
+from geb.hydrology.karst import Karst
+from geb.hydrology.landcovers import ALL_LAND_COVER_TYPES
+
+
+@pytest.fixture
+def karst() -> Karst:
+    """Create a karst module with six land covers across two grid cells.
+
+    Returns:
+        A karst module with equal HRU areas and otherwise isolated dependencies.
+    """
+    model: MagicMock = MagicMock()
+    model.config = {
+        "hydrology": {"karst": {"capture_fraction": 1.0, "release_time_days": 10.0}}
+    }
+    model.files = {"grid": {"groundwater/karst_fraction": "karst.zarr"}}
+    model.in_spinup = True
+    hydrology: MagicMock = MagicMock()
+    hydrology.grid.var = SimpleNamespace()
+    hydrology.grid.load2d.return_value = np.ones(2, dtype=np.float32)
+    hydrology.HRU.var.land_use_type = np.array(ALL_LAND_COVER_TYPES)
+    hydrology.to_HRU.side_effect = lambda *, data: np.repeat(data, 3)
+    hydrology.to_grid.side_effect = lambda *, HRU_data: HRU_data.reshape(2, 3).mean(
+        axis=1
+    )
+    return Karst(model, hydrology)
+
+
+@pytest.mark.parametrize("coverage", [0.0, 0.6, 1.0])
+@pytest.mark.parametrize("capture_fraction", [0.0, 0.5, 1.0])
+def test_karst_step(karst: Karst, coverage: float, capture_fraction: float) -> None:
+    """Capture only eligible land flows and conserve water across both grids.
+
+    Args:
+        karst: Isolated karst module with all six land-cover types.
+        coverage: Dimensionless karst coverage (0–1).
+        capture_fraction: Dimensionless runoff and interflow capture (0–1).
+    """
+    # Different coverage and initial storage in each cell expose swapped indices.
+    karst.karst_fraction[:] = [coverage, coverage / 2]
+    karst.storage_m[:] = [0.01, 0.02]
+    karst.model.config["hydrology"]["karst"]["capture_fraction"] = capture_fraction
+    runoff_m: np.ndarray = np.full((24, 6), 0.001, dtype=np.float32)
+    interflow_m: np.ndarray = np.full((24, 6), 0.0005, dtype=np.float32)
+    soil_m: np.ndarray = np.full(6, 0.002, dtype=np.float32)
+    previous_storage_m: np.ndarray = karst.storage_m.copy()
+    # Sealed and open-water HRUs (the last two) must retain all their input flows.
+    eligible_fraction: np.ndarray = np.array(
+        [coverage, coverage, coverage, coverage / 2, 0.0, 0.0]
+    )
+    expected_capture_m: np.ndarray = 0.036 * eligible_fraction * capture_fraction
+    expected_soil_m: np.ndarray = 0.002 * eligible_fraction
+    expected_inflow_m: np.ndarray = np.array(
+        [
+            0.036 * coverage * capture_fraction + 0.002 * coverage,
+            (0.036 * coverage * capture_fraction + 0.002 * coverage) / 6,
+        ]
+    )
+    recharge_m: np.ndarray
+    captured_m: np.ndarray
+    captured_soil_m: np.ndarray
+    recharge_m, captured_m, captured_soil_m = karst.step(runoff_m, interflow_m, soil_m)
+
+    np.testing.assert_allclose(captured_m, expected_capture_m, rtol=1e-6)
+    np.testing.assert_allclose(captured_soil_m, expected_soil_m, rtol=1e-6)
+    np.testing.assert_allclose(
+        runoff_m,
+        np.broadcast_to(0.001 * (1 - eligible_fraction * capture_fraction), (24, 6)),
+        rtol=1e-6,
+    )
+    np.testing.assert_allclose(
+        interflow_m,
+        np.broadcast_to(0.0005 * (1 - eligible_fraction * capture_fraction), (24, 6)),
+        rtol=1e-6,
+    )
+    np.testing.assert_allclose(soil_m, 0.002 - expected_soil_m, rtol=1e-6)
+    # Analytical solution for a one-day step with constant inflow and K = 10 days.
+    expected_storage_m: np.ndarray = previous_storage_m * np.exp(-0.1) + (
+        10.0 * expected_inflow_m * (1 - np.exp(-0.1))
+    )
+    np.testing.assert_allclose(karst.storage_m, expected_storage_m, rtol=1e-6)
+    np.testing.assert_allclose(
+        recharge_m,
+        previous_storage_m + expected_inflow_m - expected_storage_m,
+        rtol=1e-6,
+    )
+    assert recharge_m.dtype == np.float64
+    assert karst.storage_m.dtype == np.float64
+    assert captured_m.dtype == captured_soil_m.dtype == np.float32
+    # Each cell represents three equal-area HRUs; all original water is accounted for.
+    np.testing.assert_allclose(
+        (runoff_m.sum(axis=0) + interflow_m.sum(axis=0) + soil_m)
+        .reshape(2, 3)
+        .mean(axis=1)
+        + recharge_m
+        + karst.storage_m,
+        previous_storage_m + 0.038,
+        rtol=1e-6,
+    )
+
+
+def test_karst_dry_recession(karst: Karst) -> None:
+    """Release existing storage on dry days even when capture is disabled.
+
+    Args:
+        karst: Isolated karst module.
+    """
+    karst.model.config["hydrology"]["karst"]["capture_fraction"] = 0.0
+    karst.storage_m[:] = [0.1, 0.2]
+    initial_storage_m: np.ndarray = karst.storage_m.copy()
+    cumulative_recharge_m: np.ndarray = np.zeros(2)
+    for day in range(1, 31):
+        recharge_m: np.ndarray = karst.step(
+            np.zeros((24, 6), dtype=np.float32),
+            np.zeros((24, 6), dtype=np.float32),
+            np.zeros(6, dtype=np.float32),
+        )[0]
+        cumulative_recharge_m += recharge_m
+        np.testing.assert_allclose(
+            karst.storage_m, initial_storage_m * np.exp(-day / 10.0)
+        )
+        np.testing.assert_allclose(
+            karst.storage_m + cumulative_recharge_m, initial_storage_m
+        )
+
+
+def test_karst_preserves_loaded_storage(karst: Karst) -> None:
+    """Reuse checkpoint storage when initializing outside spinup.
+
+    Args:
+        karst: Isolated karst module.
+    """
+    karst.storage_m[:] = [0.1, 0.2]
+    karst.model.in_spinup = False
+    restored: Karst = Karst(karst.model, karst.hydrology)
+    assert restored.storage_m is karst.storage_m
+    np.testing.assert_array_equal(restored.storage_m, [0.1, 0.2])
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [None, {}, {"capture_fraction": 0.5}, {"release_time_days": 20.0}],
+)
+def test_karst_requires_config(karst: Karst, settings: dict[str, float] | None) -> None:
+    """Require explicit karst settings when calculating recharge.
+
+    Args:
+        karst: Isolated karst module.
+        settings: Incomplete settings, or None to omit the section.
+    """
+    karst.model.config = {"hydrology": {}}
+    if settings is not None:
+        karst.model.config["hydrology"]["karst"] = settings
+    initialized: Karst = Karst(karst.model, karst.hydrology)
+    with pytest.raises(KeyError):
+        initialized.step(
+            np.zeros((1, 6), dtype=np.float32),
+            np.zeros((1, 6), dtype=np.float32),
+            np.zeros(6, dtype=np.float32),
+        )
+
+
+@pytest.mark.parametrize(
+    "settings", [{"capture_fraction": 1.1}, {"release_time_days": 0.0}]
+)
+def test_karst_rejects_invalid_config(karst: Karst, settings: dict[str, float]) -> None:
+    """Reject invalid karst settings through the configuration schema.
+
+    Args:
+        karst: Isolated karst module.
+        settings: Invalid capture fraction (dimensionless) or release time (days).
+    """
+    complete_settings: dict[str, float] = {
+        "capture_fraction": 1.0,
+        "release_time_days": 10.0,
+        **settings,
+    }
+    with pytest.raises(ValueError):
+        KarstConfig.model_validate(complete_settings)

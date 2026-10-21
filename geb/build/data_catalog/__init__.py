@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from .aquastat import AQUASTAT
+from .ar6 import AR6
 from .base import Adapter
 from .cmip6 import CMIP6
 from .coast_rp import CoastRP
@@ -17,6 +18,7 @@ from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .fathomdem import FathomDem
 from .field_boundaries import FieldBoundaries
 from .flood_damage_model import (
     GeulFloodDamageModel,
@@ -59,6 +61,7 @@ from .sword import Sword
 from .undp import HumanDevelopmentIndex
 from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
+from .wokam import WOKAM
 from .world_bank import WorldBankData
 from .worldfloods import WorldFloodsV2
 
@@ -107,6 +110,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "ECMWF",
             "url": "https://confluence.ecmwf.int/display/CKB/ERA5-Land%3A+data+documentation#ERA5Land:datadocumentation-parameterlistingParameterlistings",
             "license": "CC BY 4.0",
+        },
+    },
+    "ar6": {
+        "adapter": AR6(
+            folder="ar6",
+            filename="ar6-regional-confidence.zip",
+            local_version=1,
+            cache="global",
+        ),
+        "url": "https://zenodo.org/records/6382554/files/ar6-regional-confidence.zip?download=1",
+        "source": {
+            "name": "IPCC AR6 Sea Level Projections",
+            "author": "IPCC",
+            "url": "https://doi.org/10.5281/zenodo.6382554",
+            "license": "Creative Commons Attribution 4.0 International",
         },
     },
     "ecmwf_forecasts": {
@@ -223,6 +241,20 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "European Commission, Joint Research Centre (JRC)",
             "license": "CC BY 4.0",
             "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "wokam": {
+        "adapter": WOKAM(
+            folder="wokam", filename="wokam.parquet", local_version=1, cache="global"
+        ),
+        "url": "https://download.bgr.de/bgr/grundwasser/whymap/shp/WHYMAP_WOKAM_v1.zip",
+        "source": {
+            "name": "World Karst Aquifer Map (WOKAM)",
+            "author": "BGR, IAH, KIT, UNESCO",
+            "year": "2017",
+            "license": "BGR standard terms; attribution required",
+            "url": "https://www.whymap.org/whymap/EN/Maps_Data/Wokam/wokam_node_en.html",
+            "paper_doi": "10.1007/s10040-020-02139-5",
         },
     },
     "why_map": {
@@ -1007,6 +1039,24 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY-NC-SA 4.0",
             "url": "https://huggingface.co/datasets/links-ads/fabdem-v12",
             "paper_doi": "10.1088/1748-9326/ac4d4f",
+        },
+    },
+    "fathomdem": {
+        "adapter": FathomDem(
+            folder="fathomdem",
+            local_version=1,
+            filename="placeholder.txt",
+            cache="global",
+        ),
+        "url": "https://doi.org/10.5281/zenodo.14511570",
+        "source": {
+            "name": "FathomDEM",
+            "author": "Hawker et al. (2025)",
+            "version": "1-0",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://zenodo.org/records/14511570",
+            "paper_doi": "10.5281/zenodo.14511570",
+            "americas_url": "https://zenodo.org/records/14523356",
         },
     },
     "global_ocean_mean_dynamic_topography": {

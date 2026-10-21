@@ -123,7 +123,7 @@ def _gather_inputs(
         evap_out: Target pre-allocated evaporation array (m³).
     """
     n: int = len(sorted_idxs)
-    for i in prange(n):  # ty: ignore[not-iterable]
+    for i in prange(n):
         idx: int = sorted_idxs[i]
         q_out[i] = q_in[idx]
         storage_out[i] = storage_in[idx]
@@ -160,7 +160,7 @@ def _scatter_outputs(
         storage_out: Target original-order river storage array (m³).
     """
     n: int = len(sorted_idxs)
-    for i in prange(n):  # ty: ignore[not-iterable]
+    for i in prange(n):
         idx: int = sorted_idxs[i]
         q_out[idx] = q_perm[i]
         evap_out[idx] = evap_perm[i]
@@ -1140,7 +1140,7 @@ def _run_inertial_substeps(
                         wb_outflow_avail_buf[term_wb] = 0.0
 
         # Loop 1: Momentum Equation
-        for reach_idx in prange(n_inertial):  # ty: ignore[not-iterable]
+        for reach_idx in prange(n_inertial):
             boundary_type: int = ds_boundary_type[reach_idx]
             water_stage_node: np.float32 = stage_buf[reach_idx]
             inv_interface_len: np.float32 = geom_inbank[
@@ -1161,29 +1161,14 @@ def _run_inertial_substeps(
                 bed_elev_node: np.float32 = geom_inbank[
                     reach_idx, GEOM_IN_BED_ELEVATION
                 ]
-                if bed_elev_node >= max_bed and water_stage_ds <= bed_elev_node:
-                    # Steep drop / free overfall where downstream water level is below upstream bed:
-                    # By Bates' formulation, the flow depth is strictly upstream depth,
-                    # water slope is -depth / dx, and reverse flow across the drop is impossible.
-                    effective_depth = max(
-                        water_stage_node - bed_elev_node, np.float32(0.0)
-                    )
-                    water_slope = -effective_depth * inv_interface_len
-                    reach_can_reverse = False
-                else:
-                    # Submerged or backwater interface condition (Bates et al., 2010):
-                    # Flow depth is the difference between the maximum free-surface elevation
-                    # and the highest bed elevation of the two adjoining cells.
-                    effective_stage_node: np.float32 = max(water_stage_node, max_bed)
-                    effective_stage_ds: np.float32 = max(water_stage_ds, max_bed)
-                    max_stage: np.float32 = max(
-                        effective_stage_node, effective_stage_ds
-                    )
-                    effective_depth = max_stage - max_bed
-                    water_slope = (
-                        effective_stage_ds - effective_stage_node
-                    ) * inv_interface_len
-                    reach_can_reverse = ALLOW_REVERSE_FLOW and boundary_type == 0
+                max_stage: np.float32 = max(water_stage_node, water_stage_ds)
+                effective_depth = max(max_stage - max_bed, np.float32(0.0))
+                water_slope = (water_stage_ds - water_stage_node) * inv_interface_len
+                reach_can_reverse = bool(
+                    ALLOW_REVERSE_FLOW
+                    and boundary_type == 0
+                    and water_stage_ds > bed_elev_node
+                )
             elif boundary_type == 3 or boundary_type == 4:
                 # Open boundary reaches (no downstream water level available):
                 #   - boundary_type 3: inland outlet / domain edge (pit)
@@ -1368,7 +1353,7 @@ def _run_inertial_substeps(
                 )
 
         # Loop 2: Continuity, Storage & Water Stage Update
-        for reach_idx in prange(n_inertial):  # ty: ignore[not-iterable]
+        for reach_idx in prange(n_inertial):
             # Sum upstream inflows
             inflow_rate: np.float32 = kinematic_inflow_rate[reach_idx]
 

@@ -40,8 +40,9 @@ from geb.geb_types import (
     ArrayFloat,
     ArrayFloat32,
     ArrayFloat64,
+    ArrayInt64,
     ArrayWithScalar,
-    ThreeDArrayFloat32,
+    ThreeDArrayFloat64,
     ThreeDArrayWithScalar,
     TwoDArrayBool,
     TwoDArrayFloat,
@@ -60,7 +61,7 @@ from geb.workflows.raster import decompress_with_mask
 if TYPE_CHECKING:
     pass
 
-MODFLOW_VERSION: str = "6.7.0"
+MODFLOW_VERSION: str = "6.8.1"
 
 
 @njit(cache=True)
@@ -68,7 +69,7 @@ def get_water_table_depth(
     layer_boundary_elevation: TwoDArrayFloat,
     head: TwoDArrayFloat,
     elevation: ArrayFloat,
-    min_remaining_layer_storage_m: float | np.floating,
+    min_remaining_layer_storage_m: float,
 ) -> ArrayFloat64:
     """Calculate the water table depth.
 
@@ -118,7 +119,8 @@ def get_groundwater_storage_m(
     layer_boundary_elevation: TwoDArrayFloat,
     head: TwoDArrayFloat,
     specific_yield: TwoDArrayFloat,
-    min_remaining_layer_storage_m: float | np.floating = 0.0,
+    specific_storage: TwoDArrayFloat,
+    min_remaining_layer_storage_m: float = 0.0,
 ) -> ArrayFloat64:
     """Calculate the groundwater storage in meters.
 
@@ -126,6 +128,7 @@ def get_groundwater_storage_m(
         layer_boundary_elevation: Elevation of the layer boundaries, in m.
         head: The heads of the model grid, in m.
         specific_yield: The specific yield of the model grid (-).
+        specific_storage: The specific storage of the model grid (1/m).
         min_remaining_layer_storage_m: The minimum remaining layer storage in m.
             More storage cannot be abstracted with wells.
 
@@ -139,11 +142,20 @@ def get_groundwater_storage_m(
             layer_top = layer_boundary_elevation[layer_ix, cell_ix]
             layer_bottom = layer_boundary_elevation[layer_ix + 1, cell_ix]
             layer_specific_yield = specific_yield[layer_ix, cell_ix]
+            layer_thickness = layer_top - layer_bottom
 
-            groundwater_layer_top = min(layer_head, layer_top)
-            if groundwater_layer_top - min_remaining_layer_storage_m > layer_bottom:
+            if layer_head >= layer_top:
+                elastic_term = (
+                    specific_storage[layer_ix, cell_ix]
+                    * layer_thickness
+                    * (layer_head - layer_top)
+                )
                 storage[cell_ix] += (
-                    groundwater_layer_top - layer_bottom - min_remaining_layer_storage_m
+                    layer_thickness - min_remaining_layer_storage_m
+                ) * layer_specific_yield + elastic_term
+            elif layer_head - min_remaining_layer_storage_m > layer_bottom:
+                storage[cell_ix] += (
+                    layer_head - layer_bottom - min_remaining_layer_storage_m
                 ) * layer_specific_yield
     return storage
 
@@ -155,7 +167,7 @@ def distribute_well_abstraction_m3_per_layer(
     heads: TwoDArrayFloat,
     specific_yield: TwoDArrayFloat,
     area: ArrayFloat,
-    min_remaining_layer_storage_m: float | np.floating = 0.0,
+    min_remaining_layer_storage_m: float = 0.0,
 ) -> TwoDArrayFloat64:
     """Distribute the well abstraction rate over the layers.
 
@@ -213,6 +225,65 @@ def distribute_well_abstraction_m3_per_layer(
     return well_rate_per_layer
 
 
+def parse_boundary_heads(
+    boundary_heads: ThreeDArrayFloat64,
+    boundary_mask: TwoDArrayBool,
+    ext_basin_mask: TwoDArrayBool,
+    nlay: int,
+    botm_ext: ThreeDArrayFloat64 | None = None,
+) -> list[tuple[tuple[int, int], float]]:
+    """Parse boundary heads into a list of tuples.
+
+    Args:
+        boundary_heads: The heads of the model grid, in m.
+        boundary_mask: The boundary mask of the model grid.
+        ext_basin_mask: The expanded basin mask of the model grid.
+        nlay: The number of layers in the model grid.
+        botm_ext: The bottom elevations of the model grid.
+
+    Returns:
+        A list of tuples of the form ((layer, cell), head).
+
+    Raises:
+        ValueError: If the shapes of the input arrays are incorrect
+    """
+    ext_nrow, ext_ncol = ext_basin_mask.shape
+
+    if boundary_heads.shape != (nlay, ext_nrow, ext_ncol):
+        raise ValueError(
+            f"boundary_heads must have shape ({nlay}, {ext_nrow}, {ext_ncol}), "
+            f"got {boundary_heads.shape}."
+        )
+
+    if boundary_mask.shape != (ext_nrow, ext_ncol):
+        raise ValueError(
+            f"boundary_mask must have shape ({ext_nrow}, {ext_ncol}), "
+            f"got {boundary_mask.shape}."
+        )
+
+    chd_list: list[tuple[tuple[int, int], float]] = []
+
+    for layer in range(nlay):
+        for r in range(ext_nrow):
+            for c in range(ext_ncol):
+                if boundary_mask[r, c] and not ext_basin_mask[r, c]:
+                    head_val: float = float(boundary_heads[layer, r, c])
+                    if not np.isnan(head_val):
+                        if botm_ext is not None:
+                            min_head: float = float(botm_ext[layer, r, c]) + 0.05
+                            if head_val < min_head:
+                                head_val = min_head
+                        cell_num: int = r * ext_ncol + c
+                        chd_list.append(((layer, cell_num), head_val))
+
+    if not chd_list:
+        raise ValueError(
+            "No active constant-head boundary cells were found with valid heads in boundary_heads."
+        )
+
+    return chd_list
+
+
 class ModFlowSimulation:
     """Implements an instance of the MODFLOW model as well as methods to interact with it.
 
@@ -230,7 +301,12 @@ class ModFlowSimulation:
     _actual_well_rate_ptr: ArrayFloat64
     _drainage_ptr: ArrayFloat64
     _recharge_ptr: ArrayFloat64
+    _boundary_heads_ptr: ArrayFloat64
+    _boundary_flow_ptr: ArrayFloat64
+    _boundary_rate_in_ptr: ArrayFloat64
+    _boundary_rate_out_ptr: ArrayFloat64
     _mxit_ptr: npt.NDArray[np.int32]
+    chd_active_cell_indices: ArrayInt64
 
     def __init__(
         self,
@@ -246,6 +322,10 @@ class ModFlowSimulation:
         heads: TwoDArrayFloat64,
         heads_update_callback: Callable,
         logger: logging.Logger,
+        boundary_heads: ThreeDArrayFloat64,
+        boundary_mask: TwoDArrayBool,
+        boundary_layer_boundary_elevation: ThreeDArrayFloat64,
+        boundary_hydraulic_conductivity: ThreeDArrayFloat64,
         min_remaining_layer_storage_m: float = 0.1,
         verbose: bool = False,
         never_load_from_disk: bool = False,
@@ -265,10 +345,17 @@ class ModFlowSimulation:
             heads: The initial heads of the model grid (m).
             heads_update_callback: A callback function to update the heads in the GEB model after each time step.
             logger: A logger instance to log information about the model.
+            boundary_heads: A 3D array containing the boundary heads for the model grid.
+            boundary_mask: A boolean mask indicating the boundary cells in the model grid.
+            boundary_layer_boundary_elevation: The layer boundary elevations for the extended model grid (m).
+            boundary_hydraulic_conductivity: The hydraulic conductivity for the extended model grid (m/day).
             min_remaining_layer_storage_m: The minimum remaining layer storage in m, defaults to 0.1. More storage cannot be abstracted with wells.
             verbose: Whether to print debug information, defaults to False.
             never_load_from_disk: Whether to never load the model from disk, defaults to False. If set to False, the model input
                 will be loaded from disk if it exists and the input parameters have not changed.
+
+        Raises:
+            ValueError: If the shapes of the input arrays are incorrect.
         """
         self.logger = logger
         self.name = "MODEL"  # MODFLOW requires the name to be uppercase
@@ -277,22 +364,59 @@ class ModFlowSimulation:
         self.nlay = hydraulic_conductivity.shape[0]
         assert self.basin_mask.dtype == bool
         self.n_active_cells = self.basin_mask.size - self.basin_mask.sum()
+
+        self.nrow, self.ncol = self.basin_mask.shape
+        self.ext_nrow, self.ext_ncol = self.nrow + 2, self.ncol + 2
+
+        self.ext_basin_mask = np.ones((self.ext_nrow, self.ext_ncol), dtype=bool)
+        self.ext_basin_mask[1:-1, 1:-1] = self.basin_mask
+        if boundary_mask.shape != (self.ext_nrow, self.ext_ncol):
+            raise ValueError(
+                f"boundary_mask must have shape ({self.ext_nrow}, {self.ext_ncol}), "
+                f"got {boundary_mask.shape}."
+            )
+        internal_active = np.zeros((self.ext_nrow, self.ext_ncol), dtype=bool)
+        internal_active[1:-1, 1:-1] = ~self.basin_mask
+        if np.any(boundary_mask & internal_active):
+            raise ValueError(
+                "Boundary cells must be located strictly outside the active model domain."
+            )
+        self.ext_basin_mask[boundary_mask] = False
+        self.n_mf_cells = self.ext_basin_mask.size - self.ext_basin_mask.sum()
+
+        self.geb_to_mf = np.full(self.n_active_cells, -1, dtype=np.int64)
+        self.mf_to_geb = np.full(self.n_mf_cells, -1, dtype=np.int64)
+        geb_idx = 0
+        mf_idx = 0
+        for r in range(self.ext_nrow):
+            for c in range(self.ext_ncol):
+                if not self.ext_basin_mask[r, c]:
+                    if (
+                        1 <= r <= self.nrow
+                        and 1 <= c <= self.ncol
+                        and not self.basin_mask[r - 1, c - 1]
+                    ):
+                        self.geb_to_mf[geb_idx] = mf_idx
+                        self.mf_to_geb[mf_idx] = geb_idx
+                        geb_idx += 1
+                    mf_idx += 1
+
         self.working_directory = working_directory
         os.makedirs(self.working_directory, exist_ok=True)
         self.verbose = verbose
         self.never_load_from_disk = never_load_from_disk
-
         self.min_remaining_layer_storage_m = min_remaining_layer_storage_m
 
         self.topography = topography
         self.layer_boundary_elevation = layer_boundary_elevation
         assert (self.topography >= self.layer_boundary_elevation[0]).all()
         self.specific_yield = specific_yield
-        hydraulic_conductivity = hydraulic_conductivity
+        self.specific_storage = specific_storage
         self.hydraulic_conductivity_drainage = hydraulic_conductivity[0]
 
-        arguments = dict(locals())
+        self.ext_gt = (gt[0] - gt[1], gt[1], gt[2], gt[3] - gt[5], gt[4], gt[5])
 
+        arguments = dict(locals())
         arguments.pop("working_directory")
         arguments.pop("modflow_bin_folder")
         arguments.pop("self")
@@ -306,16 +430,45 @@ class ModFlowSimulation:
 
         self.save_flows = False
 
+        self.botm_ext = np.zeros(
+            (self.nlay, self.ext_nrow, self.ext_ncol), dtype=np.float64
+        )
+        self.botm_ext[:, 1:-1, 1:-1] = self.decompress(
+            self.layer_boundary_elevation[1:]
+        )
+        self.botm_ext[:, boundary_mask] = boundary_layer_boundary_elevation[1:][
+            :, boundary_mask
+        ]
+
+        self.chd_data = parse_boundary_heads(
+            boundary_heads=boundary_heads,
+            boundary_mask=boundary_mask,
+            ext_basin_mask=self.ext_basin_mask,
+            nlay=self.nlay,
+            botm_ext=self.botm_ext,
+        )
+
+        cell_to_mf_active = np.full(self.ext_nrow * self.ext_ncol, -1, dtype=np.int64)
+        cell_to_mf_active[~self.ext_basin_mask.ravel()] = np.arange(
+            self.n_mf_cells, dtype=np.int64
+        )
+
+        chd_cells = np.array([entry[0][1] for entry in self.chd_data], dtype=np.int64)
+        self.chd_active_cell_indices = cell_to_mf_active[chd_cells]
+
         if not self.load_from_disk(arguments):
             try:
                 if self.verbose:
                     self.logger.info("Creating MODFLOW model")
-
                 sim = self.get_simulation(
-                    gt,
+                    self.ext_gt,
                     hydraulic_conductivity,
                     specific_storage,
                     specific_yield,
+                    boundary_heads=boundary_heads,
+                    boundary_mask=boundary_mask,
+                    boundary_layer_boundary_elevation=boundary_layer_boundary_elevation,
+                    boundary_hydraulic_conductivity=boundary_hydraulic_conductivity,
                 )
 
                 sim.write_simulation()
@@ -324,7 +477,6 @@ class ModFlowSimulation:
                 if self.hash_file.exists():
                     self.hash_file.unlink()
                 raise
-            # sim.run_simulation()
         elif self.verbose:
             self.logger.info("Loading MODFLOW model from disk")
 
@@ -387,6 +539,10 @@ class ModFlowSimulation:
         hydraulic_conductivity: TwoDArrayFloat32,
         specific_storage: TwoDArrayFloat32,
         specific_yield: TwoDArrayFloat32,
+        boundary_heads: ThreeDArrayFloat64,
+        boundary_mask: TwoDArrayBool,
+        boundary_layer_boundary_elevation: ThreeDArrayFloat64,
+        boundary_hydraulic_conductivity: ThreeDArrayFloat64,
     ) -> flopy.mf6.MFSimulation:
         """Create a MODFLOW 6 simulation instance.
 
@@ -403,6 +559,10 @@ class ModFlowSimulation:
             hydraulic_conductivity: The hydraulic conductivity of the model grid (m/day).
             specific_storage: The specific storage of the model grid (m-1).
             specific_yield: The specific yield of the model grid (-).
+            boundary_heads: The boundary heads of the model grid (m).
+            boundary_mask: The boundary mask of the model grid.
+            boundary_layer_boundary_elevation: The layer boundary elevations for the extended model grid (m).
+            boundary_hydraulic_conductivity: The hydraulic conductivity for the extended model grid (m/day).
 
         Returns:
             The MODFLOW 6 simulation instance.
@@ -440,9 +600,8 @@ class ModFlowSimulation:
         )
 
         # 1. Create vertices
-        nrow, ncol = self.basin_mask.shape
         x_coordinates_vertices, y_coordinates_vertices = self.create_vertices(
-            nrow, ncol, gt
+            self.ext_nrow, self.ext_ncol, gt
         )
         vertices = [
             [i, x, y]
@@ -456,32 +615,21 @@ class ModFlowSimulation:
 
         # 2. Create cell2d array
         cell2d = []
-        nrow, ncol = self.basin_mask.shape
-        xy_to_cell = np.full((nrow, ncol), -1, dtype=int)
-        cell_areas = np.full((nrow, ncol), np.nan, dtype=np.float32)
-        for row in range(nrow):
-            for column in range(ncol):
-                cell_number = row * ncol + column
+        xy_to_cell = np.full((self.ext_nrow, self.ext_ncol), -1, dtype=int)
+        cell_areas = np.full((self.ext_nrow, self.ext_ncol), np.nan, dtype=np.float32)
+        n_vert_x = self.ext_ncol + 1
+
+        for row in range(self.ext_nrow):
+            for column in range(self.ext_ncol):
+                cell_number = row * self.ext_ncol + column
                 xy_to_cell[row, column] = cell_number
                 # not here that the vertices are 1 larger than the number of cells
                 # therefore an additional offset of 1 is required for each row
                 # thus adding 'row' to v1 to account for the offset
-                v1 = row * ncol + column + row  # top-left vertex
+                v1 = row * n_vert_x + column  # top-left vertex
                 v2 = v1 + 1  # top-right vertex
-                v3 = v1 + ncol + 2  # bottom-right vertex
-                v4 = v1 + ncol + 1  # bottom-left vertex
-
-                # import matplotlib.pyplot as plt
-
-                # v1_point = vertices[v1][1:]
-                # v2_point = vertices[v2][1:]
-                # v3_point = vertices[v3][1:]
-                # v4_point = vertices[v4][1:]
-                # # plt.plot(*zip(*(v1_point, v2_point)), c="r")
-                # plt.plot(
-                #     *zip(*(v1_point, v2_point, v3_point, v4_point, v1_point)), c="r"
-                # )
-                # plt.savefig("plot.png")
+                v3 = (row + 1) * n_vert_x + column + 1  # bottom-right vertex
+                v4 = (row + 1) * n_vert_x + column  # bottom-left vertex
 
                 cell_center_x = (
                     x_coordinates_vertices[row, column]
@@ -514,60 +662,92 @@ class ModFlowSimulation:
                 ]
                 cell2d.append(cell)
 
-        cell_areas = cell_areas[~self.basin_mask]
+        interior_verts = set()
+        for r in range(self.ext_nrow):
+            for c in range(self.ext_ncol):
+                if not self.ext_basin_mask[r, c] and not boundary_mask[r, c]:
+                    v1 = r * n_vert_x + c
+                    v2 = v1 + 1
+                    v3 = (r + 1) * n_vert_x + c + 1
+                    v4 = (r + 1) * n_vert_x + c
+                    interior_verts.update([v1, v2, v3, v4])
 
-        # plt.savefig("cells.png")
-        active_cells = xy_to_cell[~self.basin_mask].ravel()
+        for r in range(self.ext_nrow):
+            for c in range(self.ext_ncol):
+                if boundary_mask[r, c] and not self.ext_basin_mask[r, c]:
+                    cell_idx = r * self.ext_ncol + c
+                    old_verts = cell2d[cell_idx][4:8]
+                    new_verts = []
+                    for v in old_verts:
+                        if v in interior_verts:
+                            new_verts.append(v)
+                        else:
+                            new_v_id = len(vertices)
+                            orig_x, orig_y = vertices[v][1], vertices[v][2]
+                            vertices.append([new_v_id, orig_x, orig_y])
+                            new_verts.append(new_v_id)
+                    cell2d[cell_idx][4:8] = new_verts
 
-        domain = np.stack([~self.basin_mask] * hydraulic_conductivity.shape[0])
+        cell_areas = cell_areas[~self.ext_basin_mask]
+        mf_active_cells = xy_to_cell[~self.ext_basin_mask].ravel()
 
-        # Discretization for flexible grid
+        domain = np.stack([~self.ext_basin_mask] * self.nlay)
+
+        top_ext = np.zeros((self.ext_nrow, self.ext_ncol), dtype=np.float64)
+        top_ext[1:-1, 1:-1] = self.decompress(self.layer_boundary_elevation[0])
+        top_ext[boundary_mask] = boundary_layer_boundary_elevation[0][boundary_mask]
+
+        botm_ext = self.botm_ext
+
+        k = np.zeros((self.nlay, self.ext_nrow, self.ext_ncol), dtype=np.float64)
+        k[:, 1:-1, 1:-1] = self.decompress(hydraulic_conductivity)
+        k[:, boundary_mask] = boundary_hydraulic_conductivity[:, boundary_mask]
+
+        strt_data = np.zeros_like(k, dtype=np.float64)
+        for layer in range(self.nlay):
+            strt_data[layer] = top_ext - 1.0
+
         flopy.mf6.ModflowGwfdisv(
             groundwater_flow,
             nlay=self.nlay,
-            ncpl=nrow * ncol,
+            ncpl=self.ext_nrow * self.ext_ncol,
             nvert=len(vertices),
             vertices=vertices,
             cell2d=cell2d,
             top={
                 "filename": "top.bin",
                 "factor": 1.0,
-                "data": self.decompress(self.layer_boundary_elevation[0]).tolist(),
+                "data": top_ext.tolist(),
                 "iprn": 1,
                 "binary": True,
             },
             botm={
                 "filename": "botm.bin",
                 "factor": 1.0,
-                "data": self.decompress(self.layer_boundary_elevation[1:]).tolist(),
+                "data": botm_ext.tolist(),
                 "iprn": 1,
                 "binary": True,
             },
             idomain={
                 "filename": "idomain.bin",
                 "factor": 1.0,
-                "data": domain.tolist(),
+                "data": domain.astype(np.int32).tolist(),
                 "iprn": 1,
                 "binary": True,
             },
         )
 
-        # Node property flow
-        k: ThreeDArrayFloat32 = self.decompress(hydraulic_conductivity)
-
-        # Initial conditions
         flopy.mf6.ModflowGwfic(
             groundwater_flow,
             strt={
                 "filename": "strt.bin",
                 "factor": 1.0,
-                "data": np.full_like(k, np.nan, dtype=np.float64),
+                "data": strt_data.tolist(),
                 "iprn": 1,
                 "binary": True,
             },
         )
 
-        # Create icelltype array (assuming convertible cells i.e., that can be converted between confined and unconfined)
         icelltype = np.ones_like(domain, dtype=np.int32)
         flopy.mf6.ModflowGwfnpf(
             groundwater_flow,
@@ -588,10 +768,15 @@ class ModFlowSimulation:
             },
         )
 
-        specific_storage: ThreeDArrayFloat32 = self.decompress(specific_storage)
-        specific_yield: ThreeDArrayFloat32 = self.decompress(specific_yield)
+        specific_storage_ext = np.zeros(
+            (self.nlay, self.ext_nrow, self.ext_ncol), dtype=np.float64
+        )
+        specific_storage_ext[:, 1:-1, 1:-1] = self.decompress(specific_storage)
 
-        # Storage
+        specific_yield_ext = np.zeros(
+            (self.nlay, self.ext_nrow, self.ext_ncol), dtype=np.float64
+        )
+        specific_yield_ext[:, 1:-1, 1:-1] = self.decompress(specific_yield)
         # Somehow modeltime is not available when loading_package is set to False (the default) and what it should be.
         # when loading_package is set to True, the model builds fine but the simulation doesn't work.
         # TODO: See if this is fixed in a future version of flopy/modflow6, and perhaps file an issue.
@@ -620,15 +805,17 @@ class ModFlowSimulation:
             groundwater_flow,
             save_flows=self.save_flows,
             iconvert=1,
-            ss=specific_storage.astype(np.float64),
-            sy=specific_yield.astype(np.float64),
+            ss=specific_storage_ext.astype(np.float64),
+            sy=specific_yield_ext.astype(np.float64),
             steady_state=False,
             transient=True,
+            pname="sto",
         )
 
-        # Recharge
+        internal_cell_ids = mf_active_cells[self.geb_to_mf]
+
         recharge = []
-        for cell in active_cells:
+        for cell in mf_active_cells:
             recharge.append(
                 (0, cell, 0.0)
             )  # specifying the layer, cell number, and recharge rate
@@ -652,7 +839,7 @@ class ModFlowSimulation:
         # Wells
         wells = []
         for layer in range(self.nlay):
-            for cell in active_cells:
+            for cell in internal_cell_ids:
                 wells.append(
                     (layer, cell, 0.0)
                 )  # specifying the layer, cell number, and well rate
@@ -678,17 +865,13 @@ class ModFlowSimulation:
         # area the total size of the cell, and as we are are approximating
         # transmissivity, we can set the drainage length to 1
         drainage = []
-        for idx, cell in enumerate(active_cells):
-            drainage.append(
-                (
-                    0,  # top layer
-                    cell,
-                    self.layer_boundary_elevation[0, idx],  # at elevation of top layer
-                    self.hydraulic_conductivity_drainage[idx]
-                    * cell_areas[idx]
-                    / 1,  # drainage rate
-                )
+        for geb_idx, mf_idx in enumerate(self.geb_to_mf):
+            drn_cell_id = mf_active_cells[mf_idx]
+            drn_rate = (
+                self.hydraulic_conductivity_drainage[geb_idx] * cell_areas[mf_idx] / 1
             )
+            drn_elev = self.layer_boundary_elevation[0, geb_idx]
+            drainage.append((0, drn_cell_id, drn_elev, drn_rate))
 
         flopy.mf6.ModflowGwfdrn(
             groundwater_flow,
@@ -706,7 +889,23 @@ class ModFlowSimulation:
             save_flows=self.save_flows,
         )
 
-        output_control = flopy.mf6.ModflowGwfoc(
+        flopy.mf6.ModflowGwfchd(
+            groundwater_flow,
+            maxbound=len(self.chd_data),
+            stress_period_data={
+                0: {
+                    "filename": "chd.bin",
+                    "factor": 1.0,
+                    "data": self.chd_data,
+                    "iprn": 1,
+                    "binary": True,
+                },
+            },
+            save_flows=self.save_flows,
+            pname="chd",
+        )
+
+        flopy.mf6.ModflowGwfoc(
             groundwater_flow,
             pname="oc",
             head_filerecord=f"{self.name}.hds",
@@ -784,7 +983,6 @@ class ModFlowSimulation:
             FileNotFoundError: If the config file is not found on disk.
             ValueError: If the platform is not supported.
         """
-        # Current model version 6.5.0 from https://github.com/MODFLOW-USGS/modflow6/releases/tag/6.5.0
         if platform.system() == "Windows":
             libary_name: str = "libmf6.dll"
         elif platform.system() == "Linux":
@@ -838,15 +1036,11 @@ class ModFlowSimulation:
                 self.logger.debug("MODFLOW model initialized")
 
         area_tag: str = self.mf6.get_var_address("AREA", self.name, "DIS")
-        area: TwoDArrayFloat64 = self.mf6.get_value_ptr(area_tag).reshape(
-            self.nlay, self.n_active_cells
-        )
-
+        mf_area = self.mf6.get_value_ptr(area_tag).reshape(self.nlay, self.n_mf_cells)
         # ensure that the areas of all vertical cells are equal
-        assert (np.diff(area, axis=0) == 0).all()
+        assert (np.diff(mf_area, axis=0) == 0).all()
 
-        # so we can use the area of the top layer
-        self.area = area[0].astype(np.float32)
+        self.area = mf_area[0, self.geb_to_mf].astype(np.float32)
 
         # Cache frequently accessed BMI pointers. MODFLOW updates these arrays
         # in place, so repeated pointer retrieval is unnecessary.
@@ -871,10 +1065,94 @@ class ModFlowSimulation:
 
         self.prepare_time_step()
 
-        # because modflow rounds heads when they are written to file, we set the modflow heads
-        # to the actual model heads to ensure that the model is in the same state as the modflow model
+        chd_head_tag = self.mf6.get_var_address("HEAD", self.name, "CHD")
+        self._boundary_heads_ptr = self.mf6.get_value_ptr(chd_head_tag)
+        self._boundary_flow_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("SIMVALS", self.name, "CHD")
+        )
+        self._boundary_rate_in_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("RATECHDIN", self.name, "CHD")
+        )
+        self._boundary_rate_out_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("RATECHDOUT", self.name, "CHD")
+        )
+
         self.heads = heads
+
+        for chd_idx, (coord, b_head) in enumerate(self.chd_data):
+            act_idx = self.chd_active_cell_indices[chd_idx]
+            self._heads_ptr[coord[0] * self.n_mf_cells + act_idx] = b_head
+            self._boundary_heads_ptr[chd_idx] = b_head
         assert not np.isnan(self.heads).any()
+
+    @property
+    def boundary_heads(self) -> ArrayFloat64:
+        """Get the boundary heads.
+
+        Returns:
+            The boundary heads, in m.
+        """
+        return self._boundary_heads_ptr.copy()
+
+    def set_boundary_heads(self, boundary_heads: ArrayFloat64) -> None:
+        """Set the boundary heads.
+
+        Args:
+            boundary_heads: The boundary heads to set, in m.
+
+        Raises:
+            ValueError: If the boundary heads contain NaN values.
+            ValueError: If the boundary heads shape is not equal to the expected shape.
+        """
+        if np.isnan(boundary_heads).any():
+            raise ValueError("Boundary heads cannot contain NaN values.")
+        if boundary_heads.shape != self._boundary_heads_ptr.shape:
+            raise ValueError(
+                f"Expected boundary heads shape {self._boundary_heads_ptr.shape}, got {boundary_heads.shape}."
+            )
+        clamped_heads = boundary_heads.copy()
+        for chd_idx, (coord, _) in enumerate(self.chd_data):
+            cell_num = coord[1]
+            r = cell_num // self.ext_ncol
+            c = cell_num % self.ext_ncol
+            min_head = float(self.botm_ext[coord[0], r, c]) + 0.05
+            if clamped_heads[chd_idx] < min_head:
+                clamped_heads[chd_idx] = min_head
+
+        self._boundary_heads_ptr[:] = clamped_heads
+
+        for chd_idx, (coord, _) in enumerate(self.chd_data):
+            act_idx = self.chd_active_cell_indices[chd_idx]
+            self._heads_ptr[coord[0] * self.n_mf_cells + act_idx] = clamped_heads[
+                chd_idx
+            ]
+
+    @property
+    def boundary_flow_m3(self) -> ArrayFloat64:
+        """Get net boundary flux across all boundary cells (m3/step).
+
+        Returns:
+            Net boundary flux for active basin cells (m3/step).
+        """
+        return self._boundary_flow_ptr.copy()
+
+    @property
+    def boundary_inflow_m3(self) -> ArrayFloat64:
+        """Get total boundary inflow (m3/step).
+
+        Returns:
+            Boundary inflow for active basin cells (m3/step).
+        """
+        return np.maximum(0.0, self.boundary_flow_m3)
+
+    @property
+    def boundary_outflow_m3(self) -> ArrayFloat64:
+        """Get total boundary outflow (m3/step).
+
+        Returns:
+            Boundary outflow for active basin cells (m3/step).
+        """
+        return np.maximum(0.0, -self.boundary_flow_m3)
 
     @property
     def heads(self) -> TwoDArrayFloat64:
@@ -883,9 +1161,10 @@ class ModFlowSimulation:
         Returns:
             The heads of the model grid, in m.
         """
-        heads = self._heads_ptr.reshape(self.nlay, self.n_active_cells)
-        assert not np.isnan(heads).any()
-        return heads
+        mf_heads = self._heads_ptr.reshape(self.nlay, self.n_mf_cells)
+        geb_heads = mf_heads[:, self.geb_to_mf]
+        assert not np.isnan(geb_heads).any()
+        return geb_heads
 
     @heads.setter
     def heads(self, value: TwoDArrayFloat64) -> None:
@@ -894,7 +1173,9 @@ class ModFlowSimulation:
         Args:
             value: The heads to set, in m.
         """
-        self._heads_ptr[:] = value.ravel()
+        mf_heads = self._heads_ptr.reshape(self.nlay, self.n_mf_cells)
+        for layer in range(self.nlay):
+            mf_heads[layer, self.geb_to_mf] = value[layer]
 
     @property
     def groundwater_depth(self) -> ArrayFloat64:
@@ -920,7 +1201,10 @@ class ModFlowSimulation:
             The groundwater content, in m.
         """
         groundwater_content_m = get_groundwater_storage_m(
-            self.layer_boundary_elevation, self.heads, self.specific_yield
+            self.layer_boundary_elevation,
+            self.heads,
+            self.specific_yield,
+            self.specific_storage,
         )
         assert (groundwater_content_m >= 0).all()
         return groundwater_content_m
@@ -945,6 +1229,7 @@ class ModFlowSimulation:
             self.layer_boundary_elevation,
             self.heads,
             self.specific_yield,
+            self.specific_storage,
             min_remaining_layer_storage_m=self.min_remaining_layer_storage_m,
         )
         assert (groundwater_available_m >= 0).all()
@@ -1016,26 +1301,34 @@ class ModFlowSimulation:
 
     @property
     def _recharge_m(self) -> npt.NDArray[np.float64]:
-        recharge = self._recharge_ptr.copy()
+        """Get the groundwater recharge for active GEB cells.
+
+        Returns:
+            Recharge rates for active basin cells (meters/step).
+        """
+        recharge = self._recharge_ptr[self.geb_to_mf].copy()
         assert not np.isnan(recharge).any()
         return recharge
 
     @_recharge_m.setter
-    def recharge_m(self, value: ArrayFloat32) -> None:
-        """Set the recharge, value in m/step.
+    def recharge_m(self, value: ArrayFloat32 | npt.NDArray[np.float64]) -> None:
+        """Set the groundwater recharge for active GEB cells.
+
+        Maps the active cell recharge rates to the MODFLOW active grid
+        via geb_to_mf. Boundary cells are located outside the domain and receive 0 recharge.
 
         Args:
-            value: The recharge to set, value in m/step.
+            value: Recharge rate for active basin cells (meters/step).
         """
         assert not np.isnan(value).any()
-        self._recharge_ptr[:] = value
+        self._recharge_ptr[self.geb_to_mf] = value
 
     @property
     def recharge_m3(self) -> npt.NDArray[np.float64]:
-        """Get the recharge, value in m3/step.
+        """Get the groundwater recharge volume for active GEB cells.
 
         Returns:
-            The recharge, value in m3/step.
+            Recharge volume for active basin cells (m3/step).
         """
         return self._recharge_m * self.area
 
@@ -1057,7 +1350,7 @@ class ModFlowSimulation:
         """Set recharge, value in m3/step.
 
         Args:
-            recharge: The recharge to set, value in m3/step.
+            recharge: Recharge volume for active basin cells (m3/step).
         """
         assert not np.isnan(recharge).any()
         assert (recharge >= 0).all()
@@ -1101,7 +1394,6 @@ class ModFlowSimulation:
                     break
             else:
                 self.logger.error("MODFLOW did not converge")
-                # raise RuntimeError("MODFLOW did not converge")
 
             self.mf6.finalize_solve(solution_id)
 

@@ -176,23 +176,29 @@ def compute_cross_section_from_depth(
 ) -> tuple[np.float32, np.float32, np.float32]:
     """Calculates cross-sectional area, top width, and wetted perimeter from effective interface depth.
 
-    Uses a continuous power-law channel cross-section (W(y) = W_bf * (y / h_bf)^r) within the main channel
-    and a continuous compound trapezoidal floodplain that expands gradually above bankfull depth (Dingman 2009, Neal et al. 2012).
+    The river channel has curved sides (a bowl or parabola shape). When water
+    rises above the river banks, it spills onto the flat floodplain next to it.
+
+    When water floods over the banks, deep water in the river still moves fast,
+    while shallow water on the floodplain moves slowly. To prevent the shallow
+    floodplain water from making the whole river appear to suddenly slow down,
+    we calculate the river and the floodplain separately and combine how easily
+    water can move through both.
 
     Args:
-        effective_depth_m: Effective flow depth across reach interface (meters).
-        bankfull_width_m: Bankfull top width of the channel (meters).
-        shape_exponent: Power-law cross-sectional shape exponent r (dimensionless).
-        bankfull_depth_m: Bankfull channel depth (meters).
-        floodplain_width_m: Floodplain width beyond bankfull channel (meters).
-        inverse_shape_exponent_plus_one: Precomputed 1 / (r + 1) (dimensionless).
-        bankfull_area_m2: Precomputed bankfull cross-sectional area (m²).
-        bankfull_perimeter_m: Precomputed bankfull wetted perimeter (meters).
-        floodplain_side_slope: Precomputed effective floodplain side-slope parameter z_fp (dimensionless).
-        floodplain_depth_threshold_m: Precomputed floodplain depth threshold for vertical expansion (meters).
-        floodplain_area_threshold_m2: Precomputed floodplain area threshold for vertical expansion (m²).
-        sqrt_one_plus_floodplain_slope_squared: Precomputed factor sqrt(1 + z_fp²) (dimensionless).
-        width_over_sqrt_bankfull_depth: Precalculated factor W_bf / sqrt(h_bf) for r=0.5 (m^(1/2)).
+        effective_depth_m: Water depth at the boundary between two river reaches (meters).
+        bankfull_width_m: River channel width when full to the top of its banks (meters).
+        shape_exponent: Channel shape factor: how curved the river bed is, where 0.5 is a parabola (dimensionless).
+        bankfull_depth_m: Channel depth when full to the top of its banks (meters).
+        floodplain_width_m: Extra width available on the floodplain next to the channel (meters).
+        inverse_shape_exponent_plus_one: Precomputed value of 1 / (shape_exponent + 1) (dimensionless).
+        bankfull_area_m2: Water area when the channel is full to the banks (m²).
+        bankfull_perimeter_m: Channel bed length touching water when full to the banks (meters).
+        floodplain_side_slope: Side slope of the floodplain banks (horizontal to vertical ratio) (dimensionless).
+        floodplain_depth_threshold_m: Water depth where the sloping floodplain reaches its full width (meters).
+        floodplain_area_threshold_m2: Extra water area when the floodplain reaches its full width (m²).
+        sqrt_one_plus_floodplain_slope_squared: Precomputed factor sqrt(1 + slope²) (dimensionless).
+        width_over_sqrt_bankfull_depth: Precomputed shortcut for parabola channels (r=0.5) (m^(1/2)).
 
     Returns:
         A tuple containing:
@@ -201,13 +207,16 @@ def compute_cross_section_from_depth(
             - wetted_perimeter: Wetted perimeter (meters).
     """
     if effective_depth_m <= bankfull_depth_m or bankfull_depth_m <= np.float32(0.0):
+        # Water stays inside the river banks.
         water_depth: np.float32 = max(effective_depth_m, np.float32(0.0))
         if shape_exponent == np.float32(0.5):
+            # Fast shortcut for a standard bowl / parabola shape.
             top_width: np.float32 = max(
                 np.sqrt(water_depth) * width_over_sqrt_bankfull_depth,
                 np.float32(1e-3),
             )
         else:
+            # General curved shape: the channel gets wider as the water gets deeper.
             depth_ratio: np.float32 = max(water_depth, np.float32(0.0)) / max(
                 bankfull_depth_m, np.float32(1e-4)
             )
@@ -215,11 +224,14 @@ def compute_cross_section_from_depth(
                 bankfull_width_m * (depth_ratio**shape_exponent),
                 np.float32(1e-3),
             )
+        # Flow area under the curved channel bed.
         area: np.float32 = top_width * water_depth * inverse_shape_exponent_plus_one
+        # Length of the river bed touching water (wetted perimeter).
         wetted_perimeter: np.float32 = (
             top_width + np.float32(8.0 / 3.0) * (water_depth * water_depth) / top_width
         )
     else:
+        # Water has risen above the river banks and spilled onto the floodplain.
         floodplain_depth: np.float32 = max(
             effective_depth_m - bankfull_depth_m, np.float32(0.0)
         )
@@ -228,31 +240,64 @@ def compute_cross_section_from_depth(
             floodplain_width_m > np.float32(0.0)
             and floodplain_depth > floodplain_depth_threshold_m
         ):
+            # Water is deep enough that the floodplain has expanded to its full width.
+            # Above this level, water rises straight up between the outer valley walls.
             area = (
                 bankfull_area_m2
                 + floodplain_area_threshold_m2
                 + floodplain_width_m * (floodplain_depth - floodplain_depth_threshold_m)
             )
             top_width = bankfull_width_m + floodplain_width_m
-            wetted_perimeter = (
-                bankfull_perimeter_m
-                + floodplain_width_m
-                + np.float32(2.0) * (floodplain_depth - floodplain_depth_threshold_m)
-            )
+            actual_floodplain_width: np.float32 = floodplain_width_m
         else:
+            # Water is still spreading out sideways along the sloping floodplain edges.
             area = bankfull_area_m2 + floodplain_side_slope * (
                 floodplain_depth * floodplain_depth
             )
-            actual_floodplain_width: np.float32 = (
+            actual_floodplain_width = (
                 np.float32(2.0) * floodplain_side_slope * floodplain_depth
             )
             top_width = bankfull_width_m + actual_floodplain_width
-            wetted_perimeter = (
-                bankfull_perimeter_m
-                + np.float32(2.0)
-                * sqrt_one_plus_floodplain_slope_squared
-                * floodplain_depth
-            )
+
+        # Why we separate the river and the floodplain:
+        # Deep river water moves fast, while shallow floodplain water moves slowly.
+        # If we mixed them together into one shape, the huge width of the floodplain
+        # would make it look like the fast river suddenly slowed down.
+        # To avoid this, we calculate how easily water flows through each part separately,
+        # then add their flow capacities together.
+
+        # 1. Main channel flow: river channel area plus the column of water directly above it.
+        channel_area: np.float32 = min(
+            bankfull_area_m2 + bankfull_width_m * floodplain_depth, area
+        )
+        # 2. Floodplain flow: shallow water spreading out to the sides.
+        floodplain_area: np.float32 = max(area - channel_area, np.float32(0.0))
+
+        # Flow efficiency (hydraulic radius = area / bed length touching water) for each part.
+        r_channel: np.float32 = channel_area / max(
+            bankfull_perimeter_m, np.float32(1e-3)
+        )
+        p_floodplain: np.float32 = max(actual_floodplain_width, np.float32(1e-3))
+        r_floodplain: np.float32 = floodplain_area / p_floodplain
+
+        # How easily water flows through each part (Manning's flow factor: area * radius^(2/3)).
+        conveyance_channel: np.float32 = channel_area * (
+            r_channel ** np.float32(2.0 / 3.0)
+        )
+        conveyance_floodplain: np.float32 = floodplain_area * (
+            r_floodplain ** np.float32(2.0 / 3.0)
+        )
+        total_conveyance: np.float32 = conveyance_channel + conveyance_floodplain
+
+        # Convert the total flow capacity back into an equivalent wetted perimeter
+        # so the standard flow equation can use it.
+        effective_r_two_thirds: np.float32 = total_conveyance / max(
+            area, np.float32(1e-6)
+        )
+        effective_hydraulic_radius: np.float32 = effective_r_two_thirds ** np.float32(
+            1.5
+        )
+        wetted_perimeter = area / max(effective_hydraulic_radius, np.float32(1e-6))
 
     return area, top_width, wetted_perimeter
 

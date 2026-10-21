@@ -7,9 +7,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import xarray as xr
+from hydromt_sfincs.workflows.bathymetry import burn_river_rect
 from shapely.geometry import LineString
 
-from geb.hazards.floods.workflows.bathymetry import burn_rivers
+from geb.hazards.floods.workflows.bathymetry import (
+    burn_rivers,
+    skip_subgrid_tiles_without_river_bed_levels,
+)
 from tests.testconfig import output_folder
 
 output_folder_river_burning = output_folder / "river_burning"
@@ -341,3 +345,36 @@ def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
         f"burn_river_monotonic ({crs_lbl} - {obs_lbl})",
         f"custom_burn_{crs_lbl}_{obs_lbl}.png",
     )
+
+
+def test_subgrid_tile_without_river_bed_levels() -> None:
+    """A tile with only a sliver of river must be left unchanged instead of crashing."""
+    x_coordinates: np.ndarray = np.arange(0.5, 10.5) * 100 + 500000
+    y_coordinates: np.ndarray = np.arange(9.5, -0.5, -1.0) * 100 + 5000000
+    elevation: xr.DataArray = xr.DataArray(
+        np.full((10, 10), 10.0, dtype=np.float32),
+        coords={"y": y_coordinates, "x": x_coordinates},
+        dims=("y", "x"),
+    )
+    elevation.raster.set_crs(32631)
+    manning: xr.DataArray = elevation * 0 + 0.03
+    river_on_tile_edge: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"rivwth": [200.0], "rivdph": [2.0], "manning": [0.03]},
+        geometry=[LineString([(500000, 4999000), (500000, 5000500)])],
+        crs=32631,
+    )
+
+    with pytest.raises(ValueError, match="Lengths of inputs do not match"):
+        burn_river_rect(da_elv=elevation, da_man=manning, gdf_riv=river_on_tile_edge)
+
+    with skip_subgrid_tiles_without_river_bed_levels():
+        burned_elevation, burned_manning = burn_river_rect(
+            da_elv=elevation, da_man=manning, gdf_riv=river_on_tile_edge
+        )
+
+    np.testing.assert_array_equal(burned_elevation.values, elevation.values)
+    np.testing.assert_array_equal(burned_manning.values, manning.values)
+
+    # the original function must be restored afterwards
+    with pytest.raises(ValueError, match="Lengths of inputs do not match"):
+        burn_river_rect(da_elv=elevation, da_man=manning, gdf_riv=river_on_tile_edge)

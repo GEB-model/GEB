@@ -16,6 +16,8 @@ setup_assets:
   - rails
 
 setup_gtsm_station_data:
+  scenario: 245
+  percentile: 0.9
 
 setup_cell_area:
 
@@ -43,6 +45,8 @@ setup_vegetation:
 setup_waterbodies:
 
 setup_groundwater:
+
+setup_karst:
 
 setup_well_prices_by_reference_year_global:
   WHY_10: 82.0209974 # $/m

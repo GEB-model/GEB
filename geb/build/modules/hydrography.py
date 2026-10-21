@@ -19,7 +19,9 @@ import xarray as xr
 from networkx.classes.digraph import DiGraph
 from pyflwdir import FlwdirRaster
 from rasterio.enums import MergeAlg
+from scipy import interpolate
 from scipy.ndimage import value_indices
+from scipy.spatial import cKDTree
 from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import DataCatalog
@@ -37,7 +39,10 @@ from geb.build.workflows.river_snapping import (
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
+    ArrayInt32,
     ArrayInt64,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
     TwoDArrayFloat64,
     TwoDArrayInt32,
     TwoDArrayInt64,
@@ -646,6 +651,141 @@ def propagate_downstream(
     return flat_data.reshape(data.shape)
 
 
+def identify_waterbody_outflows(
+    waterbody_id: TwoDArrayInt32,
+    upstream_area_n_cells: TwoDArrayInt32,
+    elevation_min_m: TwoDArrayFloat32,
+) -> TwoDArrayInt32:
+    """Identifies the outflow points for each water body.
+
+    Finds the cell with the highest upstream area in each water body as the outflow point.
+    If there are multiple cells with the same upstream area, the one with the lowest elevation is chosen.
+
+    Args:
+        waterbody_id: 2D array of water body IDs (-1 for non-waterbody).
+        upstream_area_n_cells: 2D array of upstream area in number of cells.
+        elevation_min_m: 2D array of minimum elevation in meters.
+
+    Returns:
+        2D array containing the original waterbody ID at each outflow point and -1 elsewhere.
+    """
+    valid_wb: TwoDArrayBool = waterbody_id != -1
+    if not np.any(valid_wb):
+        return np.full_like(waterbody_id, -1, dtype=np.int32)
+
+    max_wb_id: int = int(np.max(waterbody_id))
+    upstream_area_within_waterbodies: ArrayInt32 = np.zeros(
+        max_wb_id + 2, dtype=np.int32
+    )
+    upstream_area_within_waterbodies[-1] = -1
+
+    np.maximum.at(
+        upstream_area_within_waterbodies,
+        waterbody_id[valid_wb],
+        upstream_area_n_cells[valid_wb],
+    )
+    upstream_area_at_cells: TwoDArrayInt32 = np.take(
+        upstream_area_within_waterbodies, waterbody_id
+    )
+
+    waterbody_outflow_points: TwoDArrayInt32 = np.where(
+        valid_wb & (upstream_area_n_cells == upstream_area_at_cells),
+        waterbody_id,
+        np.int32(-1),
+    )
+
+    number_of_outflow_points_per_waterbody = np.unique(
+        waterbody_outflow_points, return_counts=True
+    )
+    duplicate_outflow_points = number_of_outflow_points_per_waterbody[0][
+        number_of_outflow_points_per_waterbody[1] > 1
+    ]
+    duplicate_outflow_points = duplicate_outflow_points[duplicate_outflow_points != -1]
+
+    if duplicate_outflow_points.size > 0:
+        for duplicate_outflow_point in duplicate_outflow_points:
+            duplicate_coords = np.where(
+                waterbody_outflow_points == duplicate_outflow_point
+            )
+            elevations: ArrayFloat32 = elevation_min_m[duplicate_coords]
+            minimum_elevation_idx: int = int(np.argmin(elevations))
+            for i in range(len(duplicate_coords[0])):
+                if i != minimum_elevation_idx:
+                    waterbody_outflow_points[
+                        duplicate_coords[0][i], duplicate_coords[1][i]
+                    ] = -1
+
+    return waterbody_outflow_points
+
+
+def absorb_trapped_river_cells(
+    waterbody_id: TwoDArrayInt32,
+    waterbody_outflows: TwoDArrayInt32,
+    river_ids: TwoDArrayInt32,
+    flow_raster: FlwdirRaster,
+) -> TwoDArrayInt32:
+    """Finds trapped river cells between waterbodies and assigns them the upstream waterbody ID.
+
+    A trapped river cell is a cell with an active river ID that is downstream of a
+    non-outflow waterbody cell and reconnects downstream into a waterbody.
+
+    Args:
+        waterbody_id: 2D array of water body IDs (-1 for non-waterbody).
+        waterbody_outflows: 2D array containing waterbody IDs at outflow points and -1 elsewhere.
+        river_ids: 2D array of river reach IDs (-1 for non-river).
+        flow_raster: FlwdirRaster flow direction object.
+
+    Returns:
+        Updated 2D array of waterbody IDs with trapped cells absorbed.
+    """
+    updated_waterbody_id: TwoDArrayInt32 = waterbody_id.copy()
+
+    # Identify all waterbody cells that are NOT outflows
+    non_outflow_mask: TwoDArrayBool = (waterbody_id != -1) & (waterbody_outflows == -1)
+    non_outflow_idxs: ArrayInt64 = np.where(non_outflow_mask.ravel())[0]
+    if non_outflow_idxs.size == 0:
+        return updated_waterbody_id
+
+    downstream_idxs: ArrayInt64 = flow_raster.idxs_ds[non_outflow_idxs]
+
+    # Filter for downstream cells that exit the waterbody into an active river cell
+    valid_candidates: ArrayBool = (
+        (downstream_idxs != -1)
+        & (downstream_idxs != non_outflow_idxs)
+        & (river_ids.ravel()[downstream_idxs] != -1)
+        & (waterbody_id.ravel()[downstream_idxs] == -1)
+    )
+    if not np.any(valid_candidates):
+        return updated_waterbody_id
+
+    start_idxs: ArrayInt64 = downstream_idxs[valid_candidates]
+    source_waterbody_ids: ArrayInt32 = waterbody_id.ravel()[
+        non_outflow_idxs[valid_candidates]
+    ]
+
+    # Trace downstream paths until hitting a waterbody or leaving the river network
+    termination_mask: TwoDArrayBool = (waterbody_id != -1) | (river_ids == -1)
+    paths: list[ArrayInt64]
+    paths, _ = flow_raster.path(idxs=start_idxs, mask=termination_mask)
+
+    flat_updated_waterbody_id: ArrayInt32 = updated_waterbody_id.ravel()
+    trapped_cells_to_assign: dict[int, int] = {}
+
+    for path, source_waterbody_id in zip(paths, source_waterbody_ids):
+        # path[-1] is the cell where tracing stopped. If it belongs to the same waterbody,
+        # all preceding cells along the path are river cells trapped inside this waterbody.
+        if flat_updated_waterbody_id[path[-1]] == source_waterbody_id:
+            for cell_idx in path[:-1]:
+                cell_idx_int: int = int(cell_idx)
+                if cell_idx_int not in trapped_cells_to_assign:
+                    trapped_cells_to_assign[cell_idx_int] = int(source_waterbody_id)
+
+    for cell_idx_int, assigned_waterbody_id in trapped_cells_to_assign.items():
+        flat_updated_waterbody_id[cell_idx_int] = assigned_waterbody_id
+
+    return updated_waterbody_id
+
+
 class Hydrography(BuildModelBase):
     """Contains all build methods for the hydrography for GEB."""
 
@@ -677,7 +817,7 @@ class Hydrography(BuildModelBase):
             y=self.subgrid_factor,
             boundary="exact",
             coord_func="mean",
-        ).mean()  # ty:ignore[unresolved-attribute]
+        ).mean()
         surface_area_ratio.attrs["_FillValue"] = np.nan
 
         surface_area_ratio: xr.DataArray = snap_to_grid(
@@ -889,7 +1029,7 @@ class Hydrography(BuildModelBase):
             y=self.ldd_scale_factor,
             boundary="exact",
             coord_func="mean",
-        ).sum()  # ty:ignore[unresolved-attribute]
+        ).sum()
 
         routing_streams_length.attrs["_FillValue"] = np.nan
         routing_streams_length = snap_to_grid(routing_streams_length, self.grid["mask"])
@@ -1402,7 +1542,7 @@ class Hydrography(BuildModelBase):
         """Sets up the coastal sfincs model regions."""
         if self.geom["routing/subbasins"]["is_coastal"].any():
             # load elevation data
-            elevation = self.other["DEM/fabdem"]
+            elevation = self.other["DEM/fathomdem"]
             # load the lecz mask
             low_elevation_coastal_zone_mask = (
                 self.create_low_elevation_coastal_zone_mask()
@@ -1442,7 +1582,7 @@ class Hydrography(BuildModelBase):
             name="coastal/low_elevation_coastal_zone_mask",
         )
 
-    @build_method(required=True, depends_on=["setup_hydrography"])
+    @build_method(required=True, depends_on=["setup_hydrography", "setup_elevation"])
     def setup_waterbodies(
         self,
         mode: Literal["on", "off", "lakes_only", "reservoirs_only"] = "on",
@@ -1554,7 +1694,56 @@ class Hydrography(BuildModelBase):
             all_touched=True,
         )
 
+        waterbody_id_array: TwoDArrayInt32 = waterbody_id.values.copy()
+        if np.any(waterbody_id_array != -1):
+            river_ids: TwoDArrayInt32 = self.grid["routing/river_ids"].values
+            flow_raster_idxs_ds = self.grid["flow_raster_idxs_ds"].compute()
+            flow_raster = FlwdirRaster(
+                flow_raster_idxs_ds.values.ravel(),
+                shape=flow_raster_idxs_ds.shape,
+                transform=np.array(flow_raster_idxs_ds.rio.transform(recalc=True)),
+                ftype="d8",
+                latlon=True,
+            )
+            upstream_area_n_cells: TwoDArrayInt32 = self.grid[
+                "routing/upstream_area_n_cells"
+            ].values
+            elevation_min_m: TwoDArrayFloat32 = self.grid[
+                "landsurface/elevation_min_m"
+            ].values
+
+            waterbody_outflows: TwoDArrayInt32 = identify_waterbody_outflows(
+                waterbody_id=waterbody_id_array,
+                upstream_area_n_cells=upstream_area_n_cells,
+                elevation_min_m=elevation_min_m,
+            )
+            waterbody_id_array = absorb_trapped_river_cells(
+                waterbody_id=waterbody_id_array,
+                waterbody_outflows=waterbody_outflows,
+                river_ids=river_ids,
+                flow_raster=flow_raster,
+            )
+            waterbody_outflows = identify_waterbody_outflows(
+                waterbody_id=waterbody_id_array,
+                upstream_area_n_cells=upstream_area_n_cells,
+                elevation_min_m=elevation_min_m,
+            )
+        else:
+            waterbody_outflows = np.full_like(waterbody_id_array, -1, dtype=np.int32)
+
+        waterbody_id.data = waterbody_id_array
         self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
+
+        waterbody_outflow_points: xr.DataArray = self.full_like(
+            self.grid["mask"],
+            fill_value=-1,
+            nodata=-1,
+            dtype=np.int32,
+        )
+        waterbody_outflow_points.data = waterbody_outflows
+        self.set_grid(
+            waterbody_outflow_points, name="waterbodies/waterbody_outflow_points"
+        )
 
         if mode in ("on", "reservoirs_only") and command_areas:
             command_areas_gdf: gpd.GeoDataFrame = gpd.read_file(
@@ -1716,96 +1905,6 @@ class Hydrography(BuildModelBase):
         )
         self.logger.info("GTSM station surge levels set")
 
-    def setup_gtsm_sea_level_rise(self) -> None:
-        """Sets up the GTSM sea level rise data for the model.
-
-        Raises:
-            ValueError: If the extrapolated sea level rise data is not monotonically increasing
-                or exceeds 2 meters by 2100 for any station.
-        """
-        self.logger.info("Setting up GTSM sea level rise data")
-        # get the model bounds and buffer by ~2km
-        model_bounds = self.bounds
-        model_bounds = (
-            model_bounds[0] - 0.0166,  # min_lon
-            model_bounds[1] - 0.0166,  # min_lat
-            model_bounds[2] + 0.0166,  # max_lon
-            model_bounds[3] + 0.0166,  # max_lat
-        )
-
-        gtsm_sea_level_rise = self.data_catalog.fetch("gtsm").read(bounds=model_bounds)
-
-        # extract data arrays
-        mean_sea_level = gtsm_sea_level_rise.mean_sea_level.data
-        time = gtsm_sea_level_rise.time.data
-        stations = gtsm_sea_level_rise.stations.data
-
-        # create dataframe
-        mean_sea_level_df = pd.DataFrame(
-            data=mean_sea_level.T,
-            index=pd.to_datetime(time),
-            columns=stations,
-        )
-        # sort by datetime index
-        mean_sea_level_df = mean_sea_level_df.sort_index()
-
-        # we do not model receding sea levels, so enforce that the absolute mean sea level
-        # for each time step is at least as high as in the previous step, i.e. mean sea level is monotonically increasing
-        mean_sea_level_df = mean_sea_level_df.cummax(axis=0)
-
-        # set table for model
-        self.set_table(mean_sea_level_df, name="gtsm/mean_sea_level")
-
-        # calculate the increment in mean sea level in the time series  based on a reference year
-        reference_year = 2020
-        sea_level_rise_df = mean_sea_level_df.subtract(
-            mean_sea_level_df.loc[f"{reference_year}-01-01"], axis=1
-        )
-
-        # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[unresolved-attribute]
-        future_years = np.arange(last_year + 1, 2101)
-        future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
-        future_data = {}
-        for station in sea_level_rise_df.columns:
-            series = sea_level_rise_df[station]
-            # fit nonlinear trend all years
-            recent_series = series
-            coeffs = np.polyfit(
-                recent_series.index.year,
-                recent_series.values,
-                deg=2,
-            )
-            trend = np.poly1d(coeffs)
-            future_values = trend(future_years)
-            future_data[station] = future_values
-        future_df = pd.DataFrame(
-            data=future_data,
-            index=future_dates,
-        )
-        # append future data to sea_level_rise_df
-        sea_level_rise_df = pd.concat([sea_level_rise_df, future_df], axis=0)
-
-        # do some check on the extrapolated data
-        for station in sea_level_rise_df.columns:
-            series = sea_level_rise_df[station]
-            # check that the values are either monotonically increasing or decreasing
-            # There are some rare places where we see a slight decrease in sea level, for example
-            # in the Arctic, so we allow for both monotonically increasing and decreasing series,
-            # but we want to make sure that they are not fluctuating up and down.
-            if not (series.is_monotonic_increasing or series.is_monotonic_decreasing):
-                raise ValueError(
-                    f"Sea level rise data for station {station} is neither monotonically increasing nor monotonically decreasing after extrapolation."
-                )
-            # check that the values are reasonable (less than 2 meters by 2100)
-            if series.iloc[-1] >= 2:
-                raise ValueError(
-                    f"Sea level rise data for station {station} exceeds 2 meters by 2100."
-                )
-
-        # set table for model
-        self.set_table(sea_level_rise_df, name="gtsm/sea_level_rise_rcp8p5")
-
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")
@@ -1824,18 +1923,122 @@ class Hydrography(BuildModelBase):
         # also set stations (only those that are in coast_rp)
         self.set_geom(stations, "gtsm/stations_coast_rp")
 
+    def setup_sea_level_projections(self, scenario: int, percentile: float) -> None:
+        """Sets up the AR6 sea level projections for the model.
+
+        For each GTSM station the nearest AR6 location (great-circle distance) is
+        selected. Its projected sea level change is expressed relative to 2020 and
+        interpolated (and linearly extrapolated) to annual values for 2000-2100.
+
+        Args:
+            scenario: SSP scenario identifier used to select the AR6 file (e.g., 245).
+            percentile: AR6 quantile to select (fraction between 0 and 1).
+        """
+        self.logger.info("Setting up sea level rise data")
+        sea_level_change_m: xr.Dataset = self.data_catalog.fetch("ar6").read(
+            scenario, percentile
+        )
+
+        gtsm_stations: gpd.GeoDataFrame = gpd.read_parquet(
+            os.path.join("input", self.files["geom"]["gtsm/stations"])
+        )
+
+        lon_deg: npt.NDArray[np.floating] = sea_level_change_m["lon"].values
+        lat_deg: npt.NDArray[np.floating] = sea_level_change_m["lat"].values
+        years: npt.NDArray[np.int64] = sea_level_change_m["years"].values
+
+        def to_unit_vectors(
+            lon_deg: npt.NDArray[np.floating], lat_deg: npt.NDArray[np.floating]
+        ) -> npt.NDArray[np.floating]:
+            """Convert longitude and latitude in degrees to 3D unit vectors.
+
+            Args:
+                lon_deg: Longitude in degrees.
+                lat_deg: Latitude in degrees.
+            Returns:
+                3D unit vectors corresponding to the input coordinates.
+            """
+            lon_rad: npt.NDArray[np.floating] = np.radians(lon_deg)
+            lat_rad: npt.NDArray[np.floating] = np.radians(lat_deg)
+            return np.column_stack(
+                (
+                    np.cos(lat_rad) * np.cos(lon_rad),
+                    np.cos(lat_rad) * np.sin(lon_rad),
+                    np.sin(lat_rad),
+                )
+            )
+
+        # Euclidean distance between points on the unit sphere increases monotonically
+        # with great-circle distance, so a KD-tree on 3D unit vectors gives the same
+        # nearest neighbour as the Haversine distance, without an
+        # (n_stations x n_locations) distance matrix.
+        tree: cKDTree = cKDTree(
+            to_unit_vectors(
+                lon_deg,
+                lat_deg,
+            )
+        )
+        _, nearest_valid_index = tree.query(
+            to_unit_vectors(
+                gtsm_stations.geometry.x.to_numpy(),
+                gtsm_stations.geometry.y.to_numpy(),
+            )
+        )
+        nearest_location_indices: npt.NDArray[np.intp] = nearest_valid_index
+
+        # Load only the nearest locations (stations may share a location)
+        unique_location_indices: npt.NDArray[np.intp]
+        inverse_indices: npt.NDArray[np.intp]
+        unique_location_indices, inverse_indices = np.unique(
+            nearest_location_indices, return_inverse=True
+        )
+
+        sea_level_change_m_transposed: npt.NDArray[np.floating] = (
+            sea_level_change_m["sea_level_change"]
+            .transpose("locations", "years")
+            .isel(locations=unique_location_indices)
+            .values[inverse_indices]
+        )
+
+        unique_location_indices: npt.NDArray[np.intp]
+        inverse_indices: npt.NDArray[np.intp]
+        unique_location_indices, inverse_indices = np.unique(
+            nearest_location_indices, return_inverse=True
+        )
+
+        target_years: npt.NDArray[np.int64] = np.arange(2000, 2101)
+        interpolated_values: npt.NDArray[np.floating] = interpolate.interp1d(
+            x=years,
+            y=sea_level_change_m_transposed,
+            axis=1,
+            fill_value="extrapolate",
+            bounds_error=False,
+        )(target_years)
+
+        sea_level_rise_stations: pd.DataFrame = pd.DataFrame(
+            data=interpolated_values.T,
+            index=pd.to_datetime([f"{year}-01-01" for year in target_years]),
+            columns=gtsm_stations.index,
+        )
+        self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
+
     @build_method(required=True)
-    def setup_gtsm_station_data(self) -> None:
-        """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
+    def setup_gtsm_station_data(self, scenario: int, percentile: float) -> None:
+        """Set up COAST-RP and GTSM station data for the model.
+
+        Args:
+            scenario: SSP scenario identifier used for AR6 projections (for example, 245).
+            percentile: AR6 projection quantile as a fraction between 0 and 1.
+        """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
 
         # Continue with GTSM setup
-        self.setup_gtsm_water_levels()
-        self.setup_gtsm_surge_levels()
-        self.setup_gtsm_sea_level_rise()
-        self.setup_coast_rp()
+        # self.setup_gtsm_water_levels()
+        # self.setup_gtsm_surge_levels()
+        # self.setup_coast_rp()
+        self.setup_sea_level_projections(scenario, percentile)
 
     @build_method(required=False)
     def setup_inflow(

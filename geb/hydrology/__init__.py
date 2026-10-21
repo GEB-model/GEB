@@ -26,13 +26,17 @@ from typing import TYPE_CHECKING
 import numba
 import numpy as np
 
-from geb.geb_types import TwoDArrayFloat32 as TwoDArrayFloat32
+from geb.geb_types import (
+    ArrayFloat32,
+    ArrayFloat64,
+)
 from geb.hydrology.HRUs import Data
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
+from .karst import Karst
 from .landsurface.landsurface_model import LandSurface
 from .routing import Routing
 from .runoff_concentration import RunoffConcentrator
@@ -76,7 +80,7 @@ def _sum_landsurface_storage(
     n_snow_layers = snow_water_equivalent_m.shape[1]
     n_layers = water_content_m.shape[0]
     total = np.float64(0.0)
-    for i in numba.prange(n_hru):  # ty:ignore[not-iterable]
+    for i in numba.prange(n_hru):
         snow_water = np.float64(0.0)
         liquid_snow_water = np.float64(0.0)
         for snow_layer in range(n_snow_layers):
@@ -119,7 +123,7 @@ def _sum_overland_flow_buffer_storage(
     n_substeps = overland_flow_buffer.shape[0]
     n_grid = overland_flow_buffer.shape[1]
     total = np.float64(0.0)
-    for i in numba.prange(n_grid):  # ty:ignore[not-iterable]
+    for i in numba.prange(n_grid):
         cell_sum = np.float64(0.0)
         for s in range(n_substeps):
             cell_sum += np.float64(overland_flow_buffer[s, i])
@@ -148,7 +152,7 @@ class Hydrology(Data, Module):
             return
 
         self.dynamic_waterbodies = False
-
+        self.karst = Karst(self.model, self)
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
         self.routing = Routing(self.model, self)
@@ -222,6 +226,14 @@ class Hydrology(Data, Module):
         """
         return self.groundwater.groundwater_content_m3.sum(dtype=np.float64)
 
+    def get_karst_storage_m3(self) -> np.float64:
+        """Get the current water storage in karst.
+
+        Returns:
+            Total karst water storage (m3), summed with float64 precision.
+        """
+        return (self.karst.storage_m * self.grid.var.cell_area).sum(dtype=np.float64)
+
     def get_current_storage(self) -> np.float64:
         """Get the current water storage in the hydrological system.
 
@@ -229,7 +241,7 @@ class Hydrology(Data, Module):
         is used, the storage can be under- or overestimated due to rounding errors.
 
         Returns:
-            The total water storage in the hydrological system (m3).
+            Total water storage in the hydrological system (m3).
         """
         return (
             self.get_landsurface_storage_m3()
@@ -237,6 +249,7 @@ class Hydrology(Data, Module):
             + self.get_routing_storage_m3()
             + self.get_waterbodies_storage_m3()
             + self.get_groundwater_storage_m3()
+            + self.get_karst_storage_m3()
         )
 
     def step(self) -> None:
@@ -248,9 +261,7 @@ class Hydrology(Data, Module):
 
         if __debug__:
             prev_storage: np.float64 = self.get_current_storage()
-            influx = (
-                self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
-            ).sum()
+            influx: np.float64 = np.float64(0.0)  # initialize influx
         else:
             prev_storage: np.float64 = np.float64(np.nan)
 
@@ -262,6 +273,7 @@ class Hydrology(Data, Module):
             interflow_m,
             overland_runoff_m,
             groundwater_recharge_m,
+            capillar_rise_m,
             groundwater_abstraction_m3,
             channel_abstraction_m3,
             return_flow_m,
@@ -274,9 +286,20 @@ class Hydrology(Data, Module):
         if __debug__:
             influx += pr_total_m3
 
+        karst_capture_m: ArrayFloat32
+        karst_soil_recharge_m: ArrayFloat32
+        karst_recharge_m: ArrayFloat64
+        karst_recharge_m, karst_capture_m, karst_soil_recharge_m = self.karst.step(
+            overland_runoff_m, interflow_m, groundwater_recharge_m
+        )
+
         interflow_m = self.to_grid(HRU_data=interflow_m)
         overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m)
         groundwater_recharge_m = self.to_grid(HRU_data=groundwater_recharge_m)
+        capillar_rise_m = self.to_grid(HRU_data=capillar_rise_m)
+        self.grid.var.capillar = capillar_rise_m
+
+        groundwater_recharge_m += karst_recharge_m.astype(np.float32)
 
         if self.model.config["hazards"]["floods"]["simulate"]:
             self.model.hazard_driver.floods.save_runoff_m(overland_runoff_m)
@@ -292,6 +315,9 @@ class Hydrology(Data, Module):
                 (
                     channel_abstraction_m3.sum()  # already applied but not yet removed from river
                     + groundwater_abstraction_m3.sum()  # already applied but not yet removed from GW
+                    + (
+                        capillar_rise_m.astype(np.float64) * self.grid.var.cell_area
+                    ).sum()  # added to soil in land surface, not yet removed from GW
                     + self.model.agents.reservoir_operators.command_area_release_m3.sum()  # already applied but not yet removed from reservoir
                 )
                 - (
@@ -321,7 +347,9 @@ class Hydrology(Data, Module):
         timer.finish_split("Land surface")
 
         baseflow_m = self.groundwater.step(
-            groundwater_recharge_m, groundwater_abstraction_m3
+            groundwater_recharge_m=groundwater_recharge_m,
+            groundwater_abstraction_m3=groundwater_abstraction_m3,
+            capillary_rise_m=capillar_rise_m,
         )
 
         if __debug__:
@@ -332,14 +360,14 @@ class Hydrology(Data, Module):
                 + (
                     groundwater_recharge_m * self.grid.var.cell_area
                 ).sum()  # now accounted for
+                - (
+                    capillar_rise_m.astype(np.float64) * self.grid.var.cell_area
+                ).sum()  # now accounted for in GW
                 - groundwater_abstraction_m3.sum()  # now accounted for
             )
-
-            capillar_next_step: np.float64 = (
-                self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
-            ).sum()
-
-            outflux_m3 += capillar_next_step.sum()  # capillary rise is added to sinks
+            # Account for groundwater flow across model boundaries
+            influx += self.groundwater.boundary_inflow_m3
+            outflux_m3 += self.groundwater.boundary_outflow_m3
 
             balance_check(
                 name="total water balance 2",

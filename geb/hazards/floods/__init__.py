@@ -282,12 +282,6 @@ class Floods(Module):
             subbasins=subbasins,
             DEMs=self.DEM_config,
             rivers=all_rivers,
-            river_width_alpha=self.model.hydrology.grid.decompress(
-                self.model.hydrology.routing.var.river_width_alpha
-            ),
-            river_width_beta=self.model.hydrology.grid.decompress(
-                self.model.hydrology.routing.var.river_width_beta
-            ),
             mannings=self.mannings,
             grid_size_multiplier=self.config["grid_size_multiplier"],
             subgrid=self.config["subgrid"],
@@ -724,8 +718,8 @@ class Floods(Module):
             ).rio.write_crs("EPSG:4326")
 
             # load sea level rise data
-            sea_level_rise_rcp8p5: pd.DataFrame = read_table(
-                self.model.files["table"]["gtsm/sea_level_rise_rcp8p5"]
+            sea_level_rise: pd.DataFrame = read_table(
+                self.model.files["table"]["water_levels/sea_level_rise"]
             )
 
             sfincs_coastal_root_model: SFINCSRootModel = self.build(
@@ -758,9 +752,16 @@ class Floods(Module):
         for subbasin_id, subbasin in riverine_active_subbasin.iterrows():
             downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
 
-            region_subbasins = subbasins[
-                subbasins.index.isin([subbasin_id, downstream_basin])
-            ].copy()
+            if not (downstream_basin in subbasins.index or downstream_basin == -1):
+                all_subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
+                region_subbasins = all_subbasins[
+                    all_subbasins.index.isin([subbasin_id, downstream_basin])
+                ].copy()
+            else:
+                region_subbasins = subbasins[
+                    subbasins.index.isin([subbasin_id, downstream_basin])
+                ].copy()
+
             region_rivers = rivers.copy()
 
             # if there is a downstream basin, mark it as downstream outflow subbasin
@@ -823,7 +824,7 @@ class Floods(Module):
                         return_period,
                         coastal_forcing_locations,
                         offset=coastal_offset,
-                        sea_level_rise=sea_level_rise_rcp8p5,
+                        sea_level_rise=sea_level_rise,
                         year=self.model.current_time.year,
                     )
                 )
@@ -855,12 +856,25 @@ class Floods(Module):
                         (rivers["downstream_ID"] == node_idx)
                         & (~rivers.index.isin(inflow_nodes.index))
                     ]
+                    _Q = []
+                    for river_idx in upstream_rivers.index:
+                        if river_idx in discharge_for_return_periods:
+                            _Q.append(discharge_for_return_periods[river_idx])
+                        else:
+                            self.model.logger.warning(
+                                f"No hydrograph found for upstream river {river_idx} and return period {return_period}. Setting inflow to 0."
+                            )
+                            _Q.append(
+                                pd.Series(
+                                    [0] * len(Q[0]), index=Q[0].index, name=node_idx
+                                )
+                            )  # fill with zeros if no hydrograph is found
 
                     Q.append(
                         pd.Series(
-                            discharge_for_return_periods[upstream_rivers.index]
-                            .mean(axis=0)
-                            .sum(axis=0),
+                            pd.concat(_Q, axis=1).mean(axis=0).sum(axis=0)
+                            if _Q
+                            else 0.0,
                             index=Q[0].index,
                             name=node_idx,
                         )
