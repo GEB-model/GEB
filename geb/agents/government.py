@@ -470,7 +470,7 @@ class Government(AgentBaseClass):
         suitability_HRU = np.zeros_like(suitability_HRU)
         suitability_HRU[converted_indices] = True
 
-        # Everything succeeded: write the funded HRUs to the model.
+        # Write the funded HRUs to the model.
         soc[:, suitability_HRU] = soc_after[:, funded]
         bulk_density[:, suitability_HRU] = bulk_density_after[:, funded]
         for name in derived_before:
