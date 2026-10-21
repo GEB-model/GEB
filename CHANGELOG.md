@@ -1,4 +1,5 @@
 # v1.0.0b36
+- Fixed CMIP6 download requesting historical years 2015-2016 and future years starting in 2017, which left a two-year gap and made the delta calculation fail. Historical now covers 1950-2014 and future 2015-2100; cached `cmip6_future_*.zip` files must be deleted and redownloaded.
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 - Reforestation (`agent_settings.government.plant_forest`) now changes only soil organic carbon (basin forest mean, never decreasing) and bulk density (measured forest / previous land use ratio) of converted HRUs and recalculates the soil hydraulic properties from them, keeping sand, silt and clay. A run with `plant_forest` enabled now requires a spinup made with `plant_forest` enabled; otherwise the model stops and asks to redo the spinup.
 
