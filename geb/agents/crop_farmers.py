@@ -347,6 +347,8 @@ class CropFarmers(AgentBaseClass):
 
         self.redundancy = reduncancy
         self.decision_module = DecisionModule()
+        # Restored spin-up state is not available in __init__ yet.
+        self._crop23_duration_fixed_at_run_start = False
 
         self.hydrological_year_start_month = self.model.config["general"][
             "hydrological_year_start_month"
@@ -501,6 +503,47 @@ class CropFarmers(AgentBaseClass):
         # During an operational run the Bucket is restored only after agent
         # construction. DecisionModuleML must therefore be initialized lazily
         # on first operational use, not here in CropFarmers.__init__.
+
+    def _shorten_crop23_duration_for_run(self) -> None:
+        """Use 363 instead of 364 days for crop 23 during operational runs.
+
+        The initial call runs after the spin-up Bucket has been restored. Later
+        calls also correct new crop calendars installed by the ML predictor.
+        """
+        if self.model.in_spinup:
+            return
+
+        calendar = self.var.crop_calendar.data
+        crop23 = (calendar[:, :, 0] == 23) & (calendar[:, :, 2] == 364)
+        calendar[:, :, 2][crop23] = 363
+
+        if self._crop23_duration_fixed_at_run_start:
+            return
+
+        # Keep the saved historical calendar comparison internally consistent.
+        # This only changes the restored in-memory state, not input files.
+        base = self.var.crop_calendar_base_array
+        base_crop23 = (base[..., 0] == 23) & (base[..., 2] == 364)
+        base[..., 2][base_crop23] = 363
+
+        # A crop may already be growing at the spin-up/run boundary. Its
+        # harvest age was assigned when planted, and must be updated too.
+        # Do not shorten crops already past the new 363-day threshold: the
+        # harvest routine uses equality, so they would otherwise be missed.
+        crop_map = self.HRU.var.crop_map
+        crop_age = self.HRU.var.crop_age_days_map
+        harvest_age = self.HRU.var.crop_harvest_age_days
+        standing_crop23 = (crop_map == 23) & (harvest_age == 364) & (crop_age <= 363)
+        harvest_age[standing_crop23] = 363
+
+        self._crop23_duration_fixed_at_run_start = True
+        self.model.logger.info(
+            "Operational crop-23 duration 364 -> 363 days: "
+            "%d runtime slots, %d base-calendar slots, %d standing HRUs",
+            int(np.count_nonzero(crop23)),
+            int(np.count_nonzero(base_crop23)),
+            int(np.count_nonzero(standing_crop23)),
+        )
 
     @property
     def name(self) -> str:
@@ -2198,7 +2241,7 @@ class CropFarmers(AgentBaseClass):
                     * (alpha[crop] * P1[crop] + beta[crop])
                     / (P1[crop] - P0[crop])
                 )
-            elif evap_ratio < P0[crop]:
+            elif evap_ratio <= P0[crop]:
                 yield_ratio = 0
             else:
                 yield_ratio = alpha[crop] * evap_ratio + beta[crop]
@@ -6182,6 +6225,10 @@ class CropFarmers(AgentBaseClass):
         if not self.model.simulate_hydrology:
             return
 
+        # Do this after restoration, not in __init__, and leave spin-up intact.
+        if not self.model.in_spinup and not self._crop23_duration_fixed_at_run_start:
+            self._shorten_crop23_duration_for_run()
+
         # For ``geb run`` the restored CropFarmers Bucket is available by the
         # first timestep. Initialize the ML module here as a second post-restore
         # hook in case LandSurface has not requested its feature names yet.
@@ -6385,6 +6432,11 @@ class CropFarmers(AgentBaseClass):
                     raise ValueError(
                         "Cannot adapt without yield - probability relation"
                     )
+
+        # ML can install new predicted calendars containing crop 23 / 364 days.
+        # Shorten them before plant() copies duration into HRU harvest ages.
+        if not self.model.in_spinup and self.machine_learning_crop_switching_active:
+            self._shorten_crop23_duration_for_run()
 
         # Plant after potential crop switches and adaptation changes
         self.plant()
