@@ -68,8 +68,8 @@ def _sum_landsurface_storage(
         liquid_water_in_snow_m: Liquid water held in the snowpack per HRU and
             snow layer, shape ``(n_hru, n_snow_layers)`` (m).
         interception_storage_m: Interception storage per HRU (m).
-        water_content_m: Soil water content per layer and HRU, shape
-            ``(n_layers, n_hru)`` (m). NaN values are ignored.
+        water_content_m: Soil water content per HRU and layer, shape
+            ``(n_hru, n_layers)`` (m). NaN values are ignored.
         topwater_m: Ponded topwater per HRU (m).
         cell_area: Area of each HRU (m2).
 
@@ -78,7 +78,7 @@ def _sum_landsurface_storage(
     """
     n_hru = snow_water_equivalent_m.shape[0]
     n_snow_layers = snow_water_equivalent_m.shape[1]
-    n_layers = water_content_m.shape[0]
+    n_layers = water_content_m.shape[1]
     total = np.float64(0.0)
     for i in numba.prange(n_hru):
         snow_water = np.float64(0.0)
@@ -89,7 +89,7 @@ def _sum_landsurface_storage(
 
         soil_water = np.float64(0.0)
         for layer in range(n_layers):
-            wc = water_content_m[layer, i]
+            wc = water_content_m[i, layer]
             if not np.isnan(wc):
                 soil_water += np.float64(wc)
         hru_storage = (

@@ -1,6 +1,6 @@
 """Tests for the Ross soil water redistribution scheme in the GEB land surface hydrology module."""
 
-import os
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,6 +14,12 @@ from geb.hydrology.landsurface.redistribution import (
 )
 
 from ...testconfig import output_folder
+
+output_folder_ross_scenarios: Path = output_folder / "ross_scenarios"
+output_folder_ross_scenarios.mkdir(exist_ok=True, parents=True)
+
+output_folder_redistribution: Path = output_folder / "redistribution"
+output_folder_redistribution.mkdir(exist_ok=True, parents=True)
 
 
 def test_distribute_soil_water_ross_basic() -> None:
@@ -503,8 +509,7 @@ def test_ross_redistribution_scenarios(ksat: float, gw_ksat: float) -> None:
         "interflow_test": np.array([0.45] * 6),
     }
 
-    output_dir = "tests/output/ross_scenarios"
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir: Path = output_folder_ross_scenarios
 
     for name, initial_theta in scenarios.items():
         w = (initial_theta * soil_layer_height_m).astype(np.float32)
@@ -601,7 +606,7 @@ def test_ross_redistribution_scenarios(ksat: float, gw_ksat: float) -> None:
         ax2.legend()
 
         filename = f"{name}_k{ksat}_gw{gw_ksat}_sidebyside.png"
-        plt.savefig(os.path.join(output_dir, filename))
+        plt.savefig(output_dir / filename)
         plt.close()
 
 
@@ -1461,7 +1466,9 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
     ax1b.legend()
 
     fig1.tight_layout()
-    plot1_path = output_folder / "test_saturated_matric_flux_potential.png"
+    plot1_path = (
+        output_folder_redistribution / "test_saturated_matric_flux_potential.png"
+    )
     fig1.savefig(plot1_path, dpi=150)
     plt.close(fig1)
 
@@ -1567,7 +1574,9 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
     ax2b.legend()
 
     fig2.tight_layout()
-    plot2_path = output_folder / "test_capillary_flux_vs_groundwater_depth.png"
+    plot2_path = (
+        output_folder_redistribution / "test_capillary_flux_vs_groundwater_depth.png"
+    )
     fig2.savefig(plot2_path, dpi=150)
     plt.close(fig2)
 
@@ -1654,7 +1663,9 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
     ax3b.legend()
 
     fig3.tight_layout()
-    plot3_path = output_folder / "test_groundwater_flux_vs_saturation.png"
+    plot3_path = (
+        output_folder_redistribution / "test_groundwater_flux_vs_saturation.png"
+    )
     fig3.savefig(plot3_path, dpi=150)
     plt.close(fig3)
 

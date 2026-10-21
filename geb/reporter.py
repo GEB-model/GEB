@@ -178,7 +178,7 @@ WATER_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
         },
         # _rain_m and _snow_m above already cover top-soil precipitation and snow inputs
         "_top_soil_water_content_m": {
-            "varname": "HRU.var.water_content_m[0]",
+            "varname": "HRU.var.water_content_m[:,0]",
             "type": "HRU",
             "function": "weightedsum",
         },
@@ -246,32 +246,32 @@ WATER_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
 WATER_STORAGE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology.landsurface": {
         "_soil_water_content_layer_0_m": {
-            "varname": "HRU.var.water_content_m[0]",
+            "varname": "HRU.var.water_content_m[:,0]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_water_content_layer_1_m": {
-            "varname": "HRU.var.water_content_m[1]",
+            "varname": "HRU.var.water_content_m[:,1]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_water_content_layer_2_m": {
-            "varname": "HRU.var.water_content_m[2]",
+            "varname": "HRU.var.water_content_m[:,2]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_water_content_layer_3_m": {
-            "varname": "HRU.var.water_content_m[3]",
+            "varname": "HRU.var.water_content_m[:,3]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_water_content_layer_4_m": {
-            "varname": "HRU.var.water_content_m[4]",
+            "varname": "HRU.var.water_content_m[:,4]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_water_content_layer_5_m": {
-            "varname": "HRU.var.water_content_m[5]",
+            "varname": "HRU.var.water_content_m[:,5]",
             "type": "HRU",
             "function": "weightedmean",
         },
@@ -301,32 +301,32 @@ OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
 ENERGY_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
     "hydrology.landsurface": {
         "_soil_temperature_layer_0_C": {
-            "varname": ".soil_temperature_C[0]",
+            "varname": ".soil_temperature_C[:,0]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_temperature_layer_1_C": {
-            "varname": ".soil_temperature_C[1]",
+            "varname": ".soil_temperature_C[:,1]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_temperature_layer_2_C": {
-            "varname": ".soil_temperature_C[2]",
+            "varname": ".soil_temperature_C[:,2]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_temperature_layer_3_C": {
-            "varname": ".soil_temperature_C[3]",
+            "varname": ".soil_temperature_C[:,3]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_temperature_layer_4_C": {
-            "varname": ".soil_temperature_C[4]",
+            "varname": ".soil_temperature_C[:,4]",
             "type": "HRU",
             "function": "weightedmean",
         },
         "_soil_temperature_layer_5_C": {
-            "varname": ".soil_temperature_C[5]",
+            "varname": ".soil_temperature_C[:,5]",
             "type": "HRU",
             "function": "weightedmean",
         },
@@ -1204,6 +1204,39 @@ class Reporter:
                                         "day": 1,
                                     },
                                     "_group": "bankfull_width_rivers_yearly_m",
+                                    "_group_key": str(river_ID_int),
+                                }
+                                for k in range(10):
+                                    bankfull_reporters[
+                                        f"floodplain_profile_width_{k}_river_yearly_m_{river_ID_int}"
+                                    ] = {
+                                        "varname": "var.rivers",
+                                        "type": "geodataframe",
+                                        "function": (
+                                            f"sample_loc,{river_ID_int},floodplain_profile_width_{k}_m"
+                                        ),
+                                        "frequency": {
+                                            "every": "year",
+                                            "month": 1,
+                                            "day": 1,
+                                        },
+                                        "_group": f"floodplain_profile_width_{k}_rivers_yearly_m",
+                                        "_group_key": str(river_ID_int),
+                                    }
+                                bankfull_reporters[
+                                    f"floodplain_side_slope_river_yearly_m_per_m_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": (
+                                        f"sample_loc,{river_ID_int},floodplain_side_slope_m_per_m"
+                                    ),
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "floodplain_side_slope_rivers_yearly_m_per_m",
                                     "_group_key": str(river_ID_int),
                                 }
 

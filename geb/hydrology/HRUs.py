@@ -24,7 +24,6 @@ from geb.geb_types import (
     ArrayInt32,
     ArrayInt64,
     ArrayWithScalar,
-    T_ArrayNumber,
     T_OneorTwoDArray,
     ThreeDArray,
     ThreeDArrayWithScalar,
@@ -242,9 +241,9 @@ def to_grid(
 
 
 def to_HRU(
-    data: T_ArrayNumber,
+    data: Array,
     HRU_to_grid: ArrayInt32,
-) -> T_ArrayNumber:
+) -> Array:
     """Convert grid data to HRU scale using fancy indexing.
 
     Each HRU receives the value of its parent grid cell, identified by HRU_to_grid.
@@ -257,7 +256,7 @@ def to_HRU(
     Returns:
         output_data: Data converted to HRUs (1D array of size n_HRUs).
     """
-    return data[HRU_to_grid]  # ty:ignore[invalid-argument-type]
+    return data[HRU_to_grid]
 
 
 class BaseVariables:

@@ -28,6 +28,8 @@ setup_retention_basins:
 
 setup_elevation:
 
+setup_floodplains:
+
 setup_coastal_sfincs_model_regions:
 
 setup_regions_and_land_use:

@@ -1,6 +1,7 @@
 """Tests for the forcing module functions."""
 
 from math import isclose
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import matplotlib.pyplot as plt
@@ -12,6 +13,9 @@ from geb.build.modules.forcing import Forcing
 from geb.forcing import get_pressure_correction_factor
 
 from ...testconfig import output_folder
+
+output_folder_forcing: Path = output_folder / "forcing"
+output_folder_forcing.mkdir(exist_ok=True, parents=True)
 
 
 def test_get_pressure_correction_factor() -> None:
@@ -41,7 +45,7 @@ def test_get_pressure_correction_factor() -> None:
     ax.set_ylim(0, 9000)
     ax.set_xlim(0, 105000)
 
-    plt.savefig(output_folder / "pressure_correction_factor.png")
+    plt.savefig(output_folder_forcing / "pressure_correction_factor.png")
 
 
 def test_set_forcing_variable_source_attribute() -> None:

@@ -57,7 +57,7 @@ SKILL_SCORE_PLOT_CONFIGS: tuple[dict[str, object], ...] = (
         "label": "KGE",
         "ylim": (-1.0, 1.0),
         "cmap": "RdYlGn",
-        "vmin": -1.0,
+        "vmin": -0.5,
         "vmax": 1.0,
     },
     {
@@ -89,7 +89,7 @@ SKILL_SCORE_PLOT_CONFIGS: tuple[dict[str, object], ...] = (
         "label": "NSE",
         "ylim": (-1.0, 1.0),
         "cmap": "RdYlGn",
-        "vmin": -1.0,
+        "vmin": -0.5,
         "vmax": 1.0,
     },
     {

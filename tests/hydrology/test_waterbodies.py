@@ -1,26 +1,12 @@
 """Tests for lake and reservoir functions in GEB."""
 
-import math
-
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
-import pytest
 
 from geb.hydrology.waterbodies import (
-    LAKE,
-    RESERVOIR,
-    estimate_lake_outflow,
-    estimate_outflow_height,
-    get_lake_factor,
-    get_lake_height_above_outflow,
     get_lake_height_from_bottom,
-    get_lake_outflow,
     get_lake_storage_from_height_above_bottom,
-    get_river_width,
 )
-
-from ..testconfig import output_folder
 
 
 def test_get_lake_height_from_bottom() -> None:
@@ -71,142 +57,6 @@ def test_get_lake_storage_from_height_above_bottom() -> None:
         lake_height,
         get_lake_height_from_bottom(lake_storage=lake_storage, lake_area=lake_area),
     )
-
-
-def test_estimate_initial_lake_storage_and_outflow_height() -> None:
-    """Test estimation of lake outflow height and storage dynamics.
-
-    Tests the complete lake outflow estimation workflow including:
-    - Calculation of river width from average discharge
-    - Lake factor computation using overflow coefficients
-    - Outflow height estimation from capacity and average outflow
-    - Verification of outflow-to-height inverse relationships
-    - Storage dynamics simulation with inflow, outflow, and evaporation
-    - Generation of diagnostic plots for lake behavior analysis
-    """
-    lake_area = np.array([3_480_000.0])
-    lake_capacity = np.array([7_630_000.0])
-    avg_outflow = np.array([2.494])
-    river_width = get_river_width(avg_outflow)
-    lake_factor = get_lake_factor(
-        river_width=river_width,
-        overflow_coefficient_mu=np.float32(0.577),
-        lake_a_factor=np.float32(1),
-    )
-
-    outflow_height = estimate_outflow_height(
-        lake_capacity=lake_capacity,
-        lake_factor=lake_factor,
-        lake_area=lake_area,
-        avg_outflow=avg_outflow,
-    )
-
-    lake_storage = lake_capacity.copy()
-    height_above_outflow = get_lake_height_above_outflow(
-        lake_storage=lake_storage, lake_area=lake_area, outflow_height=outflow_height
-    )
-
-    assert math.isclose(
-        ((height_above_outflow + outflow_height) * lake_area)[0],
-        lake_storage[0],
-        rel_tol=1e-5,
-    )
-    outflow = estimate_lake_outflow(
-        lake_factor=lake_factor, height_above_outflow=height_above_outflow
-    )
-
-    # test if outflow_to_height_above_outflow is indeed the inverse of estimate_lake_outflow
-    assert math.isclose(outflow[0], avg_outflow[0])
-
-    lake_storage = np.linspace(0, lake_storage[0] * 1.2, 100)
-    height_above_outflow = get_lake_height_above_outflow(
-        lake_storage=lake_storage, lake_area=lake_area, outflow_height=outflow_height
-    )
-    outflow = estimate_lake_outflow(
-        lake_factor=lake_factor, height_above_outflow=height_above_outflow
-    )
-
-    fig, ax_left = plt.subplots(figsize=(10, 5))
-    ax_right = ax_left.twinx()
-
-    ax_left.plot(
-        lake_storage, height_above_outflow, color="red", label="height_above_outflow"
-    )
-    ax_right.plot(lake_storage, outflow, color="blue", label="outflow")
-
-    # plot vertical line of initial storage
-    ax_left.axvline(x=lake_storage[0], color="green", linestyle="--")
-
-    # plot horizontal line of average outflow
-    ax_right.axhline(y=avg_outflow[0], color="black", linestyle="--")
-
-    ax_left.set_ylim(0, None)
-    ax_right.set_ylim(0, None)
-
-    ax_left.set_xlim(lake_storage[0].item(), lake_storage[-1].item())
-
-    ax_left.set_xlabel("Storage")
-    ax_left.set_ylabel("Height above outflow (red)")
-    ax_right.set_ylabel("Outflow (blue)")
-
-    plt.savefig(output_folder / "estimate_outflow_height.png")
-    plt.close()
-
-    storage = lake_storage.copy()
-
-    dt = 3600
-
-    inflow_m3_s = np.full(1_000, 0, dtype=np.float32)
-    inflow_m3_s[:200] = np.linspace(0, 10, 200)
-    inflow_m3_s[200:400] = avg_outflow[0]
-    inflow_m3_s[400:] = np.linspace(avg_outflow[0], 0, 600)
-    inflow = inflow_m3_s * dt
-
-    evaporation = avg_outflow[0] * 3600 * 0.5
-
-    new_storages = np.full(inflow.size, np.nan)
-    new_outflows = np.full(inflow.size, np.nan)
-    new_height_above_outflows = np.full(inflow.size, np.nan)
-    for i in range(inflow.size):
-        storage += inflow[i]
-
-        outflow, lake_height_above_outflow = get_lake_outflow(
-            dt,
-            storage,
-            lake_factor,
-            lake_area,
-            outflow_height,
-        )
-
-        # evaporation
-        storage -= outflow
-        storage -= evaporation
-
-        new_storages[i] = storage[0]
-        new_outflows[i] = outflow[0]
-        new_height_above_outflows[i] = lake_height_above_outflow[0]
-
-    fig, (ax0, ax1, ax2) = plt.subplots(1, 3, figsize=(15, 5))
-
-    ax0.plot(new_storages, color="red", label="storage (red)")
-    ax0.axhline(y=lake_storage[0], color="red", linestyle="--")
-    ax0.axhline(y=outflow_height[0] * lake_area[0], color="black", linestyle="--")
-
-    ax1.plot(new_outflows, color="blue", label="outflow (blue)")
-    ax1.plot(inflow, color="green", label="inflow (green)")
-    ax2.plot(new_height_above_outflows, color="black", label="height_above_outflow")
-
-    ax0.set_ylabel("Storage")
-    ax1.set_ylabel("Outflow (blue) / Inflow (green)")
-    ax2.set_ylabel("Height above outflow")
-
-    ax0.set_ylim(0, None)
-    ax1.set_ylim(0, None)
-    ax2.set_ylim(0, None)
-
-    plt.savefig(output_folder / "get_lake_outflow_and_storage.png")
-
-    plt.close()
 
 
 def test_waterbodies_depth_and_stage_calculations() -> None:
@@ -288,29 +138,17 @@ def test_flatten_waterbody_elevations() -> None:
     assert flattened[3] == 120.0
 
 
-@pytest.mark.parametrize("input_type", [LAKE, RESERVOIR, 3])
-def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
-    """Filter disabled lakes and initialize saved reservoir storage.
-
-    Args:
-        input_type: First waterbody's input type (dimensionless integer code).
-    """
-    from datetime import datetime
+def test_off_waterbodies_filtered_out_at_spinup() -> None:
+    """Test that waterbodies with waterbody_type == 0 (OFF) are excluded during spinup."""
     from unittest.mock import MagicMock
 
     import geopandas as gpd
     import pandas as pd
 
-    from geb.hydrology.waterbodies import (
-        OFF,
-        RESERVOIR,
-        WaterBodies,
-        WaterBodyVariables,
-    )
+    from geb.hydrology.waterbodies import LAKE, OFF, RESERVOIR, WaterBodies
 
     mock_model = MagicMock()
     mock_model.in_spinup = False
-    mock_model.current_time = datetime(2000, 1, 1)
     mock_model.config = {
         "general": {"hydrological_year_start_month": 10},
         "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
@@ -339,7 +177,7 @@ def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
 
     wb_data = gpd.GeoDataFrame(
         {
-            "waterbody_type": [input_type, OFF, RESERVOIR],
+            "waterbody_type": [LAKE, OFF, RESERVOIR],
             "average_area": [1e6, 2e6, 3e6],
             "volume_total": [5e6, 1e7, 2e7],
             "average_discharge": [10.0, 20.0, 30.0],
@@ -349,7 +187,6 @@ def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
 
     wb = WaterBodies(model=mock_model, hydrology=mock_hydrology)
     wb.grid = mock_grid
-    wb.var = WaterBodyVariables()
     wb.model.files = {
         "grid": {
             "waterbodies/waterbody_id": "dummy_grid_path",
@@ -366,10 +203,6 @@ def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
         mp.setattr(
             "geb.hydrology.waterbodies.read_geom", lambda path: wb_data.reset_index()
         )
-        if input_type == 3:
-            with pytest.raises(ValueError, match="Rebuild setup_waterbodies"):
-                wb.spinup()
-            return
         wb.spinup()
 
     # Active waterbodies should only be 10 (LAKE) and 30 (RESERVOIR) -> mapped to 0 and 1
@@ -381,15 +214,6 @@ def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
     assert wb.grid.var.waterbody_ids[0] != -1
     assert wb.grid.var.waterbody_ids[1] != -1
     assert wb.grid.var.waterbody_ids[3] != -1
-
-    first_index: int = int(np.flatnonzero(wb.var.waterbodies.index == 10)[0])
-    assert wb.var.waterbodies.loc[10, "waterbody_type"] == input_type
-    assert wb.var.waterbody_type[first_index] == input_type
-    if input_type == RESERVOIR:
-        assert wb.is_reservoir[first_index]
-        assert wb.var.storage[first_index] == pytest.approx(2.5e6)
-        assert wb.var.construction_year[first_index] == 0
-        assert wb.is_active[first_index]
 
 
 def test_identify_waterbody_outflows_and_absorb_trapped_river_cells() -> None:

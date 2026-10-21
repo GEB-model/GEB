@@ -1,7 +1,8 @@
 """Workflows for DEM processing and river burning."""
 
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 import geopandas as gpd
 import hydromt_sfincs.workflows.bathymetry as hydromt_sfincs_bathymetry
@@ -13,7 +14,7 @@ from shapely.ops import transform as shapely_transform
 
 
 @contextmanager
-def skip_subgrid_tiles_without_river_bed_levels() -> Iterator[None]:
+def skip_subgrid_tiles_without_river_bed_levels() -> Generator[None, None, None]:
     """Makes hydromt-sfincs subgrid river burning robust for tiles without river bed levels.
 
     When hydromt-sfincs burns rivers into a subgrid tile, the river bed level is

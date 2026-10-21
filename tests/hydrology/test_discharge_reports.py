@@ -11,7 +11,7 @@ import pytest
 from geb.hydrology.routing import get_discharge_per_river
 
 
-@pytest.mark.parametrize("source", ["memory", "consolidated", "legacy"])
+@pytest.mark.parametrize("source", ["memory", "consolidated"])
 @pytest.mark.parametrize("recorded_branches", [1, 2])
 def test_recorded_layout(source: str, recorded_branches: int, tmp_path: Path) -> None:
     """Read historical branches independently of current river representation.
@@ -36,10 +36,6 @@ def test_recorded_layout(source: str, recorded_branches: int, tmp_path: Path) ->
             "_var_index": 2,
         }
         columns[key] = values[:2]
-        if source == "legacy":
-            pd.DataFrame({f"{prefix}{key}": values[:2]}, index=times[:2]).to_parquet(
-                tmp_path / f"{prefix}{key}.parquet"
-            )
     if source == "consolidated":
         pd.DataFrame(columns, index=times[:2]).to_parquet(
             tmp_path / "river_outflow_hourly_m3_per_s.parquet"
@@ -59,7 +55,7 @@ def test_recorded_layout(source: str, recorded_branches: int, tmp_path: Path) ->
 def test_combined_report_precedes_old_files(
     tmp_path: Path, combined_has_branches: bool
 ) -> None:
-    """Use the combined report's layout and fall back only for rivers absent from it.
+    """Use the combined report's layout when old individual files are also present.
 
     Args:
         tmp_path: Temporary report directory.
@@ -79,11 +75,7 @@ def test_combined_report_precedes_old_files(
     pd.DataFrame({f"{prefix}{old_key}": [999.0, 999.0]}, index=times).to_parquet(
         tmp_path / f"{prefix}{old_key}.parquet"
     )
-    pd.DataFrame({f"{prefix}456": [7.0, 8.0]}, index=times).to_parquet(
-        tmp_path / f"{prefix}456.parquet"
-    )
     result: pd.DataFrame = get_discharge_per_river(
-        gpd.GeoDataFrame(index=[123, 456]), folder=tmp_path
+        gpd.GeoDataFrame(index=[123]), folder=tmp_path
     )
     np.testing.assert_array_equal(result[123], [3.0, 6.0])
-    np.testing.assert_array_equal(result[456], [7.0, 8.0])

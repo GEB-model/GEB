@@ -409,6 +409,7 @@ def evaluate_discharge(
                 "discharge_observations_country_code": station_metadata.get(
                     "discharge_observations_country_code", ""
                 ),
+                "observation_frequency": frequency_label,
                 **{
                     f"{metric_name}_{frequency_label}": metric_value
                     for metric_name, metric_value in station_metrics.items()
@@ -502,6 +503,7 @@ def evaluate_discharge(
                 "snapping_method",
                 "timezone_utc_offset",
                 "discharge_observations_country_code",
+                "observation_frequency",
                 *DISCHARGE_SCORE_COLUMNS,
             ],
             index=pd.Index([], name="station_ID"),
