@@ -1025,6 +1025,7 @@ class Crops(BuildModelBase):
         additional_models: list[int | str] | None = None,
         models_root: str | Path | None = None,
         rice_donor_countries: list[str] | None = None,
+        max_observed_year: int | None = None,
     ) -> dict[str, Any]:
         """Process crop price inputs into model-ready time series or constants.
 
@@ -1042,6 +1043,8 @@ class Crops(BuildModelBase):
                 By default it is determined relative to the current model base.
             rice_donor_countries: FAOSTAT countries used for missing rice prices.
                 Defaults to Italy, Spain, Greece, Portugal and France; [] disables it.
+            max_observed_year: Optional final year of observed input prices. Later
+                observations are excluded before price filling and extrapolation.
 
         Returns:
             A dictionary with either type='time_series' and per-region series or type='constant'.
@@ -1071,6 +1074,14 @@ class Crops(BuildModelBase):
         if crop_prices == "FAO_stat":
             faostat = self.data_catalog.fetch("faostat_prices").read()
             assert isinstance(faostat, pd.DataFrame)
+            if max_observed_year is not None:
+                faostat = faostat.drop(
+                    columns=[
+                        year
+                        for year in faostat.columns
+                        if isinstance(year, int) and year > max_observed_year
+                    ]
+                )
 
             all_years_faostat: list[int] = [
                 c for c in faostat.columns if isinstance(c, int)
@@ -1348,6 +1359,8 @@ class Crops(BuildModelBase):
                 },
                 index=pd.to_datetime(data["time"]),
             )
+            if max_observed_year is not None:
+                data.loc[data.index.year > max_observed_year, :] = np.nan
             # compute mean price per year, using start day as index
             data = data.resample("AS").mean()
             # extend dataframe to include start and end years
@@ -1592,6 +1605,9 @@ class Crops(BuildModelBase):
         additional_models: list[int | str] | None = None,
         models_root: str | Path | None = None,
         rice_donor_countries: list[str] | None = None,
+        future_price_reference: str = "latest_observation",
+        historical_mean_start_year: int = 2017,
+        historical_mean_end_year: int = 2024,
     ) -> None:
         """Set crop prices per crop and region for the model run.
 
@@ -1606,7 +1622,26 @@ class Crops(BuildModelBase):
             models_root: Optional directory containing Europe_XXX model folders.
             rice_donor_countries: Optional external FAOSTAT donors for missing rice
                 prices, e.g. ["ITA", "ESP"]. [] disables this fallback.
+            future_price_reference: "latest_observation" retains the existing
+                extrapolation, while "historical_mean" uses an inflation-adjusted
+                historical mean for all years after historical_mean_end_year.
+            historical_mean_start_year: First historical year to average (inclusive).
+            historical_mean_end_year: Last historical year and price-level reference
+                year (inclusive); default is 2024.
         """
+        if future_price_reference not in ("latest_observation", "historical_mean"):
+            raise ValueError(
+                "future_price_reference must be 'latest_observation' or "
+                "'historical_mean'"
+            )
+        if (
+            future_price_reference == "historical_mean"
+            and historical_mean_start_year > historical_mean_end_year
+        ):
+            raise ValueError(
+                "historical_mean_start_year must not exceed historical_mean_end_year"
+            )
+
         parsed_crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,
@@ -1615,7 +1650,153 @@ class Crops(BuildModelBase):
             additional_models=additional_models,
             models_root=models_root,
             rice_donor_countries=rice_donor_countries,
+            max_observed_year=(
+                historical_mean_end_year
+                if future_price_reference == "historical_mean"
+                else None
+            ),
         )
+
+        if future_price_reference == "historical_mean":
+            if parsed_crop_prices["type"] != "time_series":
+                raise ValueError(
+                    "future_price_reference='historical_mean' requires time-series "
+                    "crop prices, not a constant"
+                )
+
+            years = [int(year) for year in parsed_crop_prices["time"]]
+            year_to_index = {year: i for i, year in enumerate(years)}
+            historical_years = list(
+                range(historical_mean_start_year, historical_mean_end_year + 1)
+            )
+            missing_years = [
+                year for year in historical_years if year not in year_to_index
+            ]
+            if missing_years:
+                raise ValueError(
+                    "Historical mean crop prices require years "
+                    f"{historical_mean_start_year}-{historical_mean_end_year} "
+                    f"in the processed crop price data; missing {missing_years}"
+                )
+            historical_indices = [year_to_index[year] for year in historical_years]
+            future_years = [year for year in years if year > historical_mean_end_year]
+
+            inflation_data = self.params["socioeconomics/inflation_rates"]
+            inflation_year_to_index = {
+                int(year): i for i, year in enumerate(inflation_data["time"])
+            }
+            fx_data = (
+                self.params["socioeconomics/LCU_per_USD"] if adjust_currency else None
+            )
+            fx_year_to_index = (
+                {int(year): i for i, year in enumerate(fx_data["time"])}
+                if fx_data is not None
+                else None
+            )
+
+            n_updated = 0
+            n_missing = 0
+            for region_id, crop_prices_by_id in parsed_crop_prices["data"].items():
+                region_inflation = inflation_data["data"][str(region_id)]
+
+                def inflation_factor(year: int) -> float:
+                    index = inflation_year_to_index.get(year)
+                    if index is None:
+                        raise ValueError(
+                            f"Missing socioeconomic inflation factor for year {year}"
+                        )
+                    factor = float(region_inflation[index])
+                    if not np.isfinite(factor) or factor <= 0:
+                        raise ValueError(
+                            f"Invalid socioeconomic inflation factor {factor} "
+                            f"for region {region_id}, year {year}"
+                        )
+                    return factor
+
+                # Bring each historical year's local-currency prices to the same
+                # purchasing-power level as the final historical year.
+                historical_multipliers = {}
+                multiplier = 1.0
+                for year in range(
+                    historical_mean_end_year,
+                    historical_mean_start_year - 1,
+                    -1,
+                ):
+                    historical_multipliers[year] = multiplier
+                    if year > historical_mean_start_year:
+                        multiplier *= inflation_factor(year)
+
+                # Apply general (not crop-specific) inflation after the reference year.
+                future_multipliers = {}
+                multiplier = 1.0
+                if future_years:
+                    for year in range(
+                        historical_mean_end_year + 1, max(future_years) + 1
+                    ):
+                        multiplier *= inflation_factor(year)
+                        future_multipliers[year] = multiplier
+
+                if adjust_currency:
+                    region_fx = fx_data["data"][str(region_id)]
+
+                    def currency_factor(year: int) -> float:
+                        index = fx_year_to_index.get(year)
+                        if index is None:
+                            raise ValueError(
+                                f"Missing LCU/USD conversion factor for year {year}"
+                            )
+                        factor = float(region_fx[index])
+                        if not np.isfinite(factor) or factor <= 0:
+                            raise ValueError(
+                                f"Invalid LCU/USD conversion factor {factor} "
+                                f"for region {region_id}, year {year}"
+                            )
+                        return factor
+
+                historical_multipliers_array = np.array(
+                    [historical_multipliers[year] for year in historical_years],
+                    dtype=float,
+                )
+                if adjust_currency:
+                    historical_multipliers_array *= np.array(
+                        [currency_factor(year) for year in historical_years],
+                        dtype=float,
+                    )
+                future_indices = [year_to_index[year] for year in future_years]
+                future_multipliers_array = np.array(
+                    [future_multipliers[year] for year in future_years], dtype=float
+                )
+                if adjust_currency:
+                    future_multipliers_array /= np.array(
+                        [currency_factor(year) for year in future_years], dtype=float
+                    )
+
+                for crop_id, values in crop_prices_by_id.items():
+                    prices = np.asarray(values, dtype=float)
+                    historical_prices = prices[historical_indices]
+                    valid = np.isfinite(historical_prices) & (historical_prices > 0)
+                    if not valid.any():
+                        n_missing += 1
+                        continue
+                    mean_price = float(
+                        np.mean(
+                            historical_prices[valid]
+                            * historical_multipliers_array[valid]
+                        )
+                    )
+                    prices[future_indices] = mean_price * future_multipliers_array
+                    crop_prices_by_id[crop_id] = prices.tolist()
+                    n_updated += 1
+
+            self.logger.info(
+                "Applied %d-%d inflation-adjusted crop price mean to %d "
+                "region-crop series; %d had no positive historical prices",
+                historical_mean_start_year,
+                historical_mean_end_year,
+                n_updated,
+                n_missing,
+            )
+
         self.set_params(parsed_crop_prices, name="crops/crop_prices")
         self.set_params(parsed_crop_prices, name="crops/cultivation_costs")
 
