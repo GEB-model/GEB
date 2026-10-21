@@ -313,13 +313,15 @@ class Government(AgentBaseClass):
 
         # Update soil organic carbon and bulk density, then recalculate the soil
         # hydraulic properties from them. Sand, silt and clay stay the same.
-        forest_mean_soc = self._compute_forest_mean_soc(land_use_type_before)
+        forest_mean_soil_organic_carbon = self._compute_forest_mean_soil_organic_carbon(
+            land_use_type_before
+        )
         bulk_density_ratio = self._compute_bulk_density_ratios(land_use_type_before)
         selected_land_use = land_use_type_before[suitability_HRU]
 
-        soc = hydrology.HRU.var.soil_organic_carbon_percentage
+        soil_organic_carbon = hydrology.HRU.var.soil_organic_carbon_percentage
         bulk_density = hydrology.HRU.var.bulk_density_kg_per_dm3
-        soc_before = soc[:, suitability_HRU].copy()
+        soil_organic_carbon_before = soil_organic_carbon[:, suitability_HRU].copy()
         bulk_density_before = bulk_density[:, suitability_HRU].copy()
         # Snapshot the derived properties so the log can report before -> after
         # for everything this conversion touches, not just the two primaries.
@@ -340,10 +342,12 @@ class Government(AgentBaseClass):
         # floored at the HRU's original value so conversion can never *decrease*
         # organic carbon (without the floor, HRUs already richer than the
         # forest mean would lose carbon).
-        soc_after = np.maximum(forest_mean_soc[:, np.newaxis], soc_before)
+        soil_organic_carbon_after = np.maximum(
+            forest_mean_soil_organic_carbon[:, np.newaxis], soil_organic_carbon_before
+        )
 
         # Afforestation must not decrease soil organic carbon anywhere.
-        assert (soc_after >= soc_before).all(), (
+        assert (soil_organic_carbon_after >= soil_organic_carbon_before).all(), (
             "reforestation decreased soil organic carbon in at least one HRU"
         )
 
@@ -371,11 +375,11 @@ class Government(AgentBaseClass):
 
         # 3) Sand, silt and clay content: intentionally left unchanged.
 
-        # 4) Recalculate the soil hydraulic properties from the new SOC and
-        # bulk density, using the unchanged sand/silt/clay.
-        is_top_soil_subset = get_is_top_soil_mask(soc_after.shape)
+        # 4) Recalculate the soil hydraulic properties from the new soil organic
+        # carbon and bulk density, using the unchanged sand/silt/clay.
+        is_top_soil_subset = get_is_top_soil_mask(soil_organic_carbon_after.shape)
         soil_hydraulic_properties = calculate_soil_hydraulic_properties(
-            organic_carbon_percentage=soc_after,
+            organic_carbon_percentage=soil_organic_carbon_after,
             bulk_density_kg_per_dm3=bulk_density_after,
             sand_percentage=hydrology.HRU.var.sand_percentage[:, suitability_HRU],
             silt_percentage=hydrology.HRU.var.silt_percentage[:, suitability_HRU],
@@ -445,7 +449,7 @@ class Government(AgentBaseClass):
         suitability_HRU[converted_indices] = True
 
         # Write the funded HRUs to the model.
-        soc[:, suitability_HRU] = soc_after[:, funded]
+        soil_organic_carbon[:, suitability_HRU] = soil_organic_carbon_after[:, funded]
         bulk_density[:, suitability_HRU] = bulk_density_after[:, funded]
         for name in derived_before:
             getattr(hydrology.HRU.var, name)[:, suitability_HRU] = getattr(
@@ -460,8 +464,8 @@ class Government(AgentBaseClass):
 
         self._log_soil_change_summary(
             suitability_HRU=suitability_HRU,
-            soc_before=soc_before[:, funded],
-            soc_after=soc[:, suitability_HRU],
+            soil_organic_carbon_before=soil_organic_carbon_before[:, funded],
+            soil_organic_carbon_after=soil_organic_carbon[:, suitability_HRU],
             bulk_density_before=bulk_density_before[:, funded],
             bulk_density_after=bulk_density[:, suitability_HRU],
             derived_before={
@@ -495,8 +499,8 @@ class Government(AgentBaseClass):
     def _log_soil_change_summary(
         self,
         suitability_HRU: np.ndarray,
-        soc_before: TwoDArrayFloat32,
-        soc_after: TwoDArrayFloat32,
+        soil_organic_carbon_before: TwoDArrayFloat32,
+        soil_organic_carbon_after: TwoDArrayFloat32,
         bulk_density_before: TwoDArrayFloat32,
         bulk_density_after: TwoDArrayFloat32,
         derived_before: dict[str, TwoDArrayFloat32],
@@ -509,8 +513,10 @@ class Government(AgentBaseClass):
 
         Args:
             suitability_HRU: Boolean mask of the converted HRUs.
-            soc_before: Organic carbon of the converted HRUs before the change.
-            soc_after: Organic carbon of the converted HRUs after the change.
+            soil_organic_carbon_before: Organic carbon of the converted HRUs before
+                the change.
+            soil_organic_carbon_after: Organic carbon of the converted HRUs after the
+                change.
             bulk_density_before: Bulk density of the converted HRUs before the change.
             bulk_density_after: Bulk density of the converted HRUs after the change.
             derived_before: Snapshot of each derived property before the change,
@@ -534,7 +540,11 @@ class Government(AgentBaseClass):
         )
 
         changed: list[tuple[str, TwoDArrayFloat32, TwoDArrayFloat32]] = [
-            ("soil_organic_carbon_percentage [%] (CHANGED)", soc_before, soc_after),
+            (
+                "soil_organic_carbon_percentage [%] (CHANGED)",
+                soil_organic_carbon_before,
+                soil_organic_carbon_after,
+            ),
             (
                 "bulk_density_kg_per_dm3 [kg/dm3] (CHANGED)",
                 bulk_density_before,
@@ -581,10 +591,12 @@ class Government(AgentBaseClass):
         self.model.logger.info(
             "  check: soil organic carbon decreased in 0 of %d HRU-layers; "
             "sand/silt/clay untouched; soil thermal properties untouched.",
-            int(soc_after.size),
+            int(soil_organic_carbon_after.size),
         )
 
-    def _compute_forest_mean_soc(self, land_use_type: np.ndarray) -> TwoDArrayFloat32:
+    def _compute_forest_mean_soil_organic_carbon(
+        self, land_use_type: np.ndarray
+    ) -> TwoDArrayFloat32:
         """Measure the area-weighted mean organic carbon over existing forest, per layer.
 
         Converted HRUs get this basin forest mean, floored so it never
@@ -603,7 +615,7 @@ class Government(AgentBaseClass):
         """
         hydrology = self.model.hydrology
         area = hydrology.HRU.var.cell_area
-        soc = hydrology.HRU.var.soil_organic_carbon_percentage
+        soil_organic_carbon = hydrology.HRU.var.soil_organic_carbon_percentage
 
         forest_mask = land_use_type == FOREST
         if not forest_mask.any():
@@ -613,7 +625,7 @@ class Government(AgentBaseClass):
                 "found."
             )
         return np.average(
-            soc[:, forest_mask], axis=1, weights=area[forest_mask]
+            soil_organic_carbon[:, forest_mask], axis=1, weights=area[forest_mask]
         ).astype(np.float32)
 
     def _compute_bulk_density_ratios(
@@ -636,7 +648,7 @@ class Government(AgentBaseClass):
         Land use types with no HRUs, and layers whose mean is zero, get a ratio
         of 1.0 (no change), since there is nothing to measure a change against.
         At least one forest HRU must exist; this is checked by
-        :meth:`_compute_forest_mean_soc`, which is called first.
+        :meth:`_compute_forest_mean_soil_organic_carbon`, which is called first.
 
         Args:
             land_use_type: Land use type per HRU, as it is just before conversion.
