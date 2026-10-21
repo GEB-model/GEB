@@ -1,3 +1,5 @@
+# dev
+- Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.
 # v1.0.0b36
 - Fixed CMIP6 download requesting historical years 2015-2016 and future years starting in 2017, which left a two-year gap and made the delta calculation fail. Historical now covers 1950-2014 and future 2015-2100; cached `cmip6_future_*.zip` files must be deleted and redownloaded.
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
@@ -10,6 +12,7 @@
 - Implement capillary rise in the Ross solver.
 - Fixed rare floating-point precision underflow in `infiltration` during profile saturation recharge subtraction that caused slightly negative `topwater_m` and false `direct_runoff` in the land surface model.
 - Fixed a build failure when a coastline is already a single `LineString` and cannot be passed to `shapely.ops.linemerge`.
+- Replace the GTSM sea-level projections with IPCC AR6 projections, allowing selection of additional SSP scenarios and uncertainty quantiles.
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
