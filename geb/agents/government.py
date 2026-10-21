@@ -305,18 +305,14 @@ class Government(AgentBaseClass):
 
         land_use_type_before = hydrology.HRU.var.land_use_type.copy()
 
-        # Only the two primary soil properties that actually change under
-        # afforestation are modified: soil organic carbon content and bulk
-        # density. Sand, silt and clay content (soil texture) are left
-        # untouched, so each converted HRU keeps its native soil type. All
-        # soil hydraulic properties are then recalculated from these (partly
-        # updated) primary properties, using the same pedotransfer functions
-        # used at model initialization.
         if not suitability_HRU.any():
             self.model.logger.info(
                 "Reforestation: no eligible HRUs, no planting applied."
             )
             return
+
+        # Update soil organic carbon and bulk density, then recalculate the soil
+        # hydraulic properties from them. Sand, silt and clay stay the same.
         forest_mean_soc = self._compute_forest_mean_soc(land_use_type_before)
         bulk_density_ratio = self._compute_bulk_density_ratios(land_use_type_before)
         selected_land_use = land_use_type_before[suitability_HRU]
