@@ -209,11 +209,11 @@ class Government(AgentBaseClass):
 
         Soil organic carbon is set to the area-weighted mean over HRUs currently
         under forest in the basin, per soil layer (see
-        :meth:`_compute_forest_mean_soc`), floored at the HRU's own value so
+        :meth:`_compute_forest_mean_soc`), floored at the HRU's original value so
         conversion can never *decrease* organic carbon. This is asserted on the
         values written to the model.
 
-        Bulk density is changed *relatively*: the HRU's own value is scaled by
+        Bulk density is changed *relatively*: the HRU's original value is scaled by
         a per-soil-layer, per-previous-land-use factor measured from the
         model's own soil maps (see :meth:`_compute_bulk_density_ratios`), so
         each HRU keeps its own soil signal and no factor is hard-coded.
@@ -369,7 +369,7 @@ class Government(AgentBaseClass):
         # so a failure cannot leave the model with half-converted soils.
 
         # 1) Soil organic carbon: set to the basin forest mean per soil layer,
-        # floored at the HRU's own value so conversion can never *decrease*
+        # floored at the HRU's original value so conversion can never *decrease*
         # organic carbon (without the floor, HRUs already richer than the
         # forest mean would lose carbon).
         soc_after = np.maximum(forest_mean_soc[:, np.newaxis], soc_before)
@@ -379,7 +379,7 @@ class Government(AgentBaseClass):
             "reforestation decreased soil organic carbon in at least one HRU"
         )
 
-        # 2) Bulk density: the HRU's own value scaled by the measured forest to
+        # 2) Bulk density: the HRU's original value scaled by the measured forest to
         # previous-land-use ratio for its soil layer, bounded per layer by the
         # lowest and highest bulk density already present in the basin. The
         # bound keeps converted soils inside the range the pedotransfer
@@ -620,7 +620,7 @@ class Government(AgentBaseClass):
         """Measure the area-weighted mean organic carbon over existing forest, per layer.
 
         Converted HRUs get this basin forest mean, floored so it never
-        decreases an HRU's own value. See
+        decreases an HRU's original value. See
         :meth:`prepare_modified_soil_maps_for_forest`.
 
         Args:
