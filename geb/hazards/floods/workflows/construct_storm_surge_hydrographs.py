@@ -82,7 +82,7 @@ def linear_detrend_with_nan(
         plt.ylabel("waterlevel [m]")
         plt.legend(loc="upper right")
         plt.savefig(
-            "plot/gtsm/tide_detrended_station_%05d.png" % (int(station)),
+            "plot/water_levels/tide_detrended_station_%05d.png" % (int(station)),
             format="png",
             bbox_inches="tight",
             dpi=300,
@@ -103,13 +103,13 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
         make_plot: Whether to create plots of the hydrographs.
     """
     # read geojson file to get station ids
-    station_ids = read_geom(model.files["geom"]["gtsm/stations_coast_rp"])
-    os.makedirs("plot/gtsm", exist_ok=True)
+    station_ids = read_geom(model.files["geom"]["water_levels/stations_coast_rp"])
+    os.makedirs("plot/water_levels", exist_ok=True)
     percentile = 0.99
     offset = 0
     rps = read_table(model.files["table"]["coast_rp"])
-    waterlevels = read_zarr(model.files["other"]["gtsm/waterlevels"])
-    surge = read_zarr(model.files["other"]["gtsm/surge"])
+    waterlevels = read_zarr(model.files["other"]["water_levels/total_water_levels"])
+    surge = read_zarr(model.files["other"]["water_levels/surge"])
     return_periods = [int(rp) for rp in rps.columns.tolist()]
     df_event = {}
     df_event_spring = {}
@@ -168,7 +168,9 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
                     [export[rp], df["twl"].to_frame(name=station)], axis=1
                 )
     for rp in export:
-        export[rp].to_csv(export_folder / f"gtsm_normal_tide_hydrograph_rp{rp:04d}.csv")
+        export[rp].to_csv(
+            export_folder / f"water_levels_normal_tide_hydrograph_rp{rp:04d}.csv"
+        )
 
     # save storm tide hydrograph (spring tide)
     export_spring = {}
@@ -182,7 +184,7 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
                 )
     for rp in export_spring:
         export_spring[rp].to_csv(
-            export_folder / f"gtsm_spring_tide_hydrograph_rp{rp:04d}.csv"
+            export_folder / f"water_levels_spring_tide_hydrograph_rp{rp:04d}.csv"
         )
 
 
@@ -350,7 +352,7 @@ def generate_tide_signals(
         plt.xlim(0, 36)
         plt.grid()
         plt.savefig(
-            "plot/gtsm/tide_signal_station_%05d.png" % (int(station)),
+            "plot/water_levels/tide_signal_station_%05d.png" % (int(station)),
             format="png",
             bbox_inches="tight",
             dpi=300,
@@ -528,7 +530,7 @@ def generate_surge_hydrograph(
         )
         plt.grid()
         plt.savefig(
-            "plot/gtsm/surge_hydrograph_station_%05d_percentile_%02d.png"
+            "plot/water_levels/surge_hydrograph_station_%05d_percentile_%02d.png"
             % (int(station), percentile * 100),
             format="png",
             bbox_inches="tight",
@@ -683,7 +685,7 @@ def generate_storm_tide_hydrograph(
         plt.ylim(top=((ymax - ymin) * 0.20 + ymax))
         plt.xlim(-36, 36)
         plt.savefig(
-            "plot/gtsm/rp%4d_storm_tide_hydrograph_station_%05d_percentile_%02d.png"
+            "plot/water_levels/rp%4d_storm_tide_hydrograph_station_%05d_percentile_%02d.png"
             % (rp, int(station), percentile * 100),
             format="png",
             bbox_inches="tight",
@@ -736,7 +738,7 @@ def generate_storm_tide_hydrograph(
         plt.ylim(top=((ymax - ymin) * 0.20 + ymax))
         plt.xlim(-36, 36)
         plt.savefig(
-            "plot/gtsm/rp%4d_storm_tide_spring_tide_hydrograph_station_%05d_percentile_%02d.png"
+            "plot/water_levels/rp%4d_storm_tide_spring_tide_hydrograph_station_%05d_percentile_%02d.png"
             % (int(rp), int(station), percentile * 100),
             format="png",
             bbox_inches="tight",

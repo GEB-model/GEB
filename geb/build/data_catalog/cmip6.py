@@ -18,6 +18,8 @@ mapping_variables_to_cdf = {
     "precipitation": "pr",
 }
 
+available_scenarios = ["ssp1_1_9", "ssp1_2_6", "ssp2_4_5", "ssp3_7_0", "ssp5_8_5"]
+
 from ...workflows.io import (
     read_zarr,
     write_zarr,
@@ -291,7 +293,8 @@ class CMIP6(Adapter):
         bounds: tuple[float, float, float, float],
         start_year: int,
         end_year: int,
-        representative_forcing_year: int = 2050,
+        ssp_rcp: int,
+        representative_forcing_year: int,
         url: str | None = None,
     ) -> CMIP6:
         """Fetch CMIP6 data and save it to the cache directory.
@@ -302,12 +305,22 @@ class CMIP6(Adapter):
             start_year: The start year for calculating deltas.
             end_year: The end year for the data range.
             representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
+            ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
             url: Not used for CMIP6, included for compatibility with base class.
+        Raises:
+            ValueError: If the SSP-RCP is invalid or if the historical and future periods are not of equal length.
         Returns:
             The current instance of the CMIP6 adapter.
         """
         if self.path.exists():
             return self
+
+        # translate the scenario string to the full SSP name
+        ssp_scenario = f"ssp{str(ssp_rcp).replace('', '_')[1:6]}"
+        if ssp_scenario not in available_scenarios:
+            raise ValueError(
+                f"Invalid SSP-RCP '{ssp_rcp}'. Available scenarios are: {available_scenarios}"
+            )
 
         # CMIP6 "historical" experiments end in 2014 and the SSP scenarios start in 2015.
         # Requesting other years silently returns no data, which would leave a gap.
@@ -329,13 +342,16 @@ class CMIP6(Adapter):
                 self._retrieve(request, str(historical_data_path))
 
             # future data
-            future_data_path = self.root / f"cmip6_future_{variable}.zip"
+            future_data_path = (
+                self.root
+                / f"cmip6_{ssp_scenario}_{variable}_{representative_forcing_year}.zip"
+            )
             if not future_data_path.exists():
                 request = self.construct_request(
                     years=years_future,
                     variable=variable,
                     bounds=bounds,
-                    experiment="ssp5_8_5",
+                    experiment=ssp_scenario,
                     model="gfdl_esm4",
                 )
 

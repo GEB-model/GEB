@@ -1878,32 +1878,32 @@ class Hydrography(BuildModelBase):
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_geom(waterbodies, name="waterbodies/waterbody_data")
 
-    def setup_gtsm_water_levels(self) -> None:
-        """Sets up the GTSM hydrographs for station within the model bounds."""
-        gtsm_data_region, stations = self.data_catalog.fetch(
+    def setup_total_water_levels(self) -> None:
+        """Sets up the coastal water levels for within the model bounds."""
+        water_level_data_region, stations = self.data_catalog.fetch(
             "gtsm_timeseries", variable="total_water_level"
         ).read(bounds=self.bounds, variable="total_water_level")
         self.set_other(
-            gtsm_data_region,
-            name="gtsm/waterlevels",
+            water_level_data_region,
+            name="water_levels/total_water_levels",
             filters=gtsm_filters,
             shards={"stations": 100},
         )
-        self.set_geom(stations, name="gtsm/stations")
-        self.logger.info("GTSM station waterlevels and geometries set")
+        self.set_geom(stations, name="water_levels/stations")
+        self.logger.info("Water level stations and total water levels set")
 
-    def setup_gtsm_surge_levels(self) -> None:
-        """Sets up the GTSM hydrographs for station within the model bounds."""
-        gtsm_data_region, _ = self.data_catalog.fetch(
+    def setup_surge_levels(self) -> None:
+        """Sets up the storm surge residual hydrographs for station within the model bounds."""
+        surge_data_region, _ = self.data_catalog.fetch(
             "gtsm_timeseries", variable="storm_surge_residual"
         ).read(bounds=self.bounds, variable="storm_surge_residual")
         self.set_other(
-            gtsm_data_region,
-            name="gtsm/surge",
+            surge_data_region,
+            name="water_levels/surge",
             filters=gtsm_filters,
             shards={"stations": 100},
         )
-        self.logger.info("GTSM station surge levels set")
+        self.logger.info("Water level surge levels set")
 
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
@@ -1912,7 +1912,7 @@ class Hydrography(BuildModelBase):
         coast_rp = self.data_catalog.fetch("coast_rp").read()
 
         stations = gpd.read_parquet(
-            os.path.join("input", self.files["geom"]["gtsm/stations"])
+            os.path.join("input", self.files["geom"]["water_levels/stations"])
         )
         # remove stations that are not in coast_rp index
         stations = stations[stations.index.astype(int).isin(coast_rp.index)]
@@ -1921,26 +1921,29 @@ class Hydrography(BuildModelBase):
         self.set_table(coast_rp, name="coast_rp")
 
         # also set stations (only those that are in coast_rp)
-        self.set_geom(stations, "gtsm/stations_coast_rp")
+        self.set_geom(stations, "water_levels/stations_coast_rp")
 
-    def setup_sea_level_projections(self, scenario: int, percentile: float) -> None:
+    def setup_sea_level_projections(self, percentile: float) -> None:
         """Sets up the AR6 sea level projections for the model.
 
-        For each GTSM station the nearest AR6 location (great-circle distance) is
+        For each water level station the nearest sea level projection location (great-circle distance) is
         selected. Its projected sea level change is expressed relative to 2020 and
         interpolated (and linearly extrapolated) to annual values for 2000-2100.
 
         Args:
-            scenario: SSP scenario identifier used to select the AR6 file (e.g., 245).
-            percentile: AR6 quantile to select (fraction between 0 and 1).
+            percentile: AR6 quantile to select (fraction between 0 and 1). Default is 0.5 (median projection).
         """
-        self.logger.info("Setting up sea level rise data")
+        # get the scenario from the model configuration
+        scenario = self.ssp_rcp
+        self.logger.info(
+            f"Setting up sea level rise data for scenario {scenario}, using {percentile} percentile of AR6 projections"
+        )
         sea_level_change_m: xr.Dataset = self.data_catalog.fetch("ar6").read(
             scenario, percentile
         )
 
-        gtsm_stations: gpd.GeoDataFrame = gpd.read_parquet(
-            os.path.join("input", self.files["geom"]["gtsm/stations"])
+        stations: gpd.GeoDataFrame = gpd.read_parquet(
+            os.path.join("input", self.files["geom"]["water_levels/stations"])
         )
 
         lon_deg: npt.NDArray[np.floating] = sea_level_change_m["lon"].values
@@ -1980,8 +1983,8 @@ class Hydrography(BuildModelBase):
         )
         _, nearest_valid_index = tree.query(
             to_unit_vectors(
-                gtsm_stations.geometry.x.to_numpy(),
-                gtsm_stations.geometry.y.to_numpy(),
+                stations.geometry.x.to_numpy(),
+                stations.geometry.y.to_numpy(),
             )
         )
         nearest_location_indices: npt.NDArray[np.intp] = nearest_valid_index
@@ -2018,27 +2021,27 @@ class Hydrography(BuildModelBase):
         sea_level_rise_stations: pd.DataFrame = pd.DataFrame(
             data=interpolated_values.T,
             index=pd.to_datetime([f"{year}-01-01" for year in target_years]),
-            columns=gtsm_stations.index,
+            columns=stations.index,
         )
         self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
 
-    @build_method(required=True)
-    def setup_gtsm_station_data(self, scenario: int, percentile: float) -> None:
-        """Set up COAST-RP and GTSM station data for the model.
+    @build_method(depends_on=["set_ssp"], required=True)
+    def setup_coastal_water_levels(self, percentile: float = 0.5) -> None:
+        """Set up water levels and station data for the model.
 
         Args:
-            scenario: SSP scenario identifier used for AR6 projections (for example, 245).
-            percentile: AR6 projection quantile as a fraction between 0 and 1.
+            percentile: Sea level rise projection quantile as a fraction between 0 and 1. Default is 0.5 (median projection).
         """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
-            self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
+            self.logger.info(
+                "No coastal basins found, skipping coastal water levels setup"
+            )
             return
-
-        # Continue with GTSM setup
-        # self.setup_gtsm_water_levels()
-        # self.setup_gtsm_surge_levels()
-        # self.setup_coast_rp()
-        self.setup_sea_level_projections(scenario, percentile)
+        # Continue with coastal water levels setup
+        self.setup_total_water_levels()
+        self.setup_surge_levels()
+        self.setup_coast_rp()
+        self.setup_sea_level_projections(percentile)
 
     @build_method(required=False)
     def setup_inflow(
