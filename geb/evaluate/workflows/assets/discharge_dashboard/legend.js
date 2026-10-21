@@ -307,11 +307,14 @@
           });
         } else if (name.indexOf('reservoir') !== -1) {
           visibleItems.push({
-            label: 'Reservoirs',
+            label: ov.name,
             draw: function(c, x, y) {
               c.beginPath();
               c.arc(x + 5, y - 3.5, 4.5, 0, 2 * Math.PI);
-              c.fillStyle = '#ff8a65';
+              c.fillStyle = name.indexOf('during spinup') !== -1 ? '#8B5CF6'
+                : name.indexOf('during simulation') !== -1 ? '#E11D48'
+                : name.indexOf('after simulation') !== -1 ? '#94A3B8'
+                : '#FF8A65';
               c.fill();
               c.strokeStyle = isDark ? '#ffffff' : '#c2410c';
               c.lineWidth = 1;

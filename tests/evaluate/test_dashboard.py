@@ -1004,3 +1004,42 @@ def test_plot_skill_score_maps(tmp_path: Path) -> None:
     assert (maps_dir / "skill_score_map_kge_components.svg").exists()
     assert (maps_dir / "skill_score_map_kge.svg").exists()
     assert (maps_dir / "skill_score_map_nse.svg").exists()
+
+
+@pytest.mark.parametrize(
+    ("year", "period", "color"),
+    [
+        (1994, "existing before spinup", "#FF8A65"),
+        (1995, "constructed during spinup", "#8B5CF6"),
+        (1999, "constructed during spinup", "#8B5CF6"),
+        (2000, "constructed during simulation", "#E11D48"),
+        (2008, "constructed during simulation", "#E11D48"),
+        (2009, "constructed after simulation", "#94A3B8"),
+        (0, "construction year unknown", "#FF8A65"),
+        (np.nan, "construction year unknown", "#FF8A65"),
+    ],
+)
+def test_reservoir_construction_layers(year: float, period: str, color: str) -> None:
+    """Check construction periods at the spinup and simulation boundaries."""
+    from geb.evaluate.workflows.dashboard import _add_waterbody_layers
+
+    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "waterbody_type": [2],
+            "waterbody_id": [1338],
+            "gdw_construction_year": [year],
+        },
+        geometry=[sg.Point(-7.5, 38.2)],
+        crs="EPSG:4326",
+    )
+    layers: list[folium.FeatureGroup] = _add_waterbody_layers(
+        folium.Map(), waterbodies, (1995, 2000, 2008)
+    )
+    assert len(layers) == 1
+    assert layers[0].layer_name == f"Reservoirs · {period}"
+    marker: folium.CircleMarker = next(iter(layers[0]._children.values()))
+    assert marker.options["fillColor"] == color
+    popup_html: str = layers[0].get_root().render()
+    assert "Construction year:" in popup_html
+    if pd.notna(year) and year > 0:
+        assert f"Construction year: {int(year)}" in popup_html

@@ -80,6 +80,11 @@ class Hydrology:
                 "discharge"
             ]["minimum_upstream_area_km2"],
             logger=self.model.logger,
+            reservoir_period=(
+                self.model.config["general"]["spinup_time"].year,
+                self.model.config["general"]["start_time"].year,
+                self.model.config["general"]["end_time"].year,
+            ),
             correct_discharge_observations=correct_discharge_observations,
             output_filename=output_filename,
             include_return_period_plots=include_return_period_plots,
