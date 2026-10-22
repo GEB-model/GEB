@@ -1,5 +1,8 @@
 # dev
 - Save model version in store metadata (checkpoint.json) and verify model version compatibility on loading, warning if spinup needs to be rerun.
+- Removed minimum_river_slope_m_per_m configuration option; kinematic minimum slope is handled internally.
+- Cleaned confluence forward inflow limiting to use strictly physical stage limits.
+- Removed fallback slicing on shape mismatch, parent directory completion lookups, and multi-tier metric score fallbacks.
 
 # v1.0.0b36
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.

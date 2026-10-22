@@ -1114,27 +1114,18 @@ def _draw_score_maps(
                 n: float
                 w, e = axis.get_xlim()
                 s, n = axis.get_ylim()
-                try:
-                    fetched_img: np.ndarray
-                    fetched_ext: tuple[float, float, float, float]
-                    fetched_img, fetched_ext = ctx.bounds2img(
-                        w,
-                        s,
-                        e,
-                        n,
-                        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-                        use_cache=True,
-                    )
-                    basemap_cache = (fetched_img, fetched_ext)
-                    axis.imshow(fetched_img, extent=fetched_ext, zorder=1)
-                except Exception:
-                    ctx.add_basemap(
-                        axis,
-                        crs="EPSG:3857",
-                        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-                        attribution=False,
-                        zoom="auto",
-                    )
+                fetched_img: np.ndarray
+                fetched_ext: tuple[float, float, float, float]
+                fetched_img, fetched_ext = ctx.bounds2img(
+                    w,
+                    s,
+                    e,
+                    n,
+                    source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
+                    use_cache=True,
+                )
+                basemap_cache = (fetched_img, fetched_ext)
+                axis.imshow(fetched_img, extent=fetched_ext, zorder=1)
 
             colorbar: Colorbar = figure.colorbar(
                 plt.cm.ScalarMappable(norm=norm, cmap=cmap),

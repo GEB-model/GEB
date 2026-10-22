@@ -1146,17 +1146,9 @@ def _apply_confluence_inflow_limits(
         depth_c: np.float32 = max(stage_c - bed_c, np.float32(0.0))
         bankfull_depth_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
 
-        depth_cap: np.float32 = max(
-            np.float32(0.5) * depth_c,
-            np.float32(0.2) * bankfull_depth_c,
-            np.float32(0.05),
-        )
-        head_diff: np.float32 = max(max_up_stage - stage_c, np.float32(0.0))
-        delta_z_max: np.float32 = (
-            min(head_diff, depth_cap)
-            if head_diff > np.float32(0.0)
-            else np.float32(0.05)
-        )
+        # Confluence absorption capacity is bounded by approaching upstream water stage.
+        # Water cannot flow into the confluence reach to raise its stage above the feeding tributaries.
+        delta_z_max: np.float32 = max(max_up_stage - stage_c, np.float32(0.0))
 
         inv_length_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
         reach_length_c: np.float32 = np.float32(1.0) / inv_length_c

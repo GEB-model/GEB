@@ -263,8 +263,7 @@ def read_run_completion_time(run_output_folder: Path | None) -> str | None:
     if run_output_folder is None:
         return None
     done_file: Path = run_output_folder / "done.txt"
-    if not done_file.exists() and run_output_folder.name == "report":
-        done_file = run_output_folder.parent / "done.txt"
+
     if not done_file.exists():
         return None
     mtime: float = done_file.stat().st_mtime
@@ -289,8 +288,7 @@ def read_run_completion_timestamp_for_filename(
     if run_output_folder is None:
         return None
     done_file: Path = run_output_folder / "done.txt"
-    if not done_file.exists() and run_output_folder.name == "report":
-        done_file = run_output_folder.parent / "done.txt"
+
     if not done_file.exists():
         return None
     mtime: float = done_file.stat().st_mtime
@@ -2218,17 +2216,9 @@ def _build_station_marker_payload(
             native_col: str = (
                 f"{metric_name}_{freq}"
                 if f"{metric_name}_{freq}" in row
-                else (
-                    f"{metric_name}_hourly"
-                    if freq == "hourly" and f"{metric_name}_hourly" in row
-                    else (
-                        f"{metric_name}_daily"
-                        if f"{metric_name}_daily" in row
-                        else metric_name
-                    )
-                )
+                else metric_name
             )
-            metric_val: float = row.get(native_col, row.get(metric_name, np.nan))
+            metric_val: float = row.get(native_col, np.nan)
             if pd.notna(metric_val) and np.isfinite(metric_val):
                 val_float: float = round(float(metric_val), 4)
                 metric_values[layer.get_name()] = val_float

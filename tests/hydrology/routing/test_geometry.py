@@ -34,11 +34,12 @@ class DummyGridVar:
         Args:
             n: Number of compressed grid cells.
         """
-        self.river_slope_m_per_m: ArrayFloat32 = np.full(n, 0.001, dtype=np.float32)
+        self.n: int = n
         self.river_mannings: ArrayFloat32 = np.full(n, 0.03, dtype=np.float32)
         self.river_length: ArrayFloat32 = np.full(n, 1000.0, dtype=np.float32)
         self.waterbody_outflow_points: np.ndarray = np.full(n, -1, dtype=np.int32)
         self.waterbody_ids: np.ndarray = np.full(n, -1, dtype=np.int32)
+        self.river_slope_m_per_m: ArrayFloat32 = np.full(n, 0.001, dtype=np.float32)
 
 
 class DummyGrid:
@@ -480,70 +481,6 @@ def test_compute_static_geometry_validation() -> None:
             )
 
 
-def test_routing_andreadis_depth_decoupled_from_slope() -> None:
-    """Test that downstream hydraulic geometry power law depth is decoupled from bed slope.
-
-    Verifies that bankfull depth h_bf = c * Q_bf^d produces realistic alluvial channel depths
-    without exploding on flat slopes (unlike Manning's normal depth inversion).
-    """
-    # Test across channel widths from 10 m to 400 m (Rhine)
-    widths = np.array([10.0, 50.0, 100.0, 400.0], dtype=np.float32)
-    alpha = np.float32(7.2)
-    beta = np.float32(0.5)
-    c = np.float32(0.27)
-    d = np.float32(0.30)
-
-    q_bf = (widths / alpha) ** (1.0 / beta)
-    h_bf = c * (q_bf**d)
-
-    # 10 m stream depth should be ~0.38 m
-    assert 0.2 < h_bf[0] < 0.6, f"Unexpected headwater depth: {h_bf[0]}"
-    # 400 m Rhine depth should be ~3.0 m (not 25 m!)
-    assert 2.5 < h_bf[3] < 4.0, f"Unexpected Rhine bankfull depth: {h_bf[3]}"
-
-    # Verify aspect ratios are strictly realistic (between 25 and 150)
-    aspect_ratios = widths / h_bf
-    assert np.all(aspect_ratios >= 25.0)
-    assert np.all(aspect_ratios <= 150.0)
-
-
-def test_routing_continuity_bankfull_depth_narrow_vs_wide() -> None:
-    """Test bankfull channel depth under hydraulic continuity with Andreadis baseline.
-
-    Verifies that:
-    - When W_obs == W_expected, depth collapses identically to Andreadis power law h_expected.
-    - Narrow constrictions scour deeper (W_obs down -> h_bf up).
-    - Wide reaches spread shallower (W_obs up -> h_bf down).
-    - Bankfull depth scales inversely with observed width to conserve continuity.
-    """
-    # Fixed 2-year bankfull flood (Rhine scale: 3000 m3/s)
-    q2: float = 3000.0
-    alpha: float = 7.2
-    beta: float = 0.5
-    c: float = 0.27
-    d: float = 0.36
-
-    w_expected: float = alpha * (q2**beta)
-    h_expected: float = c * (q2**d)
-
-    # When W_obs matches W_expected, depth must equal h_expected:
-    h_normal: float = (w_expected / w_expected) * h_expected
-    assert np.isclose(h_normal, h_expected)
-    assert 4.5 < h_normal < 5.5  # lower Rhine depth is ~4.8 m
-
-    # Narrow constriction (half width):
-    w_narrow: float = 0.5 * w_expected
-    h_narrow: float = (w_expected / w_narrow) * h_expected
-    assert np.isclose(h_narrow, 2.0 * h_expected)
-
-    # Wide braided section (double width):
-    w_wide: float = 2.0 * w_expected
-    h_wide: float = (w_expected / w_wide) * h_expected
-    assert np.isclose(h_wide, 0.5 * h_expected)
-
-    assert h_narrow > h_normal > h_wide
-
-
 class DummyModel:
     """Minimal mock model providing parameters config for Routing tests."""
 
@@ -583,10 +520,9 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
 
     routing = object.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(4)  # ty:ignore[invalid-assignment]
     routing.config = {
         "max_threads": None,
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -704,9 +640,8 @@ def test_routing_updates_rivers_geometry() -> None:
 
     routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(5)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -783,9 +718,8 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
 
     routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(3)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -847,9 +781,8 @@ def test_routing_unobserved_channel_width_depth_estimation() -> None:
 
     routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(3)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -926,7 +859,6 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
     routing = Routing.__new__(Routing)
     routing.config = {
         "max_threads": None,
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1039,9 +971,8 @@ def test_unrepresented_river_geometry_confluence() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(4)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1126,9 +1057,8 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1207,9 +1137,8 @@ def test_unrepresented_river_cascade_with_bankfull_multiplier() -> None:
     routing: Routing = Routing.__new__(Routing)
     # Configure calibration multiplier to 2.0 to verify non-compounding
     routing.model = DummyModel(2.0)  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1293,9 +1222,8 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1365,9 +1293,8 @@ def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1440,9 +1367,8 @@ def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1516,9 +1442,8 @@ def test_unrepresented_river_confluence_both_observed_widths() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1585,9 +1510,8 @@ def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1656,9 +1580,8 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1726,9 +1649,8 @@ def test_unrepresented_river_non_positive_width_raises_assertion() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1791,9 +1713,8 @@ def test_parabolic_channel_geometry_and_mean_depth_conversion() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1880,9 +1801,8 @@ def test_routing_calculate_bankfull_depth_continuity_scaling_with_observed_width
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(4)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -1979,9 +1899,8 @@ def test_routing_calculate_bankfull_depth_flag_revert_machinery() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -2055,12 +1974,11 @@ def test_routing_missing_config_keys_raise_key_error() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     widths: ArrayFloat32 = np.array([50.0], dtype=np.float32)
 
     # Missing river_width entirely raises KeyError
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -2077,7 +1995,6 @@ def test_routing_missing_config_keys_raise_key_error() -> None:
 
     # Missing use_observed_width_as_bankfull raises KeyError
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -2104,9 +2021,8 @@ def test_routing_calculate_bankfull_width() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(3)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -2169,9 +2085,8 @@ def test_routing_unobserved_river_width_and_depth_uses_parameters() -> None:
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -2245,7 +2160,7 @@ def test_bankfull_discharge_multiplier_scaling() -> None:
     def make_routing(mult: float) -> Routing:
         r: Routing = Routing.__new__(Routing)
         r.model = DummyModel(mult)  # ty:ignore[invalid-assignment]
-        r.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+        r.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
         r.config = {
             "river_width": {
                 "parameters": {
@@ -2514,9 +2429,8 @@ def test_routing_calculate_bankfull_width_and_depth_limited_by_floodplain() -> N
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(4)  # ty:ignore[invalid-assignment]
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -2605,14 +2519,14 @@ def test_routing_calculate_bankfull_width_and_depth_limited_by_floodplain() -> N
 
 
 def test_routing_calculate_bankfull_depth_slope_scaling_swot() -> None:
-    """Verify that calculate_bankfull_depth scales depth with reach slope following Bjerklie et al. (2005).
+    """Verify that calculate_bankfull_depth scales depth with reach slope following hydraulic geometry.
 
     Tests that:
-    1. Bankfull depth follows h_mean = c * Q2^d * max(S, S_min)^e with Bjerklie et al. (2005) parameters
+    1. Bankfull depth follows h_mean = c * Q2^d * max(S, S_min)^e with hydraulic geometry parameters
        c = 0.24, d = 0.34, e = -0.13.
     2. Flatter reach (S = 0.0001) has greater depth and higher conveyance than steep reach (S = 0.01).
     3. The ratio between flat and steep reach depths matches (S_flat / S_steep)^e = (1e-4 / 1e-2)^(-0.13) = 100^0.13 ≈ 1.820.
-    4. Reaches with zero or sub-floor slope are floored at 3e-5 m/m and do not blow up or produce NaNs.
+    4. Reaches with zero or sub-floor slope are floored at 1e-4 m/m and do not blow up or produce NaNs.
     5. When observed width is available, depth scales inversely via continuity to preserve bankfull area.
     """
     from geb.hydrology.routing import Routing, RoutingVariables
@@ -2623,7 +2537,6 @@ def test_routing_calculate_bankfull_depth_slope_scaling_swot() -> None:
     d_val: float = 0.34
     e_val: float = -0.13
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": c_val,
@@ -2649,7 +2562,7 @@ def test_routing_calculate_bankfull_depth_slope_scaling_swot() -> None:
     # 4 reaches:
     # Reach 0: steep (S = 0.01)
     # Reach 1: flat lowland (S = 0.0001)
-    # Reach 2: dead flat / lake (S = 0.0, should be floored at 3e-5)
+    # Reach 2: dead flat / lake (S = 0.0, should be floored at 1e-4)
     # Reach 3: narrow observed width (W = 36.0m = 0.5 * W_expected, S = 0.001)
     slopes: ArrayFloat32 = np.array([0.01, 0.0001, 0.0, 0.001], dtype=np.float32)
     widths: ArrayFloat32 = np.array(
@@ -2702,8 +2615,8 @@ def test_routing_calculate_bankfull_depth_slope_scaling_swot() -> None:
     expected_ratio: float = (0.0001 / 0.01) ** e_val
     assert np.isclose(float(depths[1] / depths[0]), expected_ratio, rtol=1e-3)
 
-    # 3. Dead flat reach (slope 0.0) is floored at 3e-5:
-    h_mean_floor: float = c_val * (q2_val**d_val) * (3e-5**e_val)
+    # 3. Dead flat reach (slope 0.0) is floored at 1e-4:
+    h_mean_floor: float = c_val * (q2_val**d_val) * (1e-4**e_val)
     h_bf_floor: float = 1.5 * h_mean_floor
     assert np.isclose(float(depths[2]), h_bf_floor, rtol=1e-3)
     assert np.all(np.isfinite(depths))
@@ -2741,7 +2654,6 @@ def test_routing_calculate_bankfull_bjerklie_coupled_system() -> None:
     e_val: float = -0.20
 
     routing.config = {
-        "minimum_river_slope_m_per_m": 0.0001,
         "river_depth": {
             "parameters": {
                 "c": c_val,

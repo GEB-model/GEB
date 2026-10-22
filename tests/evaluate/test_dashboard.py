@@ -1056,8 +1056,8 @@ def test_read_run_completion_time(tmp_path: Path) -> None:
 
     report_dir: Path = run_dir / "report"
     report_dir.mkdir(parents=True, exist_ok=True)
-    assert read_run_completion_time(report_dir) == completion_time
-    assert read_run_completion_timestamp_for_filename(report_dir) == completion_ts
+    assert read_run_completion_time(report_dir) is None
+    assert read_run_completion_timestamp_for_filename(report_dir) is None
 
 
 def test_write_discharge_dashboard_with_run_and_completion_date(tmp_path: Path) -> None:

@@ -38,6 +38,8 @@ from .geometry import (
     get_lake_factor,
 )
 from .kinematic import update_node_kinematic as update_node_kinematic
+
+MINIMUM_RIVER_SLOPE_M_PER_M: np.float32 = np.float32(1e-4)
 from .local_inertial import LocalInertial as LocalInertial
 
 if TYPE_CHECKING:
@@ -996,17 +998,15 @@ class Routing(Module):
         valid_mannings: ArrayFloat32 = manning_grid[valid_river_cell_mask]
 
         raw_slope: ArrayFloat32 = self.grid.var.river_slope_m_per_m
-        matched_slope: ArrayFloat32 = (
-            raw_slope
-            if raw_slope.shape == valid_river_cell_mask.shape
-            else raw_slope[: len(valid_river_cell_mask)]
+        assert raw_slope.shape == valid_river_cell_mask.shape, (
+            f"river_slope_m_per_m shape {raw_slope.shape} does not match routing grid {valid_river_cell_mask.shape}"
         )
         grid_dict: dict[str, Any] = {
             "river_id": valid_reach_ids,
             "width": valid_widths,
             "depth": valid_depths,
             "manning": valid_mannings,
-            "slope": matched_slope[valid_river_cell_mask],
+            "slope": raw_slope[valid_river_cell_mask],
             "river_width_alpha": self.var.river_width_alpha[valid_river_cell_mask],
             "river_width_beta": self.var.river_width_beta[valid_river_cell_mask],
         }
@@ -1202,9 +1202,9 @@ class Routing(Module):
             slope_val: float = (
                 float(valid_up["slope"].mean())
                 if "slope" in valid_up and valid_up["slope"].notnull().any()
-                else float(self.config["minimum_river_slope_m_per_m"])
+                else float(MINIMUM_RIVER_SLOPE_M_PER_M)
             )
-            eff_slope: float = max(slope_val, 3e-5)
+            eff_slope: float = max(slope_val, float(MINIMUM_RIVER_SLOPE_M_PER_M))
             slope_factor: float = eff_slope**combined_e
             expected_mean_channel_depth: float = (
                 combined_c * (bankfull_q**combined_d) * slope_factor
@@ -1381,23 +1381,17 @@ class Routing(Module):
     ) -> ArrayFloat32:
         """Calculate bankfull channel depth across the routing grid using hydraulic continuity.
 
-        Derives bankfull depth (meters) based on the coupled hydraulic geometry of Bjerklie et al. (2003)
-        (doi:10.1016/S0022-1694(03)00129-X), which models mean channel depth as a joint power law of
-        bankfull discharge and reach slope:
+        Derives bankfull depth (meters) based on coupled downstream hydraulic geometry,
+        which models mean channel depth as a joint power law of bankfull discharge and reach slope:
             h_mean_expected = c * Q^d * max(S, S_min)^e
         where default c=0.15, d=0.21, e=-0.20.
 
-        Coupled derivation of width and depth from Bjerklie et al. (2003):
-            1. Bankfull Width (Table 3):
-               Single-variate regression across USGS streamgages yields:
-                   Q = 0.11 * W^1.62  =>  W = 3.91 * Q^0.62 (default_alpha = 3.91, beta = 0.62)
-            2. Bankfull Depth (Eq. 17 & Table 4):
-               The universal discharge relation is:
-                   Q = 7.22 * W^1.02 * Y^1.74 * S^0.35
-               Substituting Bjerklie width W = 3.91 * Q^0.62:
-                   Q = 7.22 * (3.91 * Q^0.62)^1.02 * Y^1.74 * S^0.35 = 28.94 * Q^0.632 * Y^1.74 * S^0.35
-                   Y^1.74 = (1 / 28.94) * Q^0.368 * S^(-0.35) = 0.03455 * Q^0.368 * S^(-0.35)
-                   Y = (0.03455)^(1 / 1.74) * Q^(0.368 / 1.74) * S^(-0.35 / 1.74) = 0.15 * Q^0.21 * S^(-0.20)
+        Derivation of width and depth parameters:
+            1. Bankfull Width:
+               Single-variate regression yields W = 3.91 * Q^0.62 (default_alpha = 3.91, beta = 0.62).
+            2. Bankfull Depth:
+               The universal discharge relation is Q = 7.22 * W^1.02 * Y^1.74 * S^0.35.
+               Substituting width W = 3.91 * Q^0.62 yields Y = 0.15 * Q^0.21 * S^(-0.20).
                This coupled formulation ensures that channel conveyance reproduces the universal discharge equation
                without cross-sectional distortion in both steep and flat rivers.
 
@@ -1499,13 +1493,12 @@ class Routing(Module):
         )
 
         raw_slope_grid: ArrayFloat32 = self.grid.var.river_slope_m_per_m
+        assert raw_slope_grid.shape == bankfull_discharge_m3_s.shape, (
+            f"river_slope_m_per_m shape {raw_slope_grid.shape} does not match bankfull discharge {bankfull_discharge_m3_s.shape}"
+        )
         effective_slope: ArrayFloat32 = np.maximum(
-            (
-                raw_slope_grid
-                if raw_slope_grid.shape == bankfull_discharge_m3_s.shape
-                else raw_slope_grid[: len(bankfull_discharge_m3_s)]
-            ),
-            np.float32(3e-5),
+            raw_slope_grid,
+            MINIMUM_RIVER_SLOPE_M_PER_M,
         )
         slope_factor: ArrayFloat32 = effective_slope**depth_e
         expected_mean_channel_depth_m: ArrayFloat32 = (
@@ -1879,9 +1872,6 @@ class Routing(Module):
         )
 
         # Channel gradient (fraction, dy/dx) derived dynamically from DEM bed elevation drop
-        minimum_river_slope: np.float32 = np.float32(
-            self.config["minimum_river_slope_m_per_m"]
-        )
         bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
             self.model.files["grid"]["routing/bankfull_river_elevation_m"]
         )
@@ -1907,10 +1897,10 @@ class Routing(Module):
         slope: ArrayFloat32 = np.where(
             has_ds,
             bed_drop / self.grid.var.river_length,
-            minimum_river_slope,
+            MINIMUM_RIVER_SLOPE_M_PER_M,
         )
         self.grid.var.river_slope_m_per_m = np.maximum(
-            slope, minimum_river_slope
+            slope, MINIMUM_RIVER_SLOPE_M_PER_M
         ).astype(np.float32)
         assert np.all(self.grid.var.river_slope_m_per_m > np.float32(0.0)), (
             "All river slopes must be strictly positive."
@@ -2027,7 +2017,7 @@ class Routing(Module):
             river_width = alpha * discharge^beta
 
         for alpha a default value of 3.91 is used, and beta is set to 0.62 based on
-        Bjerklie et al. (2003) (doi:10.1016/S0022-1694(03)00129-X, Table 3).
+        default configuration parameters.
 
         Re-arranging for alpha gives:
 

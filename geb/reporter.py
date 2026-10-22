@@ -894,8 +894,6 @@ class Reporter:
         self.variables_to_report = copy.deepcopy(self.model.config["report"])
         del self.variables_to_report["_config"]
 
-        # Ignore the removed option in older configurations: routing requires this history.
-        self.variables_to_report.pop("_outflow_points", None)
         if self.model.mode == "w" and self.model.simulate_hydrology:
             routing: Routing = self.model.hydrology.routing
             rivers: gpd.GeoDataFrame = routing.get_active_rivers()

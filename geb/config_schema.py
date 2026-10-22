@@ -194,11 +194,11 @@ class RiverWidthParameters(BaseModel):
 
     default_alpha: float = Field(
         3.91,
-        description="Default alpha parameter for bankfull width = alpha * Q^beta (Bjerklie et al. 2003).",
+        description="Default alpha parameter for bankfull width = alpha * Q^beta.",
     )
     beta: float = Field(
         0.62,
-        description="Beta parameter for bankfull width = alpha * Q^beta (Bjerklie et al. 2003).",
+        description="Beta parameter for bankfull width = alpha * Q^beta.",
     )
 
 
@@ -220,7 +220,7 @@ class RiverDepthParameters(BaseModel):
         description="Power law discharge exponent d for mean channel depth = c * Q^d * S^e."
     )
     e: float = Field(
-        description="Power law slope exponent e for mean channel depth = c * Q^d * S^e (Bjerklie et al. 2005)."
+        description="Power law slope exponent e for mean channel depth = c * Q^d * S^e."
     )
     min_depth_m: float = Field(
         ge=0.0,
@@ -275,13 +275,6 @@ class RoutingConfig(BaseModel):
             "Maximum number of CPU threads to allocate for the local inertial routing "
             "substep solver. If None, automatically determined based on domain size, "
             "available physical cores, and Slurm allocation."
-        ),
-    )
-    minimum_river_slope_m_per_m: float = Field(
-        1e-4,
-        gt=0.0,
-        description=(
-            "Minimum channel slope used to parameterize kinematic-wave routing (m/m)."
         ),
     )
     retention_basin_release_threshold_factor: float = Field(
