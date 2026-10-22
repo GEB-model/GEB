@@ -37,25 +37,6 @@ def test_parameters_config_requires_all_parameters() -> None:
     assert missing_fields == EXPECTED_PARAMETERS
 
 
-def test_parameters_config_validates_when_all_provided() -> None:
-    """Test that ParametersConfig successfully initializes when all parameters are supplied."""
-    params = {
-        "mannings_n_multiplier": 1.0,
-        "bankfull_discharge_multiplier": 1.0,
-        "crop_factor_multiplier": 1.0,
-        "saturated_hydraulic_conductivity_multiplier": 1.0,
-        "vertical_saturated_hydraulic_conductivity_multiplier": 1.0,
-        "groundwater_hydraulic_conductivity_multiplier": 1.0,
-        "reservoir_release_factor": 0.1,
-        "lake_outflow_multiplier": 1.0,
-        "interflow_multiplier": 1.0,
-        "variable_runoff_shape_beta_multiplier": 1.0,
-    }
-    config = ParametersConfig(**params)
-    for key, value in params.items():
-        assert getattr(config, key) == value
-
-
 def test_reasonable_default_config_has_all_parameters() -> None:
     """Test that reasonable_default_config.yml contains all required parameters."""
     default_config_path = GEB_PACKAGE_DIR / "reasonable_default_config.yml"

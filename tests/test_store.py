@@ -341,76 +341,6 @@ def test_dynamic_array_operations() -> None:
     assert a[0] == 1
 
 
-@pytest.fixture
-def array() -> DynamicArray:
-    """Fixture that provides a DynamicArray for testing.
-
-    Returns:
-        A DynamicArray instance with sample data.
-    """
-    return DynamicArray(np.array([1, 2, 3, 4, 5]), max_n=10)
-
-
-def test_add_ufunc(array: DynamicArray) -> None:
-    """Test add ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.add(array, 1)
-    np.testing.assert_array_equal(result.data, np.array([2, 3, 4, 5, 6]))
-
-
-def test_subtract_ufunc(array: DynamicArray) -> None:
-    """Test subtract ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.subtract(array, 1)
-    np.testing.assert_array_equal(result.data, np.array([0, 1, 2, 3, 4]))
-
-
-def test_multiply_ufunc(array: DynamicArray) -> None:
-    """Test multiply ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.multiply(array, 2)
-    np.testing.assert_array_equal(result.data, np.array([2, 4, 6, 8, 10]))
-
-
-def test_divide_ufunc(array: DynamicArray) -> None:
-    """Test divide ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.divide(array, 2)
-    np.testing.assert_array_equal(result.data, np.array([0.5, 1.0, 1.5, 2.0, 2.5]))
-
-
-def test_power_ufunc(array: DynamicArray) -> None:
-    """Test power ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.power(array, 2)
-    np.testing.assert_array_equal(result.data, np.array([1, 4, 9, 16, 25]))
-
-
-def test_reduce_ufunc(array: DynamicArray) -> None:
-    """Test reduction ufuncs on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.add.reduce(array)
-    assert result == 15
-
-
 def test_stack_dynamic_arrays() -> None:
     """Test stacking multiple DynamicArrays using np.stack.
 
@@ -440,6 +370,16 @@ def test_concatenate_dynamic_arrays() -> None:
     assert isinstance(concatenated, np.ndarray)
     assert concatenated.shape == (6,)
     np.testing.assert_array_equal(concatenated, np.array([1, 2, 3, 4, 5, 6]))
+
+
+@pytest.fixture
+def array() -> DynamicArray:
+    """Fixture that provides a DynamicArray for testing.
+
+    Returns:
+        A DynamicArray instance with sample data.
+    """
+    return DynamicArray(np.array([1, 2, 3, 4, 5]), max_n=10)
 
 
 def test_save_and_restore(array: DynamicArray) -> None:

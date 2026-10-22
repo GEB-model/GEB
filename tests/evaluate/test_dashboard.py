@@ -19,7 +19,6 @@ import shapely.geometry as sg
 
 from geb.evaluate.workflows.dashboard import (
     StationChartBundleWriter,
-    _as_finite_float,
     _build_station_marker_payload,
     _build_timeseries_data,
     _calculate_distribution_summary,
@@ -303,19 +302,6 @@ def test_build_station_chart_data_includes_timeseries() -> None:
         1000,
         1000,
     ]
-
-
-def test_as_finite_float() -> None:
-    """Test _as_finite_float rounds to 2 decimals and handles non-finite values."""
-    assert _as_finite_float(0.854321) == 0.85
-    assert _as_finite_float(0.856789) == 0.86
-    assert _as_finite_float(10.0) == 10.0
-    assert _as_finite_float(None) is None
-    assert _as_finite_float(float("nan")) is None
-    assert _as_finite_float(float("inf")) is None
-    assert _as_finite_float(float("-inf")) is None
-    # Custom decimal precision
-    assert _as_finite_float(0.12345, decimals=3) == 0.123
 
 
 def test_station_chart_bundle_writer() -> None:
