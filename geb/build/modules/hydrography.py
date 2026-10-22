@@ -1923,7 +1923,7 @@ class Hydrography(BuildModelBase):
         # also set stations (only those that are in coast_rp)
         self.set_geom(stations, "water_levels/stations_coast_rp")
 
-    def setup_sea_level_projections(self, percentile: float) -> None:
+    def setup_sea_level_projections(self, projection_quantile: float) -> None:
         """Sets up the AR6 sea level projections for the model.
 
         For each water level station the nearest sea level projection location (great-circle distance) is
@@ -1931,15 +1931,15 @@ class Hydrography(BuildModelBase):
         interpolated (and linearly extrapolated) to annual values for 2000-2100.
 
         Args:
-            percentile: AR6 quantile to select (fraction between 0 and 1). Default is 0.5 (median projection).
+            projection_quantile: AR6 quantile to select (fraction between 0 and 1). Default is 0.5 (median projection).
         """
         # get the scenario from the model configuration
         scenario = self.ssp_rcp
         self.logger.info(
-            f"Setting up sea level rise data for scenario {scenario}, using {percentile} percentile of AR6 projections"
+            f"Setting up sea level rise data for scenario {scenario}, using {projection_quantile} quantile of AR6 projections"
         )
         sea_level_change_m: xr.Dataset = self.data_catalog.fetch("ar6").read(
-            scenario, percentile
+            scenario, projection_quantile
         )
 
         stations: gpd.GeoDataFrame = gpd.read_parquet(
