@@ -751,23 +751,32 @@ class Floods(Module):
 
         for subbasin_id, subbasin in riverine_active_subbasin.iterrows():
             downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
-
+            assert downstream_basin != None
             if not (downstream_basin in subbasins.index or downstream_basin == -1):
                 all_subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
                 region_subbasins = all_subbasins[
                     all_subbasins.index.isin([subbasin_id, downstream_basin])
                 ].copy()
+                if not downstream_basin in all_subbasins.index:
+                    downstream_basin = (
+                        -1
+                    )  # set to -1 if downstream basin is not in the subbasins file
+                    self.model.logger.warning(
+                        f"Downstream basin {downstream_basin} for subbasin {subbasin_id} is not in the subbasins file. Setting downstream basin to -1 (assuming coastal outflow). This may lead to incorrect results if the downstream basin is actually a river basin."
+                    )
             else:
                 region_subbasins = subbasins[
                     subbasins.index.isin([subbasin_id, downstream_basin])
                 ].copy()
-
             region_rivers = rivers.copy()
 
             # if there is a downstream basin, mark it as downstream outflow subbasin
             if downstream_basin != -1:
                 region_subbasins.at[downstream_basin, "is_downstream_outflow"] = True
                 region_rivers.at[downstream_basin, "is_downstream_outflow"] = True
+                assert not region_subbasins["geometry"].isnull().any(), (
+                    f"Subbasins {region_subbasins.index.tolist()} have a missing geometry. Cannot build SFINCS model."
+                )
 
                 sfincs_inland_root_model = self.build(
                     name=f"inland_subbasin_{subbasin_id}",
