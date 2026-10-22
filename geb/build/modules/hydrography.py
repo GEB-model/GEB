@@ -2026,11 +2026,11 @@ class Hydrography(BuildModelBase):
         self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
 
     @build_method(depends_on=["set_ssp"], required=True)
-    def setup_coastal_water_levels(self, percentile: float = 0.5) -> None:
+    def setup_coastal_water_levels(self, projection_quantile: float = 0.5) -> None:
         """Set up water levels and station data for the model.
 
         Args:
-            percentile: Sea level rise projection quantile as a fraction between 0 and 1. Default is 0.5 (median projection).
+            projection_quantile: Sea level rise projection quantile as a fraction between 0 and 1. Default is 0.5 (median projection).
         """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info(
