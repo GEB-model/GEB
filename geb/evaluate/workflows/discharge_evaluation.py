@@ -22,6 +22,8 @@ from geb.evaluate.workflows.dashboard import (
     build_station_chart_data,
     determine_main_time_index,
     load_discharge_dashboard_geometries,
+    read_run_completion_time,
+    read_run_completion_timestamp_for_filename,
     serialize_main_timeline,
     write_discharge_dashboard,
 )
@@ -128,9 +130,18 @@ def evaluate_discharge(
         start_year=start_year,
         end_year=end_year,
     )
+    run_output_folder: Path = (
+        Path(self.model.config["general"]["output_folder"]) / run_name
+    )
+    completion_timestamp: str | None = read_run_completion_timestamp_for_filename(
+        run_output_folder
+    )
+    completion_timestamp_suffix: str = (
+        f"_{completion_timestamp}" if completion_timestamp else ""
+    )
     dashboard_path: Path = (
         evaluation_paths.plot_folder
-        / f"discharge_evaluation_map{evaluation_paths.suffix}.html"
+        / f"discharge_evaluation_map{evaluation_paths.suffix}{completion_timestamp_suffix}.html"
     )
     self.model.logger.info(
         "Evaluating discharge skill scores for %s.",
@@ -196,9 +207,6 @@ def evaluate_discharge(
         "timezone_utc_offset"
     ].fillna(0.0)
 
-    run_output_folder: Path = (
-        Path(self.model.config["general"]["output_folder"]) / run_name
-    )
     report_folder: Path = run_output_folder / "report"
     if not report_folder.exists():
         raise FileNotFoundError(
@@ -605,6 +613,9 @@ def evaluate_discharge(
             station_characteristics=dashboard_characteristics,
             excluded_stations=excluded_stations,
             chart_timeline=chart_timelines,
+            run_output_folder=run_output_folder,
+            run_name=run_name,
+            completion_date=read_run_completion_time(run_output_folder),
         )
         self.model.logger.info("Discharge dashboard created: %s", dashboard_path)
 

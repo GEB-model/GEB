@@ -145,10 +145,12 @@ def _gather_inputs(
     storage_in: ArrayFloat64,
     sideflow_in: ArrayFloat32,
     evap_in: ArrayFloat32,
+    trans_in: ArrayFloat32,
     q_out: ArrayFloat32,
     storage_out: ArrayFloat64,
     sideflow_out: ArrayFloat32,
     evap_out: ArrayFloat32,
+    trans_out: ArrayFloat32,
 ) -> None:
     """Gathers and permutes multiple routing input arrays into topological order.
 
@@ -161,10 +163,12 @@ def _gather_inputs(
         storage_in: Input river storage volume array (m³).
         sideflow_in: Input lateral sideflow volume array (m³).
         evap_in: Input potential evaporation volume array (m³).
+        trans_in: Input potential transmission loss volume array (m³).
         q_out: Target pre-allocated discharge array (m³/s).
         storage_out: Target pre-allocated river storage array (m³).
         sideflow_out: Target pre-allocated sideflow array (m³).
         evap_out: Target pre-allocated evaporation array (m³).
+        trans_out: Target pre-allocated transmission loss array (m³).
     """
     n: int = len(sorted_idxs)
     for i in prange(n):
@@ -173,6 +177,7 @@ def _gather_inputs(
         storage_out[i] = storage_in[idx]
         sideflow_out[i] = sideflow_in[idx]
         evap_out[i] = evap_in[idx]
+        trans_out[i] = trans_in[idx]
 
 
 @njit(fastmath=True, parallel=True)
@@ -180,10 +185,12 @@ def _scatter_outputs(
     sorted_idxs: ArrayInt32,
     q_perm: ArrayFloat32,
     evap_perm: ArrayFloat32,
+    trans_perm: ArrayFloat32,
     over_abs_perm: ArrayFloat32,
     storage_perm: ArrayFloat64,
     q_out: ArrayFloat32,
     evap_out: ArrayFloat32,
+    trans_out: ArrayFloat32,
     over_abs_out: ArrayFloat32,
     storage_out: ArrayFloat64,
 ) -> None:
@@ -196,10 +203,12 @@ def _scatter_outputs(
         sorted_idxs: Precomputed 1D permutation index array.
         q_perm: Permuted channel discharge array (m³/s).
         evap_perm: Permuted actual evaporation volume array (m³).
+        trans_perm: Permuted actual transmission loss volume array (m³).
         over_abs_perm: Permuted over-abstraction deficit array (m³).
         storage_perm: Permuted river storage volume array (m³).
         q_out: Target original-order discharge array (m³/s).
         evap_out: Target original-order actual evaporation array (m³).
+        trans_out: Target original-order actual transmission loss array (m³).
         over_abs_out: Target original-order over-abstraction array (m³).
         storage_out: Target original-order river storage array (m³).
     """
@@ -208,6 +217,7 @@ def _scatter_outputs(
         idx: int = sorted_idxs[i]
         q_out[idx] = q_perm[i]
         evap_out[idx] = evap_perm[i]
+        trans_out[idx] = trans_perm[i]
         over_abs_out[idx] = over_abs_perm[i]
         storage_out[idx] = storage_perm[i]
 
@@ -1287,9 +1297,11 @@ def _update_continuity_and_cfl(
     kinematic_inflow_rate: ArrayFloat32,
     sideflow_m3_inertial: ArrayFloat32,
     evaporation_m3_inertial: ArrayFloat32,
+    transmission_loss_m3_inertial: ArrayFloat32,
     river_storage_m3_inertial: ArrayFloat64,
     over_abstraction_m3_inertial: ArrayFloat32,
     actual_evaporation_m3_inertial: ArrayFloat32,
+    actual_transmission_loss_m3_inertial: ArrayFloat32,
     geom: InertialGeometry,
     topo: InertialTopology,
     buffers: SubstepBuffers,
@@ -1309,9 +1321,11 @@ def _update_continuity_and_cfl(
         kinematic_inflow_rate: Upstream inflow rates from kinematic domain (m³/s).
         sideflow_m3_inertial: Macro-timestep lateral sideflow volume (m³).
         evaporation_m3_inertial: Macro-timestep potential channel evaporation volume (m³).
+        transmission_loss_m3_inertial: Macro-timestep potential river transmission loss volume (m³).
         river_storage_m3_inertial: Primary reach water storage volume array (m³).
         over_abstraction_m3_inertial: Output over-abstraction deficit volume accumulator (m³).
         actual_evaporation_m3_inertial: Output actual evaporation volume accumulator (m³).
+        actual_transmission_loss_m3_inertial: Output actual transmission loss volume accumulator (m³).
         geom: Static channel and floodplain geometry lookup tables.
         topo: Network connectivity and topological ordering structure.
         buffers: Pre-allocated workspace scratch buffers.
@@ -1430,7 +1444,16 @@ def _update_continuity_and_cfl(
                 evaporation_volume, np.float32(new_storage)
             )
             actual_evaporation_m3_inertial[reach_idx] += actual_evaporation
-            new_storage -= float(actual_evaporation)
+            new_storage = max(new_storage - float(actual_evaporation), 0.0)
+
+            trans_loss_volume: np.float32 = (
+                transmission_loss_m3_inertial[reach_idx] * inv_dt_macro
+            ) * dt_substep
+            actual_trans_loss: np.float32 = min(
+                trans_loss_volume, np.float32(new_storage)
+            )
+            actual_transmission_loss_m3_inertial[reach_idx] += actual_trans_loss
+            new_storage = max(new_storage - float(actual_trans_loss), 0.0)
 
             river_storage_m3_inertial[reach_idx] = new_storage
             discharge_vol_sum_inertial[reach_idx] += outflow_rate * dt_substep
@@ -1515,8 +1538,10 @@ def _run_inertial_substeps(
     river_storage_m3_inertial: ArrayFloat64,
     sideflow_m3_inertial: ArrayFloat32,
     evaporation_m3_inertial: ArrayFloat32,
+    transmission_loss_m3_inertial: ArrayFloat32,
     over_abstraction_m3_inertial: ArrayFloat32,
     actual_evaporation_m3_inertial: ArrayFloat32,
+    actual_transmission_loss_m3_inertial: ArrayFloat32,
     updated_discharge_m3_s_inertial: ArrayFloat32,
     kinematic_inflow_rate: ArrayFloat32,
     geom: InertialGeometry,
@@ -1545,8 +1570,10 @@ def _run_inertial_substeps(
         river_storage_m3_inertial: Primary reach water storage volume array (m³).
         sideflow_m3_inertial: Macro-timestep lateral sideflow volume (m³).
         evaporation_m3_inertial: Macro-timestep potential channel evaporation volume (m³).
+        transmission_loss_m3_inertial: Macro-timestep potential river transmission loss volume (m³).
         over_abstraction_m3_inertial: Accumulator tracking unfulfilled abstraction deficit volume (m³).
         actual_evaporation_m3_inertial: Accumulator tracking actual volume evaporated from channel (m³).
+        actual_transmission_loss_m3_inertial: Accumulator tracking actual volume lost to groundwater (m³).
         updated_discharge_m3_s_inertial: Output array storing timestep-averaged reach discharge (m³/s).
         kinematic_inflow_rate: Upstream inflow rates from kinematic domain (m³/s).
         geom: Static channel and floodplain geometry lookup tables.
@@ -1683,9 +1710,11 @@ def _run_inertial_substeps(
             kinematic_inflow_rate=kinematic_inflow_rate,
             sideflow_m3_inertial=sideflow_m3_inertial,
             evaporation_m3_inertial=evaporation_m3_inertial,
+            transmission_loss_m3_inertial=transmission_loss_m3_inertial,
             river_storage_m3_inertial=river_storage_m3_inertial,
             over_abstraction_m3_inertial=over_abstraction_m3_inertial,
             actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
+            actual_transmission_loss_m3_inertial=actual_transmission_loss_m3_inertial,
             geom=geom,
             topo=topo,
             buffers=buffers,
@@ -1716,6 +1745,9 @@ def _run_inertial_substeps(
     )
     actual_evaporation_m3_inertial[:] = np.minimum(
         actual_evaporation_m3_inertial, evaporation_m3_inertial
+    )
+    actual_transmission_loss_m3_inertial[:] = np.minimum(
+        actual_transmission_loss_m3_inertial, transmission_loss_m3_inertial
     )
 
     return substep_count

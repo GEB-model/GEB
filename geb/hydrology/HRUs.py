@@ -309,6 +309,7 @@ class GridVariables(Bucket):
     river_storage_m3: ArrayFloat64
     river_slope_m_per_m: ArrayFloat32
     water_stage_m: ArrayFloat32
+    river_transmission_loss_m3: ArrayFloat32
 
 
 class Grid(BaseVariables):

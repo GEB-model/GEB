@@ -31,7 +31,12 @@ from geb.workflows import balance_check
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom, read_table
 
-from .geometry import NUM_FLOODPLAIN_LEVELS, estimate_outflow_height, get_lake_factor
+from .geometry import (
+    NUM_FLOODPLAIN_LEVELS,
+    compute_top_width_from_overbank_depth,
+    estimate_outflow_height,
+    get_lake_factor,
+)
 from .kinematic import update_node_kinematic as update_node_kinematic
 from .local_inertial import LocalInertial as LocalInertial
 
@@ -172,36 +177,186 @@ def get_channel_ratio(
 
 
 @njit(fastmath=True, parallel=True)
-def _compute_potential_river_evaporation(
-    alpha: ArrayFloat32,
-    beta: ArrayFloat32,
+def calculate_wetted_channel_area(
+    use_kinematic: ArrayBool,
+    water_stage_m: ArrayFloat32,
+    bed_elevation_m: ArrayFloat32,
+    bankfull_width_m: ArrayFloat32,
+    bankfull_depth_m: ArrayFloat32,
+    shape_exponent: ArrayFloat32,
+    floodplain_profile_widths_m: TwoDArrayFloat32,
+    floodplain_side_slope_m_per_m: ArrayFloat32,
+    river_width_alpha: ArrayFloat32,
+    river_width_beta: ArrayFloat32,
     discharge_m3_s: ArrayFloat32,
-    river_length: ArrayFloat32,
-    cell_area: ArrayFloat32,
-    is_wb: ArrayBool,
-    ref_et: ArrayFloat32,
-    out: ArrayFloat32,
+    river_length_m: ArrayFloat32,
+    cell_area_m2: ArrayFloat32,
+    is_waterbody: ArrayBool,
+    wetted_channel_area_m2: ArrayFloat32,
 ) -> None:
-    """Computes potential evaporation in river reaches across the grid in parallel without allocations.
+    """Calculates wetted channel area for all river reaches across the grid in parallel without allocations.
+
+    Differentiates between local inertial and kinematic routing reaches:
+    - Local Inertial: Top width is determined from simulated water surface elevation relative
+      to channel bed and cross-sectional geometry (in-bank power-law profile and overbank multi-level
+      floodplain profile widths).
+    - Kinematic: Top width is determined from instantaneous discharge using the hydraulic
+      geometry power law w = alpha * |Q|^beta.
 
     Args:
-        alpha: Channel width coefficient array.
-        beta: Channel width exponent array.
+        use_kinematic: Boolean mask identifying kinematic wave reaches (True) vs local inertial reaches (False).
+        water_stage_m: River water surface elevation array (meters).
+        bed_elevation_m: Channel bed elevation array (meters).
+        bankfull_width_m: Main channel bankfull width array (meters).
+        bankfull_depth_m: Bankfull channel depth before floodplain spilling occurs (meters).
+        shape_exponent: Power-law cross-sectional shape exponent array (dimensionless).
+        floodplain_profile_widths_m: 2D array of 10-point cross-sectional top widths at fixed depth levels (meters).
+        floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
+        river_width_alpha: Channel width coefficient array for hydraulic geometry power law.
+        river_width_beta: Channel width exponent array for hydraulic geometry power law.
         discharge_m3_s: Instantaneous discharge array (m³/s).
-        river_length: Channel length per cell (meters).
-        cell_area: Planform area per grid cell (m²).
-        is_wb: Boolean mask of lake/waterbody cells.
-        ref_et: Reference evapotranspiration rate array for water per cell (meters).
-        out: Pre-allocated output array receiving potential evaporation volume (m³).
+        river_length_m: Channel length per grid cell (meters).
+        cell_area_m2: Planform area per grid cell (m²).
+        is_waterbody: Boolean mask identifying lake/waterbody cells.
+        wetted_channel_area_m2: Pre-allocated output array receiving wetted channel area (m²).
     """
-    n: int = alpha.shape[0]
+    n: int = use_kinematic.shape[0]
     for i in prange(n):
-        if is_wb[i]:
-            out[i] = np.float32(0.0)
+        if is_waterbody[i] or river_length_m[i] <= np.float32(0.0):
+            wetted_channel_area_m2[i] = np.float32(0.0)
+            continue
+
+        if use_kinematic[i]:
+            # Kinematic wave reaches derive channel width from instantaneous discharge
+            flow_rate_m3_s: np.float32 = np.abs(discharge_m3_s[i])
+            if flow_rate_m3_s <= np.float32(1e-12):
+                wetted_channel_area_m2[i] = np.float32(0.0)
+                continue
+            top_width_m: np.float32 = river_width_alpha[i] * (
+                flow_rate_m3_s ** river_width_beta[i]
+            )
         else:
-            w: np.float32 = alpha[i] * (np.abs(discharge_m3_s[i]) ** beta[i])
-            channel_area: np.float32 = min(cell_area[i], w * river_length[i])
-            out[i] = ref_et[i] * channel_area
+            # Local inertial reaches derive channel width from simulated depth and cross section geometry
+            water_depth_m: np.float32 = water_stage_m[i] - bed_elevation_m[i]
+            if water_depth_m <= np.float32(0.0):
+                wetted_channel_area_m2[i] = np.float32(0.0)
+                continue
+
+            bankfull_depth: np.float32 = bankfull_depth_m[i]
+            bankfull_width: np.float32 = bankfull_width_m[i]
+
+            if water_depth_m <= bankfull_depth or bankfull_depth <= np.float32(0.0):
+                # In-bank flow
+                depth_ratio: np.float32 = water_depth_m / max(
+                    bankfull_depth, np.float32(1e-4)
+                )
+                top_width_m = bankfull_width * (depth_ratio ** shape_exponent[i])
+            else:
+                # Overbank flow
+                overbank_depth_m: np.float32 = water_depth_m - bankfull_depth
+                top_width_m = compute_top_width_from_overbank_depth(
+                    overbank_depth_m=overbank_depth_m,
+                    bankfull_width_m=bankfull_width,
+                    floodplain_widths=floodplain_profile_widths_m[i],
+                    side_slope_z=floodplain_side_slope_m_per_m[i],
+                )
+
+        wetted_channel_area_m2[i] = min(
+            cell_area_m2[i], top_width_m * river_length_m[i]
+        )
+
+
+@njit(fastmath=True, parallel=True)
+def calculate_potential_river_evaporation(
+    reference_evapotranspiration_m: ArrayFloat32,
+    wetted_channel_area_m2: ArrayFloat32,
+    potential_evaporation_m3: ArrayFloat32,
+) -> None:
+    """Calculates potential river evaporation from wetted channel surface area in parallel without allocations.
+
+    Args:
+        reference_evapotranspiration_m: Reference evapotranspiration rate array for open water (meters).
+        wetted_channel_area_m2: Planform wetted channel surface area array (m²).
+        potential_evaporation_m3: Pre-allocated output array receiving potential evaporation volume (m³).
+    """
+    n: int = wetted_channel_area_m2.shape[0]
+    for i in prange(n):
+        potential_evaporation_m3[i] = (
+            reference_evapotranspiration_m[i] * wetted_channel_area_m2[i]
+        )
+
+
+@njit(fastmath=True, parallel=True)
+def calculate_potential_river_transmission_loss(
+    wetted_channel_area_m2: ArrayFloat32,
+    riverbed_hydraulic_conductivity_m_s: ArrayFloat32,
+    bed_elevation_m: ArrayFloat32,
+    water_stage_m: ArrayFloat32,
+    groundwater_head_m: ArrayFloat32,
+    timestep_s: np.float32,
+    potential_transmission_loss_m3: ArrayFloat32,
+) -> None:
+    """Calculates potential transmission loss in river reaches.
+
+    Calculates Darcy seepage through the riverbed colmation layer driven by channel water
+    stage and unconfined groundwater table elevation.
+
+    Approach:
+        1. Wetted Channel Area: Planform wetted channel area A_channel is precomputed based on
+           routing geometry (in-bank power-law and floodplain profile widths for local inertial;
+           hydraulic geometry for kinematic reaches).
+        2. Hydraulic Gradient:
+           - Gaining reach (groundwater_head >= water_stage): The groundwater table is at or above
+             the river water surface, so transmission loss ceases (hydraulic_gradient = 0.0).
+             Baseflow entering the river is handled separately by the groundwater module.
+           - Perched / disconnected reach (groundwater_head <= bed_elevation): The groundwater table
+             drops below the riverbed, forming an unsaturated zone beneath the channel. Seepage reaches
+             a gravity-driven maximum under unit hydraulic gradient (hydraulic_gradient = 1.0).
+           - Connected losing reach (bed_elevation < groundwater_head < water_stage): The river and
+             unconfined aquifer are hydraulically connected, with downward gradient scaled by the active
+             water depth: hydraulic_gradient = (water_stage - groundwater_head) / max(water_stage - bed_elevation, 0.01).
+        3. Seepage Volume: Potential volumetric seepage over timestep dt is
+           V = k_bed * hydraulic_gradient * A_channel * dt. Realized loss is subsequently constrained
+           by available stream storage within the routing solver.
+
+    Args:
+        wetted_channel_area_m2: Planform wetted channel surface area array (m²).
+        riverbed_hydraulic_conductivity_m_s: Riverbed hydraulic conductivity array (m/s).
+        bed_elevation_m: Channel bed elevation array (meters).
+        water_stage_m: River water stage elevation array (meters).
+        groundwater_head_m: Groundwater head array for topmost aquifer layer (meters).
+        timestep_s: Routing step duration (seconds).
+        potential_transmission_loss_m3: Pre-allocated output array receiving potential transmission loss volume (m³).
+    """
+    n: int = wetted_channel_area_m2.shape[0]
+    for i in prange(n):
+        wetted_area: np.float32 = wetted_channel_area_m2[i]
+        if wetted_area <= np.float32(0.0):
+            potential_transmission_loss_m3[i] = np.float32(0.0)
+            continue
+
+        hydraulic_conductivity: np.float32 = riverbed_hydraulic_conductivity_m_s[i]
+        if hydraulic_conductivity <= np.float32(0.0):
+            potential_transmission_loss_m3[i] = np.float32(0.0)
+            continue
+
+        water_stage: np.float32 = water_stage_m[i]
+        bed_elevation: np.float32 = bed_elevation_m[i]
+        gw_head: np.float32 = groundwater_head_m[i]
+
+        if gw_head >= water_stage:
+            hydraulic_gradient: np.float32 = np.float32(0.0)
+        elif gw_head <= bed_elevation:
+            hydraulic_gradient = np.float32(1.0)
+        else:
+            water_depth_m: np.float32 = max(
+                water_stage - bed_elevation, np.float32(0.01)
+            )
+            hydraulic_gradient = (water_stage - gw_head) / water_depth_m
+
+        potential_transmission_loss_m3[i] = (
+            hydraulic_conductivity * hydraulic_gradient * wetted_area * timestep_s
+        )
 
 
 @njit(fastmath=True)
@@ -214,7 +369,7 @@ def _accumulate_waterbody_runoff_and_evaporation(
     lake_area: ArrayFloat32,
     wb_storage: ArrayFloat64,
     return_flow_m3_to_wb: ArrayFloat32,
-    wb_pot_evap_buf: ArrayFloat32,
+    wb_potential_river_evaporation_buffer_m3: ArrayFloat32,
     wb_act_evap_buf: ArrayFloat32,
 ) -> None:
     """Accumulates lateral runoff and computes evaporation for waterbodies in-place without allocations.
@@ -228,7 +383,7 @@ def _accumulate_waterbody_runoff_and_evaporation(
         lake_area: Surface area per waterbody (m²).
         wb_storage: Waterbody storage array in m³ (modified in-place).
         return_flow_m3_to_wb: Prescribed return flow volume per waterbody (m³).
-        wb_pot_evap_buf: Reusable buffer for intermediate potential evaporation (m³).
+        wb_potential_river_evaporation_buffer_m3: Reusable buffer for intermediate potential evaporation (m³).
         wb_act_evap_buf: Reusable buffer for output actual evaporation (m³).
     """
     n_active: int = active_wb_cells.shape[0]
@@ -237,19 +392,20 @@ def _accumulate_waterbody_runoff_and_evaporation(
     for w in range(n_wb):
         if w < return_flow_m3_to_wb.shape[0]:
             wb_storage[w] += return_flow_m3_to_wb[w]
-        wb_pot_evap_buf[w] = np.float32(0.0)
+        wb_potential_river_evaporation_buffer_m3[w] = np.float32(0.0)
 
     for k in range(n_active):
         w_id: int = active_wb_cells[k]
         c_idx: int = wb_cell_indices[k]
         wb_storage[w_id] += side_flow[c_idx]
         side_flow[c_idx] = np.float32(0.0)
-        wb_pot_evap_buf[w_id] += ref_et[c_idx]
+        wb_potential_river_evaporation_buffer_m3[w_id] += ref_et[c_idx]
 
     for w in range(n_wb):
         if wb_cell_counts[w] > 0:
             pot_evap: np.float64 = (
-                np.float64(wb_pot_evap_buf[w]) / np.float64(wb_cell_counts[w])
+                np.float64(wb_potential_river_evaporation_buffer_m3[w])
+                / np.float64(wb_cell_counts[w])
             ) * np.float64(lake_area[w])
             act_evap: np.float64 = min(pot_evap, wb_storage[w])
             wb_storage[w] -= act_evap
@@ -381,6 +537,7 @@ class RoutingVariables(Bucket):
     river_storage_beta: ArrayFloat32
     river_width_alpha: ArrayFloat32
     river_width_beta: ArrayFloat32
+    river_transmission_loss_m3: ArrayFloat32
 
 
 def select_active_rivers(
@@ -523,6 +680,8 @@ class Routing(Module):
     inflow: dict[tuple[int, int], ArrayFloat32]
     floodplain_profile_widths_m: TwoDArrayFloat32
     floodplain_side_slope_m_per_m: ArrayFloat32
+    use_kinematic: ArrayBool
+    shape_exponent: ArrayFloat32
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the Routing module.
@@ -619,10 +778,10 @@ class Routing(Module):
             self._retention_cell_basin_ids = np.zeros(0, dtype=np.int32)
 
         # Initialize reusable buffers to avoid heap allocations in hourly step()
-        self._pot_evap_buf: ArrayFloat32 = self.grid.full_compressed(
-            0, dtype=np.float32
+        self._potential_river_evaporation_buffer_m3: ArrayFloat32 = (
+            self.grid.full_compressed(0, dtype=np.float32)
         )
-        self._side_flow_buf: ArrayFloat32 = self.grid.full_compressed(
+        self._side_flow_buffer_m3: ArrayFloat32 = self.grid.full_compressed(
             0, dtype=np.float32
         )
         self._over_abstraction_daily: ArrayFloat32 = self.grid.full_compressed(
@@ -631,6 +790,31 @@ class Routing(Module):
         self._evaporation_in_rivers_m3: ArrayFloat32 = self.grid.full_compressed(
             0, dtype=np.float32
         )
+        self._potential_transmission_loss_buffer_m3: ArrayFloat32 = (
+            self.grid.full_compressed(0, dtype=np.float32)
+        )
+        self._groundwater_head_top_layer_m: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        self._wetted_channel_area_buffer_m2: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        self._riverbed_hydraulic_conductivity_m_per_s: ArrayFloat32 = (
+            self.grid.full_compressed(0, dtype=np.float32)
+        )
+        self.var.river_transmission_loss_m3 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        riverbed_conductivity_multiplier: np.float32 = np.float32(
+            self.config["riverbed_hydraulic_conductivity_multiplier"]
+        )
+        groundwater_conductivity_m_per_s: np.ndarray = (
+            self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0]
+            / np.float32(86400.0)
+        )
+        self._riverbed_hydraulic_conductivity_m_per_s[:] = (
+            groundwater_conductivity_m_per_s * riverbed_conductivity_multiplier
+        ).astype(np.float32)
         self._pot_evap_ret_buf: ArrayFloat32 = np.zeros(
             len(self.retention_basin_data), dtype=np.float32
         )
@@ -642,7 +826,9 @@ class Routing(Module):
         self._wb_cell_indices: ArrayInt32 = np.zeros(0, dtype=np.int32)
         self._active_wb_cells: ArrayInt32 = np.zeros(0, dtype=np.int32)
         self._wb_cell_counts: ArrayInt32 = np.zeros(0, dtype=np.int32)
-        self._wb_pot_evap_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
+        self._wb_potential_river_evaporation_buffer_m3: ArrayFloat32 = np.zeros(
+            0, dtype=np.float32
+        )
         self._wb_act_evap_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
         self._wb_outflow_rate_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
         self._reservoir_indices: ArrayInt32 = np.zeros(0, dtype=np.int32)
@@ -1435,7 +1621,8 @@ class Routing(Module):
 
         # All cells with a valid river ID (river_ids != -1) use local inertial routing, even if steep;
         # non-river overland cells (river_ids == -1) use kinematic wave routing:
-        use_kinematic: ArrayBool = self.var.river_ids == -1
+        self.use_kinematic = self.var.river_ids == -1
+        use_kinematic: ArrayBool = self.use_kinematic
 
         # Floodplain geometry beyond bankfull channel:
         raw_profile_widths: TwoDArrayFloat32 = np.nan_to_num(
@@ -1469,9 +1656,10 @@ class Routing(Module):
         shape_exponent_val: np.float32 = np.float32(
             self.config["river_depth"]["parameters"]["shape_exponent"]
         )
-        shape_exponent: ArrayFloat32 = np.full(
+        self.shape_exponent = np.full(
             self.var.river_ids.shape, shape_exponent_val, dtype=np.float32
         )
+        shape_exponent: ArrayFloat32 = self.shape_exponent
 
         bankfull_depth_m: ArrayFloat32 = self.calculate_bankfull_depth(
             bankfull_top_width_m=bankfull_top_width_m,
@@ -1549,7 +1737,9 @@ class Routing(Module):
             waterbody_outflow_height = np.zeros(0, dtype=np.float32)
 
         self._not_wb_cell_mask: ArrayBool = ~self._wb_cell_mask
-        self._wb_pot_evap_buf = np.zeros(self.hydrology.waterbodies.n, dtype=np.float32)
+        self._wb_potential_river_evaporation_buffer_m3 = np.zeros(
+            self.hydrology.waterbodies.n, dtype=np.float32
+        )
         self._wb_act_evap_buf = np.zeros(self.hydrology.waterbodies.n, dtype=np.float32)
         self._wb_outflow_rate_buf = np.zeros(
             self.hydrology.waterbodies.n, dtype=np.float32
@@ -1808,6 +1998,21 @@ class Routing(Module):
             len(self.retention_basin_data), dtype=np.float32
         )
 
+        self.var.river_transmission_loss_m3 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+
+        riverbed_conductivity_multiplier: np.float32 = np.float32(
+            self.config["riverbed_hydraulic_conductivity_multiplier"]
+        )
+        groundwater_conductivity_m_per_s: np.ndarray = (
+            self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0]
+            / np.float32(86400.0)
+        )
+        self._riverbed_hydraulic_conductivity_m_per_s[:] = (
+            groundwater_conductivity_m_per_s * riverbed_conductivity_multiplier
+        ).astype(np.float32)
+
     def get_river_width_alpha_and_beta(
         self,
         beta: float,
@@ -1972,6 +2177,11 @@ class Routing(Module):
 
         over_abstraction_m3: ArrayFloat32 = self._over_abstraction_daily
         over_abstraction_m3.fill(0.0)
+        self.var.river_transmission_loss_m3.fill(0.0)
+
+        self._groundwater_head_top_layer_m[:] = self.grid.var.heads[0].astype(
+            np.float32
+        )
 
         # update alpha and beta once per day
         if self.model.in_spinup:
@@ -2000,7 +2210,7 @@ class Routing(Module):
             np.multiply(
                 total_runoff_m[hour, :],
                 self.grid.var.cell_area,
-                out=self._side_flow_buf,
+                out=self._side_flow_buffer_m3,
             )
 
             # then split the runoff into runoff directly to water bodies,
@@ -2009,13 +2219,13 @@ class Routing(Module):
                 _accumulate_waterbody_runoff_and_evaporation(
                     active_wb_cells=self._active_wb_cells,
                     wb_cell_indices=self._wb_cell_indices,
-                    side_flow=self._side_flow_buf,
+                    side_flow=self._side_flow_buffer_m3,
                     ref_et=reference_evapotranspiration_water_m[hour],
                     wb_cell_counts=self._wb_cell_counts,
                     lake_area=self.hydrology.waterbodies.var.lake_area,
                     wb_storage=self.hydrology.waterbodies.var.storage,
                     return_flow_m3_to_wb=return_flow_m3_to_waterbodies_per_hour,
-                    wb_pot_evap_buf=self._wb_pot_evap_buf,
+                    wb_potential_river_evaporation_buffer_m3=self._wb_potential_river_evaporation_buffer_m3,
                     wb_act_evap_buf=self._wb_act_evap_buf,
                 )
 
@@ -2057,13 +2267,13 @@ class Routing(Module):
                         "Prescribed reservoir outflow cannot be greater than storage"
                     )
 
-            self._side_flow_buf += net_base_sideflow_per_hour
+            self._side_flow_buffer_m3 += net_base_sideflow_per_hour
             if __debug__:
-                assert (self._side_flow_buf[self._wb_cell_mask] == 0).all()
+                assert (self._side_flow_buffer_m3[self._wb_cell_mask] == 0).all()
 
             for cell_index, inflow in self._inflow_list:
                 inflow_m3 = inflow[self.inflow_idx] * np.float32(3600)
-                self._side_flow_buf[cell_index] += inflow_m3
+                self._side_flow_buffer_m3[cell_index] += inflow_m3
                 if __debug__:
                     total_inflow_m3 += inflow_m3
 
@@ -2072,21 +2282,47 @@ class Routing(Module):
                     self.var.discharge_in_rivers_m3_s_substep[self._not_wb_cell_mask]
                 ).all()
 
-            _compute_potential_river_evaporation(
-                alpha=self.var.river_width_alpha,
-                beta=self.var.river_width_beta,
+            calculate_wetted_channel_area(
+                use_kinematic=self.use_kinematic,
+                water_stage_m=self.var.water_stage_m,
+                bed_elevation_m=self.router.bed_elevation,
+                bankfull_width_m=self.router.river_width,
+                bankfull_depth_m=self.router.bankfull_depth,
+                shape_exponent=self.shape_exponent,
+                floodplain_profile_widths_m=self.floodplain_profile_widths_m,
+                floodplain_side_slope_m_per_m=self.floodplain_side_slope_m_per_m,
+                river_width_alpha=self.var.river_width_alpha,
+                river_width_beta=self.var.river_width_beta,
                 discharge_m3_s=self.var.discharge_in_rivers_m3_s_substep,
-                river_length=self.grid.var.river_length,
-                cell_area=self.grid.var.cell_area,
-                is_wb=self._wb_cell_mask,
-                ref_et=reference_evapotranspiration_water_m[hour],
-                out=self._pot_evap_buf,
+                river_length_m=self.grid.var.river_length,
+                cell_area_m2=self.grid.var.cell_area,
+                is_waterbody=self._wb_cell_mask,
+                wetted_channel_area_m2=self._wetted_channel_area_buffer_m2,
+            )
+
+            calculate_potential_river_evaporation(
+                reference_evapotranspiration_m=reference_evapotranspiration_water_m[
+                    hour
+                ],
+                wetted_channel_area_m2=self._wetted_channel_area_buffer_m2,
+                potential_evaporation_m3=self._potential_river_evaporation_buffer_m3,
+            )
+
+            calculate_potential_river_transmission_loss(
+                wetted_channel_area_m2=self._wetted_channel_area_buffer_m2,
+                riverbed_hydraulic_conductivity_m_s=self._riverbed_hydraulic_conductivity_m_per_s,
+                bed_elevation_m=self.router.bed_elevation,
+                water_stage_m=self.var.water_stage_m,
+                groundwater_head_m=self._groundwater_head_top_layer_m,
+                timestep_s=np.float32(3600),
+                potential_transmission_loss_m3=self._potential_transmission_loss_buffer_m3,
             )
 
             (
                 self.var.discharge_in_rivers_m3_s_substep,
                 self.var.river_storage_m3,
                 actual_evaporation_in_rivers_m3_per_hour,
+                actual_transmission_loss_m3_per_hour,
                 over_abstraction_m3_routing_step,
                 self.hydrology.waterbodies.var.storage,
                 waterbody_inflow_m3,
@@ -2097,8 +2333,9 @@ class Routing(Module):
             ) = self.router.step(
                 Q_prev_m3_s=self.var.discharge_in_rivers_m3_s_substep,
                 river_storage_m3=self.var.river_storage_m3,
-                sideflow_m3=self._side_flow_buf,
-                evaporation_m3=self._pot_evap_buf,
+                sideflow_m3=self._side_flow_buffer_m3,
+                evaporation_m3=self._potential_river_evaporation_buffer_m3,
+                transmission_loss_m3=self._potential_transmission_loss_buffer_m3,
                 waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
                 retention_storage_m3=self.var.retention_basin_storage_m3,
@@ -2107,6 +2344,8 @@ class Routing(Module):
             self.var.water_stage_m = self.router.get_water_stage(
                 out=self.var.water_stage_m
             )
+
+            self.var.river_transmission_loss_m3 += actual_transmission_loss_m3_per_hour
 
             if __debug__:
                 if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
@@ -2223,6 +2462,7 @@ class Routing(Module):
                     waterbody_evaporation_m3,
                     retention_evaporation_m3,
                     command_area_release_m3,
+                    self.var.river_transmission_loss_m3,
                 ],
                 prestorages=[
                     pre_waterbody_storage,

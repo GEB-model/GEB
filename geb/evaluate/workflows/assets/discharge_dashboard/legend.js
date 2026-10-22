@@ -7,9 +7,21 @@
   window._gebExcludedStations = excludedStationIndex;
   var exclusionSummary = macroData.exclusionSummary || null;
   var snappingLayerName = macroData.snappingLayer || null;
+  var runName = macroData.runName || null;
+  var completionDate = macroData.completionDate || null;
   var map = {{this._parent.get_name()}};
   var currentFrequency = "all";
   window._gebCurrentFrequency = currentFrequency;
+
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
 
   // Theme setup
   var initialTheme = "light";
@@ -892,12 +904,23 @@
       "<button type=\"button\" class=\"geb-theme-btn" + (isDark ? " active" : "") + "\" data-set-theme=\"dark\" title=\"Dark mode\">🌙 Dark</button>" +
       "</div>";
 
+    var runMetaHtml = "";
+    if (runName || completionDate) {
+      runMetaHtml = "<div class=\"geb-run-meta\">" +
+        (runName ? "<div class=\"geb-run-meta-row\"><span class=\"geb-run-meta-label\">Run</span><b class=\"geb-run-meta-value\" title=\"" + escapeHtml(runName) + "\">" + escapeHtml(runName) + "</b></div>" : "") +
+        (completionDate ? "<div class=\"geb-run-meta-row\"><span class=\"geb-run-meta-label\">Completed</span><span class=\"geb-run-meta-value\" title=\"" + escapeHtml(completionDate) + "\">" + escapeHtml(completionDate) + "</span></div>" : "") +
+        "</div>";
+    }
+
     menuRoot.innerHTML = "<div class=\"geb-unified-header\">" +
+      "<div class=\"geb-header-top\">" +
       "<div class=\"geb-header-title-box\">" +
       "<b>Dashboard</b>" +
       themePill +
       "</div>" +
       "<button type=\"button\" class=\"geb-unified-toggle\" title=\"Collapse / expand menu\">−</button>" +
+      "</div>" +
+      runMetaHtml +
       "</div>" +
       "<div class=\"geb-unified-body\">" +
       "<div class=\"geb-menu-section\">" +
@@ -1220,7 +1243,12 @@
   var style = document.createElement("style");
   style.textContent =
     ".geb-unified-menu{border-radius:9px;box-shadow:0 8px 30px rgba(15,23,42,.2);font-family:Inter,system-ui,-apple-system,sans-serif;padding:0;width:282px;box-sizing:border-box;overflow:hidden}" +
-    ".geb-unified-header{padding:8px 12px;display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:700}" +
+    ".geb-unified-header{padding:8px 12px;display:flex;flex-direction:column;gap:3px;font-size:12px;font-weight:700}" +
+    ".geb-header-top{display:flex;align-items:center;justify-content:space-between;width:100%}" +
+    ".geb-run-meta{margin-top:3px;padding-top:4px;font-size:10px;font-weight:normal;line-height:1.35;width:100%}" +
+    ".geb-run-meta-row{display:flex;align-items:center;justify-content:space-between;gap:6px}" +
+    ".geb-run-meta-label{font-weight:600;text-transform:uppercase;font-size:9px;letter-spacing:0.3px}" +
+    ".geb-run-meta-value{font-variant-numeric:tabular-nums;max-width:185px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
     ".geb-header-title-box{display:flex;align-items:center;gap:8px}" +
     ".geb-theme-pill{display:inline-flex;background:rgba(255,255,255,0.12);padding:2px;border-radius:12px;gap:2px}" +
     ".geb-theme-btn{background:transparent;border:none;color:#cbd5e1;font-size:10px;font-weight:600;padding:2px 6px;border-radius:10px;cursor:pointer;line-height:1.2;transition:background 0.15s,color 0.15s}" +
@@ -1295,10 +1323,19 @@
     "[data-geb-theme=\"dark\"] .geb-export-btn{background:#1e293b;color:#f8fafc;border:1px solid #334155}" +
     "[data-geb-theme=\"dark\"] .geb-export-btn:hover{background:#334155;border-color:#475569}" +
     "[data-geb-theme=\"dark\"] .geb-basemap-row,[data-geb-theme=\"dark\"] .geb-overlays-list{color:#cbd5e1}" +"[data-geb-theme=\"dark\"] .geb-subpanel{background:#1e293b;border:1px solid #334155;color:#e2e8f0}" +"[data-geb-theme=\"dark\"] .geb-subpanel-note{color:#94a3b8}" +"[data-geb-theme=\"dark\"] .geb-snapping-status{color:#38bdf8}" +
+    "[data-geb-theme=\"dark\"] .geb-run-meta{border-top:1px solid #1e293b}" +
+    "[data-geb-theme=\"dark\"] .geb-run-meta-label{color:#94a3b8}" +
+    "[data-geb-theme=\"dark\"] .geb-run-meta-value{color:#f8fafc}" +
     // Light Theme Styles
     "[data-geb-theme=\"light\"] .geb-unified-menu{background:rgba(255,255,255,.98);border:1px solid #cbd5e1;color:#0f172a}" +
-    "[data-geb-theme=\"light\"] .geb-unified-header{background:#0f172a;color:#f8fafc;border-bottom:1px solid #334155}" +
-    "[data-geb-theme=\"light\"] .geb-unified-toggle{background:#1e293b;color:#f8fafc}" +
+    "[data-geb-theme=\"light\"] .geb-unified-header{background:#f8fafc;color:#0f172a;border-bottom:1px solid #e2e8f0}" +
+    "[data-geb-theme=\"light\"] .geb-unified-toggle{background:#e2e8f0;color:#0f172a}" +
+    "[data-geb-theme=\"light\"] .geb-theme-pill{background:rgba(15,23,42,0.06)}" +
+    "[data-geb-theme=\"light\"] .geb-theme-btn{color:#64748b}" +
+    "[data-geb-theme=\"light\"] .geb-theme-btn.active{background:#0f172a;color:#ffffff}" +
+    "[data-geb-theme=\"light\"] .geb-run-meta{border-top:1px solid #e2e8f0}" +
+    "[data-geb-theme=\"light\"] .geb-run-meta-label{color:#64748b}" +
+    "[data-geb-theme=\"light\"] .geb-run-meta-value{color:#0f172a}" +
     "[data-geb-theme=\"light\"] .geb-menu-section{border-bottom:1px solid #e2e8f0}" +
     "[data-geb-theme=\"light\"] .geb-menu-label{color:#334155}" +
     "[data-geb-theme=\"light\"] .geb-freq-pill{background:#f1f5f9;border:1px solid #cbd5e1}" +

@@ -543,10 +543,16 @@ class LocalInertial:
         self._discharge_prev_perm: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._sideflow_perm: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._evaporation_perm: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
+        self._transmission_loss_perm: ArrayFloat32 = np.empty(
+            n_up_nodes, dtype=np.float32
+        )
         self._over_abstraction_perm: ArrayFloat32 = np.empty(
             n_up_nodes, dtype=np.float32
         )
         self._actual_evaporation_perm: ArrayFloat32 = np.empty(
+            n_up_nodes, dtype=np.float32
+        )
+        self._actual_trans_loss_perm: ArrayFloat32 = np.empty(
             n_up_nodes, dtype=np.float32
         )
         self._updated_discharge_perm: ArrayFloat32 = np.empty(
@@ -566,10 +572,16 @@ class LocalInertial:
         self._evaporation_inertial: ArrayFloat32 = self._evaporation_perm[
             inertial_start:inertial_end
         ]
+        self._transmission_loss_inertial: ArrayFloat32 = self._transmission_loss_perm[
+            inertial_start:inertial_end
+        ]
         self._over_abs_inertial: ArrayFloat32 = self._over_abstraction_perm[
             inertial_start:inertial_end
         ]
         self._actual_evap_inertial: ArrayFloat32 = self._actual_evaporation_perm[
+            inertial_start:inertial_end
+        ]
+        self._actual_trans_loss_inertial: ArrayFloat32 = self._actual_trans_loss_perm[
             inertial_start:inertial_end
         ]
         self._updated_discharge_inertial: ArrayFloat32 = self._updated_discharge_perm[
@@ -628,6 +640,9 @@ class LocalInertial:
 
         self._discharge_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._actual_evap_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
+        self._actual_trans_loss_out: ArrayFloat32 = np.empty(
+            n_up_nodes, dtype=np.float32
+        )
         self._over_abs_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._iteration_count: int = 0
 
@@ -897,6 +912,7 @@ class LocalInertial:
         river_storage_m3: ArrayFloat64,
         sideflow_m3: ArrayFloat32,
         evaporation_m3: ArrayFloat32,
+        transmission_loss_m3: ArrayFloat32,
         waterbody_storage_m3: ArrayFloat64,
         outflow_per_waterbody_m3: ArrayFloat32,
         retention_storage_m3: ArrayFloat32,
@@ -905,6 +921,7 @@ class LocalInertial:
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat64,
+        ArrayFloat32,
         ArrayFloat32,
         ArrayFloat32,
         ArrayFloat64,
@@ -921,6 +938,7 @@ class LocalInertial:
             river_storage_m3: Total reach storage volume (m³).
             sideflow_m3: Lateral sideflow forcing volume per reach (m³).
             evaporation_m3: Potential evaporation volume per reach (m³).
+            transmission_loss_m3: Potential river transmission loss volume per reach (m³).
             waterbody_storage_m3: Current waterbody storage volume (m³).
             outflow_per_waterbody_m3: Prescribed outflow volume per waterbody (m³).
             retention_storage_m3: Current storage volume per retention basin (m³).
@@ -933,6 +951,7 @@ class LocalInertial:
                 - Q_out_m3_s: Calculated channel discharge at end of step (m³/s).
                 - river_storage_m3: Updated river reach storage (m³).
                 - actual_evap_m3: Actual evaporation volume per reach (m³).
+                - actual_trans_loss_m3: Actual river transmission loss volume per reach (m³).
                 - over_abs_m3: Deficit from unfulfilled abstractions (m³).
                 - waterbody_storage_m3: Updated waterbody storage (m³).
                 - waterbody_inflow_m3: Inflow volume per waterbody (m³).
@@ -959,16 +978,19 @@ class LocalInertial:
                 river_storage_m3,
                 sideflow_m3,
                 evaporation_m3,
+                transmission_loss_m3,
                 self._discharge_prev_perm,
                 self._river_storage_perm,
                 self._sideflow_perm,
                 self._evaporation_perm,
+                self._transmission_loss_perm,
             )
         else:
             self._discharge_prev_perm[:] = Q_prev_m3_s
             self._river_storage_perm[:] = river_storage_m3
             self._sideflow_perm[:] = sideflow_m3
             self._evaporation_perm[:] = evaporation_m3
+            self._transmission_loss_perm[:] = transmission_loss_m3
 
         self._iteration_count += 1
         self._substep_buffers.wb_extra_lateral_accum_m3.fill(0.0)
@@ -1018,6 +1040,7 @@ class LocalInertial:
 
         self._over_abstraction_perm.fill(0.0)
         self._actual_evaporation_perm.fill(0.0)
+        self._actual_trans_loss_perm.fill(0.0)
         self._waterbody_inflow_perm.fill(0.0)
         self._retention_inflow_perm.fill(0.0)
         self._retention_outflow_perm.fill(0.0)
@@ -1045,8 +1068,10 @@ class LocalInertial:
                 river_storage_m3=self._river_storage_perm,
                 sideflow_m3=self._sideflow_perm,
                 evaporation_m3=self._evaporation_perm,
+                transmission_loss_m3=self._transmission_loss_perm,
                 over_abstraction_m3=self._over_abstraction_perm,
                 actual_evaporation_m3=self._actual_evaporation_perm,
+                actual_transmission_loss_m3=self._actual_trans_loss_perm,
                 updated_discharge_m3_s=self._updated_discharge_perm,
                 kin=self._kinematic_topology,
                 wb=wb_coupling,
@@ -1120,8 +1145,10 @@ class LocalInertial:
                     river_storage_m3_inertial=river_storage_m3_inertial,
                     sideflow_m3_inertial=sideflow_m3_inertial,
                     evaporation_m3_inertial=evaporation_m3_inertial,
+                    transmission_loss_m3_inertial=self._transmission_loss_inertial,
                     over_abstraction_m3_inertial=over_abstraction_m3_inertial,
                     actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
+                    actual_transmission_loss_m3_inertial=self._actual_trans_loss_inertial,
                     updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
                     kinematic_inflow_rate=kinematic_inflow_rate_inertial,
                     geom=self._geometry,
@@ -1156,6 +1183,9 @@ class LocalInertial:
             evap_inertial: float = float(
                 np.sum(self._actual_evaporation_perm[inertial_start:inertial_end])
             )
+            trans_loss_inertial: float = float(
+                np.sum(self._actual_trans_loss_perm[inertial_start:inertial_end])
+            )
             over_abs_inertial: float = float(
                 np.sum(self._over_abstraction_perm[inertial_start:inertial_end])
             )
@@ -1184,6 +1214,7 @@ class LocalInertial:
                 sideflow_m3=sideflow_inertial,
                 kinematic_inflow_m3=kinematic_inflow_total,
                 evaporation_m3=evap_inertial,
+                transmission_loss_m3=trans_loss_inertial,
                 over_abstraction_m3=over_abs_inertial,
                 wb_extra_lateral_m3=wb_extra_lateral_total,
                 net_retention_m3=net_retention_inertial,
@@ -1206,27 +1237,32 @@ class LocalInertial:
                 self.sorted_idxs,
                 self._updated_discharge_perm,
                 self._actual_evaporation_perm,
+                self._actual_trans_loss_perm,
                 self._over_abstraction_perm,
                 self._river_storage_perm,
                 self._discharge_out,
                 self._actual_evap_out,
+                self._actual_trans_loss_out,
                 self._over_abs_out,
                 river_storage_m3,
             )
             out_discharge = self._discharge_out
             out_storage = river_storage_m3
             out_actual_evap = self._actual_evap_out
+            out_actual_trans_loss = self._actual_trans_loss_out
             out_over_abs = self._over_abs_out
         else:
             out_discharge = self._updated_discharge_perm
             out_storage = self._river_storage_perm
             out_actual_evap = self._actual_evaporation_perm
+            out_actual_trans_loss = self._actual_trans_loss_perm
             out_over_abs = self._over_abstraction_perm
 
         return (
             out_discharge,
             out_storage,
             out_actual_evap,
+            out_actual_trans_loss,
             out_over_abs,
             waterbody_storage_m3,
             self._waterbody_inflow_perm,
@@ -1243,6 +1279,7 @@ class LocalInertial:
         sideflow_m3: float,
         kinematic_inflow_m3: float,
         evaporation_m3: float,
+        transmission_loss_m3: float,
         over_abstraction_m3: float,
         wb_extra_lateral_m3: float,
         net_retention_m3: float,
@@ -1256,6 +1293,7 @@ class LocalInertial:
             sideflow_m3: Sum of lateral catchment sideflows (m³).
             kinematic_inflow_m3: Total volumetric inflow across kinematic boundary reaches (m³).
             evaporation_m3: Total actual evaporation volume (m³).
+            transmission_loss_m3: Total actual river transmission loss volume (m³).
             over_abstraction_m3: Total volume of unfulfilled abstraction deficit (m³).
             wb_extra_lateral_m3: Cumulative extra lateral volume transferred from waterbodies (m³).
             net_retention_m3: Net volumetric diversion into retention basins (m³).
@@ -1284,6 +1322,7 @@ class LocalInertial:
             + wb_extra_lateral_m3
             + over_abstraction_m3
             - evaporation_m3
+            - transmission_loss_m3
             - net_retention_m3
             - net_inertial_outflow_m3
         )

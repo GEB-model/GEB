@@ -1444,6 +1444,19 @@ class GEBModel(Module):
         (self.output_folder / "done.txt").touch()
 
     @property
+    def completion_time(self) -> str | None:
+        """Get the completion timestamp of the model run or spinup if completed.
+
+        Returns:
+            Timestamp string if done, or None if not completed.
+        """
+        done_file: Path = self.output_folder / "done.txt"
+        if not done_file.exists():
+            return None
+        mtime: float = done_file.stat().st_mtime
+        return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+    @property
     def is_done(self) -> bool:
         """Check if the model run or spinup is done.
 

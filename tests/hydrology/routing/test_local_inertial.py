@@ -211,6 +211,7 @@ def test_local_inertial_basic(
         Q_new,
         river_storage_out,
         actual_evaporation_m3,
+        actual_transmission_loss_m3,
         over_abstraction_m3,
         waterbody_storage_m3,
         waterbody_inflow_m3,
@@ -223,6 +224,7 @@ def test_local_inertial_basic(
         river_storage_m3=river_storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
+        transmission_loss_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
@@ -272,6 +274,7 @@ def test_local_inertial_with_retention_basins(
         Q_new,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage,
         wb_inflow,
@@ -284,6 +287,7 @@ def test_local_inertial_with_retention_basins(
         river_storage_m3=river_storage_m3,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=retention_storage_m3,
@@ -319,6 +323,7 @@ def test_local_inertial_with_longer_dt(
         Q_new,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage,
         wb_inflow,
@@ -331,6 +336,7 @@ def test_local_inertial_with_longer_dt(
         river_storage_m3=river_storage_m3,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -365,6 +371,7 @@ def test_local_inertial_with_sideflow(
         Q_new,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage,
         wb_inflow,
@@ -377,6 +384,7 @@ def test_local_inertial_with_sideflow(
         river_storage_m3=river_storage_m3,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -434,6 +442,7 @@ def test_local_inertial_with_waterbodies(
         Q_new,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage_out,
         wb_inflow,
@@ -446,6 +455,7 @@ def test_local_inertial_with_waterbodies(
         river_storage_m3=river_storage_m3,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=waterbody_storage_m3,
         outflow_per_waterbody_m3=outflow_per_waterbody_m3,
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -545,6 +555,7 @@ def test_local_inertial_sudden_flood_wave(
             _,
             _,
             _,
+            _,
             outflow_pits_m3,
             _,
             _,
@@ -554,6 +565,7 @@ def test_local_inertial_sudden_flood_wave(
             river_storage_m3=river_storage_m3,
             sideflow_m3=sideflow_m3,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(n_cells, dtype=np.float32),
@@ -609,6 +621,7 @@ def test_local_inertial_momentum_persistence(
         _,
         _,
         _,
+        _,
         outflow_step1,
         _,
         _,
@@ -618,6 +631,7 @@ def test_local_inertial_momentum_persistence(
         river_storage_m3=river_storage_m3,
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(n_cells, dtype=np.float32),
@@ -661,6 +675,7 @@ def test_local_inertial_reverse_flow_mass_conservation() -> None:
         Q_new,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage,
         wb_inflow,
@@ -673,6 +688,7 @@ def test_local_inertial_reverse_flow_mass_conservation() -> None:
         river_storage_m3=river_storage_m3,
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(2, dtype=np.float32),
@@ -720,6 +736,7 @@ def test_local_inertial_head_gradient_overflow_resilience() -> None:
         _,
         _,
         _,
+        _,
         outflow_at_pits,
         _,
         _,
@@ -729,6 +746,7 @@ def test_local_inertial_head_gradient_overflow_resilience() -> None:
         river_storage_m3=river_storage_m3,
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(2, dtype=np.float32),
@@ -769,6 +787,7 @@ def test_local_inertial_raises_on_non_finite_inputs() -> None:
             river_storage_m3=np.array([np.nan, 1000.0], dtype=np.float64),
             sideflow_m3=np.zeros(2, dtype=np.float32),
             evaporation_m3=np.zeros(2, dtype=np.float32),
+            transmission_loss_m3=np.zeros(2, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(2, dtype=np.float32),
@@ -782,6 +801,7 @@ def test_local_inertial_raises_on_non_finite_inputs() -> None:
             river_storage_m3=np.array([1000.0, 1000.0], dtype=np.float64),
             sideflow_m3=np.array([np.nan, 0.0], dtype=np.float32),
             evaporation_m3=np.zeros(2, dtype=np.float32),
+            transmission_loss_m3=np.zeros(2, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(2, dtype=np.float32),
@@ -825,11 +845,13 @@ def test_local_inertial_no_backflow_into_dry_cell() -> None:
         _,
         _,
         _,
+        _,
     ) = router.step(
         Q_prev_m3_s=Q_prev,
         river_storage_m3=river_storage_m3,
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(2, dtype=np.float32),
@@ -875,6 +897,7 @@ def test_local_inertial_with_excess_abstraction() -> None:
         Q_new,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage,
         wb_inflow,
@@ -887,6 +910,7 @@ def test_local_inertial_with_excess_abstraction() -> None:
         river_storage_m3=river_storage_m3,
         sideflow_m3=sideflow_m3,
         evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(2, dtype=np.float32),
@@ -935,6 +959,7 @@ def test_local_inertial_inertial_reaches_with_waterbodies() -> None:
         Q_out,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage_out,
         wb_inflow,
@@ -947,6 +972,7 @@ def test_local_inertial_inertial_reaches_with_waterbodies() -> None:
         river_storage_m3=river_storage_init.copy(),
         sideflow_m3=np.zeros(4, dtype=np.float32),
         evaporation_m3=np.zeros(4, dtype=np.float32),
+        transmission_loss_m3=np.zeros(4, dtype=np.float32),
         waterbody_storage_m3=wb_storage_init.copy(),
         outflow_per_waterbody_m3=wb_outflow,
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -984,6 +1010,7 @@ def test_local_inertial_channel_evaporation() -> None:
         Q_out,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage_out,
         wb_inflow,
@@ -996,6 +1023,7 @@ def test_local_inertial_channel_evaporation() -> None:
         river_storage_m3=river_storage_init,
         sideflow_m3=np.array([0.0, 20000.0], dtype=np.float32),
         evaporation_m3=evaporation_m3,
+        transmission_loss_m3=np.zeros_like(evaporation_m3),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1038,6 +1066,7 @@ def test_local_inertial_cascaded_waterbodies() -> None:
         Q_out,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage_out,
         wb_inflow,
@@ -1050,6 +1079,7 @@ def test_local_inertial_cascaded_waterbodies() -> None:
         river_storage_m3=np.zeros(3, dtype=np.float64),
         sideflow_m3=np.zeros(3, dtype=np.float32),
         evaporation_m3=np.zeros(3, dtype=np.float32),
+        transmission_loss_m3=np.zeros(3, dtype=np.float32),
         waterbody_storage_m3=wb_storage_init,
         outflow_per_waterbody_m3=wb_outflow,
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1085,6 +1115,7 @@ def test_local_inertial_tributary_junction_multidirectional_scaling() -> None:
         Q_out,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage_out,
         wb_inflow,
@@ -1097,6 +1128,7 @@ def test_local_inertial_tributary_junction_multidirectional_scaling() -> None:
         river_storage_m3=river_storage_init,
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1142,6 +1174,7 @@ def test_local_inertial_kinematic_pit_missing_river_id() -> None:
         Q_out,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage_out,
         wb_inflow,
@@ -1154,6 +1187,7 @@ def test_local_inertial_kinematic_pit_missing_river_id() -> None:
         river_storage_m3=np.array([1000.0, 500.0], dtype=np.float64),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1238,6 +1272,7 @@ def test_local_inertial_terminal_waterbody_on_pit() -> None:
         Q_out,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage_out,
         wb_inflow,
@@ -1250,6 +1285,7 @@ def test_local_inertial_terminal_waterbody_on_pit() -> None:
         river_storage_m3=river_storage_init.copy(),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=wb_storage_init.copy(),
         outflow_per_waterbody_m3=wb_outflow,
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1273,6 +1309,7 @@ def test_local_inertial_terminal_waterbody_on_pit() -> None:
         river_storage_out2,
         _,
         _,
+        _,
         wb_storage_out2,
         _,
         outflow_at_pits2,
@@ -1284,6 +1321,7 @@ def test_local_inertial_terminal_waterbody_on_pit() -> None:
         river_storage_m3=river_storage_out.copy(),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=wb_storage_out.copy(),
         outflow_per_waterbody_m3=wb_outflow,
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1340,6 +1378,7 @@ def test_compound_channel_floodplain_attenuation_and_mass_balance() -> None:
             _,
             _,
             _,
+            _,
             pit_out,
             _,
             _,
@@ -1349,6 +1388,7 @@ def test_compound_channel_floodplain_attenuation_and_mass_balance() -> None:
             river_storage_m3=storage_comp,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1472,6 +1512,7 @@ def test_floodplain_damping_scenarios_and_plots() -> None:
                 _,
                 _,
                 _,
+                _,
                 pit_out,
                 _,
                 _,
@@ -1481,6 +1522,7 @@ def test_floodplain_damping_scenarios_and_plots() -> None:
                 river_storage_m3=storage,
                 sideflow_m3=sideflow,
                 evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+                transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
                 waterbody_storage_m3=np.zeros(0, dtype=np.float64),
                 outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
                 retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1650,11 +1692,13 @@ def test_floodplain_convective_pulse_dynamics_and_plots() -> None:
                 _,
                 _,
                 _,
+                _,
             ) = router.step(
                 Q_prev_m3_s=q,
                 river_storage_m3=storage,
                 sideflow_m3=sideflow,
                 evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+                transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
                 waterbody_storage_m3=np.zeros(0, dtype=np.float64),
                 outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
                 retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1749,6 +1793,7 @@ def test_local_inertial_ocean_pit_negative_bed_elevation() -> None:
         q_out,
         storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage,
         wb_inflow,
@@ -1761,6 +1806,7 @@ def test_local_inertial_ocean_pit_negative_bed_elevation() -> None:
         river_storage_m3=init_storage.copy(),
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1831,6 +1877,7 @@ def test_local_inertial_inland_pit_with_downstream_id() -> None:
         q_out,
         storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage,
         wb_inflow,
@@ -1843,6 +1890,7 @@ def test_local_inertial_inland_pit_with_downstream_id() -> None:
         river_storage_m3=init_storage.copy(),
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1918,6 +1966,7 @@ def test_local_inertial_waterbody_boundary_uses_lake_water_level() -> None:
         _,
         _,
         _,
+        _,
         inflow_low,
         _,
         _,
@@ -1928,6 +1977,7 @@ def test_local_inertial_waterbody_boundary_uses_lake_water_level() -> None:
         river_storage_m3=river_storage.copy(),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=wb_storage_low.copy(),
         outflow_per_waterbody_m3=np.zeros(1, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -1946,6 +1996,7 @@ def test_local_inertial_waterbody_boundary_uses_lake_water_level() -> None:
         _,
         _,
         _,
+        _,
         inflow_high,
         _,
         _,
@@ -1956,6 +2007,7 @@ def test_local_inertial_waterbody_boundary_uses_lake_water_level() -> None:
         river_storage_m3=river_storage.copy(),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=wb_storage_high.copy(),
         outflow_per_waterbody_m3=np.zeros(1, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -2003,6 +2055,7 @@ def test_local_inertial_cfl_under_sudden_upstream_flood() -> None:
         q_out,
         storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage,
         wb_inflow,
@@ -2015,6 +2068,7 @@ def test_local_inertial_cfl_under_sudden_upstream_flood() -> None:
         river_storage_m3=storage_init.copy(),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -2070,6 +2124,7 @@ def test_local_inertial_zero_flow_startup_stability() -> None:
         _,
         _,
         _,
+        _,
         outflow_at_pits,
         _,
         _,
@@ -2079,6 +2134,7 @@ def test_local_inertial_zero_flow_startup_stability() -> None:
         river_storage_m3=storage_init.copy(),
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -2185,6 +2241,7 @@ def test_kinematic_overland_flowing_into_downstream_inertial_reach() -> None:
             discharge,
             storage,
             act_evap,
+            act_trans_loss,
             over_abs,
             waterbody_storage,
             wb_inflow,
@@ -2197,6 +2254,7 @@ def test_kinematic_overland_flowing_into_downstream_inertial_reach() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=evaporation,
+            transmission_loss_m3=np.zeros_like(evaporation),
             waterbody_storage_m3=waterbody_storage,
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=retention_storage,
@@ -2255,6 +2313,7 @@ def test_alternating_kinematic_inertial_network() -> None:
             discharge,
             storage,
             act_evap,
+            act_trans_loss,
             over_abs,
             waterbody_storage,
             wb_inflow,
@@ -2267,6 +2326,7 @@ def test_alternating_kinematic_inertial_network() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=evaporation,
+            transmission_loss_m3=np.zeros_like(evaporation),
             waterbody_storage_m3=waterbody_storage,
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=retention_storage,
@@ -2325,6 +2385,7 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
             discharge,
             storage,
             act_evap,
+            act_trans_loss,
             over_abs,
             waterbody_storage,
             wb_inflow,
@@ -2337,6 +2398,7 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=evaporation,
+            transmission_loss_m3=np.zeros_like(evaporation),
             waterbody_storage_m3=waterbody_storage,
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=retention_storage,
@@ -2359,6 +2421,7 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
             discharge,
             storage,
             act_evap,
+            act_trans_loss,
             over_abs,
             waterbody_storage,
             wb_inflow,
@@ -2371,6 +2434,7 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=evaporation,
+            transmission_loss_m3=np.zeros_like(evaporation),
             waterbody_storage_m3=waterbody_storage,
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=retention_storage,
@@ -2443,6 +2507,7 @@ def test_local_inertial_dynamic_lake_outflow_substepping() -> None:
         discharge,
         storage,
         act_evap,
+        act_trans_loss,
         over_abs,
         waterbody_storage,
         wb_inflow,
@@ -2455,6 +2520,7 @@ def test_local_inertial_dynamic_lake_outflow_substepping() -> None:
         river_storage_m3=storage,
         sideflow_m3=sideflow,
         evaporation_m3=evaporation,
+        transmission_loss_m3=np.zeros_like(evaporation),
         waterbody_storage_m3=waterbody_storage,
         outflow_per_waterbody_m3=outflow_per_waterbody,
         retention_storage_m3=retention_storage,
@@ -2516,6 +2582,7 @@ def test_local_inertial_already_permuted_equivalence() -> None:
         river_storage_m3=storage.copy(),
         sideflow_m3=sideflow.copy(),
         evaporation_m3=evaporation.copy(),
+        transmission_loss_m3=np.zeros_like(evaporation),
         waterbody_storage_m3=wb_storage.copy(),
         outflow_per_waterbody_m3=wb_outflow.copy(),
         retention_storage_m3=ret_storage.copy(),
@@ -2549,6 +2616,7 @@ def test_local_inertial_already_permuted_equivalence() -> None:
         river_storage_m3=storage_perm,
         sideflow_m3=sideflow_perm,
         evaporation_m3=evaporation_perm,
+        transmission_loss_m3=np.zeros_like(evaporation_perm),
         waterbody_storage_m3=wb_storage.copy(),
         outflow_per_waterbody_m3=wb_outflow.copy(),
         retention_storage_m3=ret_storage.copy(),
@@ -2562,10 +2630,12 @@ def test_local_inertial_already_permuted_equivalence() -> None:
     np.testing.assert_allclose(out_std[1][p_idxs], out_perm[1], rtol=1e-5, atol=1e-5)
     # Check evaporation
     np.testing.assert_allclose(out_std[2][p_idxs], out_perm[2], rtol=1e-5, atol=1e-5)
-    # Check over abstraction
+    # Check transmission loss
     np.testing.assert_allclose(out_std[3][p_idxs], out_perm[3], rtol=1e-5, atol=1e-5)
+    # Check over abstraction
+    np.testing.assert_allclose(out_std[4][p_idxs], out_perm[4], rtol=1e-5, atol=1e-5)
     # Check pit outflow
-    assert np.isclose(out_std[6], out_perm[6])
+    assert np.isclose(out_std[7], out_perm[7])
 
 
 def test_local_inertial_water_stage_state_variable() -> None:
@@ -2629,6 +2699,7 @@ def test_local_inertial_water_stage_state_variable() -> None:
         river_storage_m3=storage,
         sideflow_m3=sideflow,
         evaporation_m3=evap,
+        transmission_loss_m3=np.zeros_like(evap),
         waterbody_storage_m3=wb_storage,
         outflow_per_waterbody_m3=wb_outflow,
         retention_storage_m3=ret_storage,
@@ -2786,8 +2857,10 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
         storage = np.full(n_reaches, 5000.0, dtype=np.float64)
         sideflow = np.full(n_reaches, 50.0, dtype=np.float32)
         evap = np.full(n_reaches, 1.0, dtype=np.float32)
+        trans_loss = np.full(n_reaches, 0.5, dtype=np.float32)
         over_abs = np.zeros(n_reaches, dtype=np.float32)
         actual_evap = np.zeros(n_reaches, dtype=np.float32)
+        actual_trans = np.zeros(n_reaches, dtype=np.float32)
         updated_q = np.zeros(n_reaches, dtype=np.float32)
         kin_inflow = np.zeros(n_reaches, dtype=np.float32)
 
@@ -2844,8 +2917,10 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
             storage,
             sideflow,
             evap,
+            trans_loss,
             over_abs,
             actual_evap,
+            actual_trans,
             updated_q,
             kin_inflow,
             router._geometry,
@@ -2876,16 +2951,18 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
         state_serial[4], state_dispatched[4], rtol=1e-5, atol=1e-5
     )
     # Time-averaged discharge output (index 9)
-    np.testing.assert_allclose(state_serial[9], state_parallel[9], rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(
-        state_serial[9], state_dispatched[9], rtol=1e-5, atol=1e-5
+        state_serial[11], state_parallel[11], rtol=1e-5, atol=1e-5
+    )
+    np.testing.assert_allclose(
+        state_serial[11], state_dispatched[11], rtol=1e-5, atol=1e-5
     )
     # Stage buffer (inside SubstepBuffers at index 15)
     np.testing.assert_allclose(
-        state_serial[15].stage_buf, state_parallel[15].stage_buf, rtol=1e-5, atol=1e-5
+        state_serial[17].stage_buf, state_parallel[17].stage_buf, rtol=1e-5, atol=1e-5
     )
     np.testing.assert_allclose(
-        state_serial[15].stage_buf, state_dispatched[15].stage_buf, rtol=1e-5, atol=1e-5
+        state_serial[17].stage_buf, state_dispatched[17].stage_buf, rtol=1e-5, atol=1e-5
     )
 
 
@@ -2965,6 +3042,7 @@ def test_local_inertial_oscillation_suppression() -> None:
             river_storage_m3=storage_flat,
             sideflow_m3=sideflow_flat,
             evaporation_m3=np.zeros(n_cells_flat, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells_flat, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -3044,6 +3122,7 @@ def test_local_inertial_oscillation_suppression() -> None:
             river_storage_m3=storage_irreg,
             sideflow_m3=sideflow_irreg,
             evaporation_m3=np.zeros(n_cells_irreg, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells_irreg, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -3109,6 +3188,7 @@ def test_local_inertial_confluence_asymmetric_stability() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -3278,6 +3358,7 @@ def test_local_inertial_short_reach_cfl_stability() -> None:
         river_storage_m3=storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -3363,13 +3444,14 @@ def test_local_inertial_confluence_flood_pulse_and_recession() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
             retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
         )
         discharge, storage = step_result[0], step_result[1]
-        pit_outflow: float = float(step_result[6])
+        pit_outflow: float = float(step_result[7])
         cum_outflow += pit_outflow
         outlet_discharges.append(float(discharge[1]))
 
@@ -3463,6 +3545,7 @@ def test_local_inertial_multi_tributary_confluence_stability() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -3544,6 +3627,7 @@ def test_local_inertial_3_river_confluence_pulse_and_recession_stability() -> No
         river_storage_m3=storage,
         sideflow_m3=sideflow_pulse,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -3562,6 +3646,7 @@ def test_local_inertial_3_river_confluence_pulse_and_recession_stability() -> No
             river_storage_m3=storage,
             sideflow_m3=sideflow_zero,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -3632,6 +3717,7 @@ def test_local_inertial_confluence_flat_low_manning_stability() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -3721,13 +3807,14 @@ def test_local_inertial_confluence_monster_dam_break_backwater() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
             retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
         )
         discharge, storage = step_result[0], step_result[1]
-        cum_outflow += float(step_result[6])
+        cum_outflow += float(step_result[7])
 
         assert np.all(np.isfinite(discharge))
         assert np.all(np.isfinite(storage))
@@ -3814,13 +3901,14 @@ def test_local_inertial_confluence_antiphase_tributary_clash() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
             retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
         )
         discharge, storage = step_result[0], step_result[1]
-        cum_outflow += float(step_result[6])
+        cum_outflow += float(step_result[7])
 
         assert np.all(np.isfinite(discharge))
         assert np.all(np.isfinite(storage))
@@ -3893,6 +3981,7 @@ def test_local_inertial_confluence_extreme_geometric_disparity() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -3965,6 +4054,7 @@ def test_local_inertial_confluence_overdeepened_scour_hole() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4036,6 +4126,7 @@ def test_local_inertial_cfl_weir_high_discharge_small_sill_volume() -> None:
         river_storage_m3=river_storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=wb_storage,
         outflow_per_waterbody_m3=np.array([np.nan], dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4099,6 +4190,7 @@ def test_local_inertial_cfl_downstream_short_reach_upstream_surge() -> None:
         river_storage_m3=storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4164,6 +4256,7 @@ def test_local_inertial_dynamic_cfl_with_intense_lateral_sideflow() -> None:
         river_storage_m3=storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4250,6 +4343,7 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
             river_storage_m3=storage_A,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4269,6 +4363,7 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
         river_storage_m3=storage_A,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4302,6 +4397,7 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
             river_storage_m3=storage_A,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4355,6 +4451,7 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
             river_storage_m3=storage_B,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4498,6 +4595,7 @@ def test_local_inertial_steep_drop_free_overfall_bates() -> None:
         river_storage_m3=init_storage_1.copy(),
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4510,6 +4608,7 @@ def test_local_inertial_steep_drop_free_overfall_bates() -> None:
         river_storage_m3=init_storage_2.copy(),
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4523,7 +4622,7 @@ def test_local_inertial_steep_drop_free_overfall_bates() -> None:
 
     # Verify mass conservation over the step
     storage_out: np.ndarray = res1[1]
-    pit_out: np.float32 = res1[6]
+    pit_out: np.float32 = res1[7]
     assert np.isclose(storage_out.sum() + pit_out, init_storage_1.sum(), rtol=1e-4)
 
 
@@ -4551,6 +4650,7 @@ def test_submerged_interface_enables_reverse_flow_flag() -> None:
         river_storage_m3=np.array([0.0, 20000.0], dtype=np.float64),
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4573,6 +4673,7 @@ def test_submerged_interface_enables_reverse_flow_flag() -> None:
         river_storage_m3=np.array([0.0, 20000.0], dtype=np.float64),
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4580,7 +4681,7 @@ def test_submerged_interface_enables_reverse_flow_flag() -> None:
     )
     # Submerged interface supports backwater flow into reach 0 (mass moves upstream)
     storage_sub: np.ndarray = res_sub[1]
-    pit_out_sub: np.float32 = res_sub[6]
+    pit_out_sub: np.float32 = res_sub[7]
     assert np.isclose(storage_sub.sum() + pit_out_sub, 20000.0, rtol=1e-4)
 
 
@@ -4638,14 +4739,15 @@ def test_local_inertial_cascading_waterbody_to_waterbody_transfer() -> None:
         river_storage_m3=river_storage_init.copy(),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=wb_storage_init.copy(),
         outflow_per_waterbody_m3=outflow_wb,
         retention_storage_m3=np.zeros(0, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
     )
 
-    wb_storage_out: np.ndarray = res[4]
-    outflow_at_pits: float = float(res[6])
+    wb_storage_out: np.ndarray = res[5]
+    outflow_at_pits: float = float(res[7])
     river_storage_out: np.ndarray = res[1]
 
     # Lake 0 must have discharged water into Lake 1
@@ -4707,6 +4809,7 @@ def test_local_inertial_outflow_boundary_dynamic_slope() -> None:
         river_storage_m3=init_storage.copy(),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4715,7 +4818,7 @@ def test_local_inertial_outflow_boundary_dynamic_slope() -> None:
 
     q_out: np.ndarray = res[0]
     storage_out: np.ndarray = res[1]
-    outflow_at_pits: float = float(res[6])
+    outflow_at_pits: float = float(res[7])
 
     # With dynamic slope extrapolation, boundary discharge must be robust and evacuating flood water
     assert q_out[1] > 20.0, f"Expected accelerated boundary discharge, got {q_out[1]}"
@@ -4782,6 +4885,7 @@ def test_local_inertial_outflow_boundary_directly_downstream_of_waterbody() -> N
         river_storage_m3=river_storage_init.copy(),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=wb_storage_init.copy(),
         outflow_per_waterbody_m3=np.array([np.nan], dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4790,8 +4894,8 @@ def test_local_inertial_outflow_boundary_directly_downstream_of_waterbody() -> N
 
     q_out: np.ndarray = res[0]
     river_storage_out: np.ndarray = res[1]
-    wb_storage_out: np.ndarray = res[4]
-    outflow_at_pits: float = float(res[6])
+    wb_storage_out: np.ndarray = res[5]
+    outflow_at_pits: float = float(res[7])
 
     # Lake must release water and boundary reach must efficiently convey it out
     assert wb_storage_out[0] < wb_storage_init[0]
@@ -4885,6 +4989,7 @@ def test_local_inertial_thread_isolation_during_step() -> None:
         river_storage_m3=np.full(n_cells, 50000.0, dtype=np.float64),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -4930,6 +5035,7 @@ def test_local_inertial_parallel_cfl_compilation(
         river_storage_m3=np.zeros(n_cells, dtype=np.float64),
         sideflow_m3=np.array([10.0, 0.0, 0.0], dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),

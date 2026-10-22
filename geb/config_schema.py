@@ -288,6 +288,14 @@ class RoutingConfig(BaseModel):
         0.9,
         description="Factor to multiply the activation threshold by to get the release threshold.",
     )
+    riverbed_hydraulic_conductivity_multiplier: float = Field(
+        0.1,
+        ge=0.0,
+        description=(
+            "Multiplier applied to underlying aquifer hydraulic conductivity "
+            "to calculate streambed infiltration conductivity."
+        ),
+    )
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
     )

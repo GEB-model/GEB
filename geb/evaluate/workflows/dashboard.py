@@ -6,6 +6,7 @@ _JavascriptMacro adds these scripts and their data to the HTML file.
 """
 
 import base64
+import datetime
 import gzip
 import html
 import json
@@ -247,6 +248,55 @@ class _StationsPaneMacro(MacroElement):
         )
 
 
+def read_run_completion_time(run_output_folder: Path | None) -> str | None:
+    """Read the completion timestamp of a simulation run from done.txt if available.
+
+    Uses the creation/modification time of done.txt, which is touched when
+    a run finishes.
+
+    Args:
+        run_output_folder: Simulation output directory for the run.
+
+    Returns:
+        Formatted completion timestamp string, or None if not found.
+    """
+    if run_output_folder is None:
+        return None
+    done_file: Path = run_output_folder / "done.txt"
+    if not done_file.exists() and run_output_folder.name == "report":
+        done_file = run_output_folder.parent / "done.txt"
+    if not done_file.exists():
+        return None
+    mtime: float = done_file.stat().st_mtime
+    return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def read_run_completion_timestamp_for_filename(
+    run_output_folder: Path | None,
+) -> str | None:
+    """Read the completion timestamp of a simulation run formatted for filenames.
+
+    Uses the creation/modification time of done.txt, which is touched when
+    a run finishes.
+
+    Args:
+        run_output_folder: Simulation output directory for the run.
+
+    Returns:
+        Formatted completion timestamp string '%Y%m%d_%H%M%S' (e.g. '20261022_130706'),
+        or None if not found.
+    """
+    if run_output_folder is None:
+        return None
+    done_file: Path = run_output_folder / "done.txt"
+    if not done_file.exists() and run_output_folder.name == "report":
+        done_file = run_output_folder.parent / "done.txt"
+    if not done_file.exists():
+        return None
+    mtime: float = done_file.stat().st_mtime
+    return datetime.datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
+
+
 def create_discharge_dashboard(
     evaluation_folder: Path,
     run_output_folder: Path,
@@ -257,6 +307,7 @@ def create_discharge_dashboard(
     correct_discharge_observations: bool = False,
     output_filename: str = "discharge_evaluation_map.html",
     include_return_period_plots: bool = True,
+    run_name: str = "default",
 ) -> dict[str, str]:
     """Create only the discharge evaluation dashboard.
 
@@ -277,9 +328,12 @@ def create_discharge_dashboard(
             by the observed-to-GEB upstream-area ratio (dimensionless), matching
             the option in ``evaluate_discharge``.
         output_filename: Dashboard HTML filename written inside the discharge
-            evaluation output folder, or an absolute output path.
+            evaluation output folder, or an absolute output path. If the run is
+            completed, the completion timestamp (date, hour, minute, second) is
+            appended to the filename stem.
         include_return_period_plots: Whether to calculate and plot return-period
             curves in station popups. Defaults to True.
+        run_name: Simulation run name shown on the dashboard. Defaults to "default".
 
     Returns:
         Dictionary with the created dashboard path.
@@ -373,7 +427,19 @@ def create_discharge_dashboard(
         run_output_folder=run_output_folder,
     )
 
-    dashboard_path: Path = evaluation_folder / output_path
+    completion_time: str | None = read_run_completion_time(run_output_folder)
+    completion_timestamp: str | None = read_run_completion_timestamp_for_filename(
+        run_output_folder
+    )
+    if completion_timestamp and completion_timestamp not in output_path.stem:
+        output_path = output_path.with_stem(
+            f"{output_path.stem}_{completion_timestamp}"
+        )
+
+    if output_path.is_absolute():
+        dashboard_path: Path = output_path
+    else:
+        dashboard_path = evaluation_folder / output_path
     logger.info("Preparing interactive chart data...")
     station_bundle_indices, chart_bundles, chart_timelines = (
         _write_dashboard_charts_from_saved_scores(
@@ -399,6 +465,9 @@ def create_discharge_dashboard(
         station_characteristics=dashboard_characteristics,
         excluded_stations=excluded_stations,
         chart_timeline=chart_timelines,
+        run_output_folder=run_output_folder,
+        run_name=run_name,
+        completion_date=completion_time,
     )
     logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
     return {"dashboard": str(dashboard_path)}
@@ -416,6 +485,8 @@ def write_discharge_dashboard(
     excluded_stations: gpd.GeoDataFrame | None = None,
     chart_timeline: list[int] | dict[str, Any] | None = None,
     run_output_folder: Path | None = None,
+    run_name: str | None = None,
+    completion_date: str | datetime.datetime | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -447,10 +518,23 @@ def write_discharge_dashboard(
         run_output_folder: Optional simulation output folder used to attach
             end-of-run simulated river dimensions if not already present on
             rivers. Defaults to None.
+        run_name: Optional simulation run name shown on the dashboard and in the
+            legend.
+        completion_date: Optional completion timestamp string or datetime
+            shown on the dashboard and in the legend. If omitted, read from
+            ``run_output_folder / done.txt``.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
     """
+    formatted_completion_date: str | None = None
+    if completion_date is None and run_output_folder is not None:
+        formatted_completion_date = read_run_completion_time(run_output_folder)
+    elif isinstance(completion_date, datetime.datetime):
+        formatted_completion_date = completion_date.strftime("%Y-%m-%d %H:%M:%S")
+    elif completion_date is not None:
+        formatted_completion_date = str(completion_date)
+
     if run_output_folder is not None and (
         "width_m" not in rivers.columns or "depth_m" not in rivers.columns
     ):
@@ -470,6 +554,12 @@ def write_discharge_dashboard(
         )
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
     discharge_map = folium.Map(location=map_center, tiles=None, prefer_canvas=True)
+    dashboard_title_parts: list[str] = ["Discharge Evaluation Dashboard"]
+    if run_name:
+        dashboard_title_parts.append(f"Run: {run_name}")
+    if formatted_completion_date:
+        dashboard_title_parts.append(f"Completed: {formatted_completion_date}")
+    cast(Figure, discharge_map.get_root()).title = " · ".join(dashboard_title_parts)
     _StationsPaneMacro().add_to(discharge_map)
     topo_tile: TileLayer = TileLayer(
         tiles=_ESRI_TOPO_TILES,
@@ -805,6 +895,8 @@ def write_discharge_dashboard(
         excluded_stations=station_marker_index,
         exclusion_summary=exclusion_summary,
         snapping_layer=snapping_layer.get_name() if snapping_stations else None,
+        run_name=run_name,
+        completion_date=formatted_completion_date,
     )
 
     chart_macro_data: dict[str, Any] = {
@@ -2254,6 +2346,8 @@ def _inject_station_layer_legend_script(
     excluded_stations: list[StationMarkerIndex],
     exclusion_summary: dict[str, Any] | None = None,
     snapping_layer: str | None = None,
+    run_name: str | None = None,
+    completion_date: str | None = None,
 ) -> None:
     """Add unified dynamic station legend with metric selector and distribution plots.
 
@@ -2275,6 +2369,8 @@ def _inject_station_layer_legend_script(
         excluded_stations: Serialized excluded station markers for search resolution.
         exclusion_summary: Optional summary counts of excluded stations and reasons.
         snapping_layer: Optional name of the station snapping details feature group.
+        run_name: Optional simulation run name displayed in the legend.
+        completion_date: Optional completion timestamp string displayed in the legend.
     """
     configs_by_column: dict[str, dict[str, Any]] = {
         str(config["col"]): config for config in _METRIC_LAYER_CONFIGS
@@ -2372,6 +2468,8 @@ def _inject_station_layer_legend_script(
         "excludedStations": excluded_stations,
         "exclusionSummary": exclusion_summary,
         "snappingLayer": snapping_layer,
+        "runName": run_name,
+        "completionDate": completion_date,
     }
     _JavascriptMacro("legend.js", unified_menu_payload).add_to(discharge_map)
 
