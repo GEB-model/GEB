@@ -25,6 +25,12 @@ from shapely.geometry.base import BaseGeometry
 from geb.geb_types import ArrayFloat32, ArrayInt64
 from geb.workflows.io import read_geom
 
+# Native (non-container) SFINCS installation used on Linux.
+SFINCS_NATIVE_BIN_DIR: str = "/scistor/ivm/GEB/sfincs_2.4.0/installed/bin"
+SFINCS_NATIVE_GCC_MODULE: str = "GCC/12.3.0"
+SFINCS_NATIVE_NETCDF_MODULE: str = "netCDF/4.9.0-gompi-2022b"
+SFINCS_NATIVE_OMP_THREADS: int = 32
+
 # Flood depth color scheme (shallow light blue -> deep dark red), also used for
 # the flood animation in `geb evaluate hydrodynamics.animate_flood`.
 FLOOD_DEPTH_COLORS: list[str] = [
@@ -569,7 +575,11 @@ def run_sfincs_simulation(
     simulation_root: Path,
     gpu: bool | str = "auto",
 ) -> int:
-    """Run SFINCS simulation using either Apptainer or Docker.
+    """Run SFINCS simulation, natively on Linux or using Docker on other platforms.
+
+    On Linux, the natively installed (CPU) SFINCS binary is used, with the required
+    environment loaded through the `module` system. On other platforms, the
+    SFINCS Docker container is used.
 
     Args:
         model_root: Path to the model root directory.
@@ -578,6 +588,8 @@ def run_sfincs_simulation(
             The simulation directory must be a subdirectory of the model root directory.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
+            Only used for the Docker container; the native Linux binary is CPU-only
+            and ignores this setting.
 
     Raises:
         ValueError: If gpu is not True, False, or 'auto'.
@@ -588,6 +600,38 @@ def run_sfincs_simulation(
     """
     if gpu not in [True, False, "auto"]:
         raise ValueError("gpu must be True, False, or 'auto'")
+
+    if platform.system() == "Linux":
+        # SFINCS is built natively against the cluster's netCDF/GCC modules; the
+        # `module` function is only defined after sourcing lmod, which is not
+        # done automatically in non-interactive shells.
+        sfincs_shell_script: str = "\n".join(
+            [
+                "source /etc/profile.d/lmod.sh",
+                "source /etc/profile.d/z_lmod_custom.sh",
+                # the calling environment may already have another software
+                # stack (e.g. 2024) loaded, which conflicts with 2023
+                "module purge",
+                "module load shared 2023",
+                f"module load {SFINCS_NATIVE_GCC_MODULE}",
+                f"module load {SFINCS_NATIVE_NETCDF_MODULE}",
+                f'export PATH="{SFINCS_NATIVE_BIN_DIR}:$PATH"',
+                "ulimit -s unlimited",
+                f"export OMP_NUM_THREADS={SFINCS_NATIVE_OMP_THREADS}",
+                "sfincs",
+            ]
+        )
+        native_cmd: list[str] = ["bash", "-c", sfincs_shell_script]
+
+        log_file: Path = simulation_root / "sfincs_stdout.txt"
+        return_code: int = run_sfincs_subprocess(
+            simulation_root, native_cmd, log_file=log_file
+        )
+        if return_code != 0:
+            raise RuntimeError(
+                f"Error running SFINCS simulation: {return_code}. The used command was: {sfincs_shell_script!r}. The log file is located at {log_file}."
+            )
+        return return_code
 
     if gpu == "auto":
         # check if nvidia-smi is available, if so, check if a GPU is present
@@ -631,38 +675,20 @@ def run_sfincs_simulation(
         version: str | None = os.getenv(key="SFINCS_CONTAINER")
         assert version is not None, "SFINCS_CONTAINER environment variable is not set"
 
-    if platform.system() == "Linux":
-        # If not a apptainer image, add docker:// prefix
-        # to the version string
-        if not version.endswith(".sif"):
-            version: str = "docker://" + version
-
-        cmd: list[str] = [
-            "apptainer",
-            "run",
-            "-B",  ## Bind mount
-            f"{model_root.resolve()}:/data",
-            "--pwd",  ## Set working directory inside container
-            f"/data/{simulation_root.relative_to(model_root)}",
-            "--nv",
-            version,
-        ]
-
-    else:
-        assert check_docker_running(), "Docker is not running"
-        # in the docker image of SFINCS thet working directory is /data
-        # but since we also want to load files that are from the model
-        # root, we mount the model root to /data and then change the
-        # working directory within the Docker image to the simulation root
-        cmd: list[str] = [
-            "docker",
-            "run",
-            "-v",
-            f"{model_root.resolve()}:/data",
-            "-w",
-            f"/data/{simulation_root.relative_to(model_root).as_posix()}",
-            version,
-        ]
+    assert check_docker_running(), "Docker is not running"
+    # in the docker image of SFINCS thet working directory is /data
+    # but since we also want to load files that are from the model
+    # root, we mount the model root to /data and then change the
+    # working directory within the Docker image to the simulation root
+    cmd: list[str] = [
+        "docker",
+        "run",
+        "-v",
+        f"{model_root.resolve()}:/data",
+        "-w",
+        f"/data/{simulation_root.relative_to(model_root).as_posix()}",
+        version,
+    ]
 
     log_file: Path = simulation_root / "sfincs.log"
     return_code: int = run_sfincs_subprocess(simulation_root, cmd, log_file=log_file)
