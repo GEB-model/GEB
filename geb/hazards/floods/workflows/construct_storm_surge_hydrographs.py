@@ -84,10 +84,9 @@ def linear_detrend_with_nan(
         plt.ylabel("waterlevel [m]")
         plt.legend(loc="upper right")
         plt.savefig(
-            PLOT_FOLDER / f"tide_detrended_station_{int(station):05d}.png",
-            format="png",
+            PLOT_FOLDER / f"tide_detrended_station_{int(station):05d}.svg",
+            format="svg",
             bbox_inches="tight",
-            dpi=300,
         )
         plt.close()
     result = pd.Series(
@@ -354,10 +353,9 @@ def generate_tide_signals(
         plt.xlim(0, 36)
         plt.grid()
         plt.savefig(
-            PLOT_FOLDER / f"tide_signal_station_{int(station):05d}.png",
-            format="png",
+            PLOT_FOLDER / f"tide_signal_station_{int(station):05d}.svg",
+            format="svg",
             bbox_inches="tight",
-            dpi=300,
         )
         plt.close("all")
     return average_tide_signal, spring_tide_signal
@@ -533,10 +531,9 @@ def generate_surge_hydrograph(
         plt.grid()
         plt.savefig(
             PLOT_FOLDER
-            / f"surge_hydrograph_station_{int(station):05d}_percentile_{int(percentile * 100):02d}.png",
-            format="png",
+            / f"surge_hydrograph_station_{int(station):05d}_percentile_{int(percentile * 100):02d}.svg",
+            format="svg",
             bbox_inches="tight",
-            dpi=300,
         )
         plt.close("all")
 
@@ -688,10 +685,9 @@ def generate_storm_tide_hydrograph(
         plt.xlim(-36, 36)
         plt.savefig(
             PLOT_FOLDER
-            / f"rp{int(rp):4d}_storm_tide_hydrograph_station_{int(station):05d}_percentile_{int(percentile * 100):02d}.png",
-            format="png",
+            / f"rp{int(rp):4d}_storm_tide_hydrograph_station_{int(station):05d}_percentile_{int(percentile * 100):02d}.svg",
+            format="svg",
             bbox_inches="tight",
-            dpi=300,
         )
         plt.close("all")
 
@@ -741,10 +737,9 @@ def generate_storm_tide_hydrograph(
         plt.xlim(-36, 36)
         plt.savefig(
             PLOT_FOLDER
-            / f"rp{int(rp):4d}_storm_tide_spring_tide_hydrograph_station_{int(station):05d}_percentile_{int(percentile * 100):02d}.png",
-            format="png",
+            / f"rp{int(rp):4d}_storm_tide_spring_tide_hydrograph_station_{int(station):05d}_percentile_{int(percentile * 100):02d}.svg",
+            format="svg",
             bbox_inches="tight",
-            dpi=300,
         )
         plt.close("all")
 
