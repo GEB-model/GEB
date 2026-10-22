@@ -2041,7 +2041,7 @@ class Hydrography(BuildModelBase):
         self.setup_total_water_levels()
         self.setup_surge_levels()
         self.setup_coast_rp()
-        self.setup_sea_level_projections(percentile)
+        self.setup_sea_level_projections(projection_quantile)
 
     @build_method(required=False)
     def setup_inflow(
