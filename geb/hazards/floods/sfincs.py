@@ -1642,7 +1642,7 @@ class SFINCSRootModel:
         Args:
             output_folder: The folder containing the coastal hydrograph timeseries and locations.
             return_period: The return period for which to create the coastal simulation.
-            locations: A GeoDataFrame containing the locations of GTSM forcing stations.
+            locations: A GeoDataFrame containing the locations of water level forcing stations.
             offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
             sea_level_rise: A DataFrame containing sea level rise data.
             year: The year for which to apply sea level rise adjustments.
@@ -1654,7 +1654,8 @@ class SFINCSRootModel:
         # prepare coastal timeseries and locations
         timeseries = pd.read_csv(
             output_folder
-            / f"hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv",
+            / "hydrographs"
+            / f"water_levels_spring_tide_hydrograph_rp{return_period:04d}.csv",
             index_col=0,
         )
 
