@@ -658,7 +658,7 @@ def run_sfincs_simulation(
             binary = Path(os.getenv("SFINCS_BINARY", str(DEFAULT_SFINCS_BINARY)))
         if not binary.exists():
             raise FileNotFoundError(f"SFINCS binary not found at {binary}")
-        cmd = [str(binary)]
+        cmd = [str(binary.resolve())]
     else:
         container_variable: str = "SFINCS_CONTAINER_GPU" if gpu else "SFINCS_CONTAINER"
         version: str | None = os.getenv(key=container_variable)
