@@ -59,3 +59,6 @@ RHO_MINERAL_KG_PER_M3: np.float32 = np.float32(2650.0)
 
 N_SOIL_LAYERS: int = 6
 N_SNOW_LAYERS: int = 2
+
+# The top 30 cm is considered top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
+N_TOP_SOIL_LAYERS: int = 3
