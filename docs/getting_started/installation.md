@@ -22,7 +22,7 @@ or with [uv](https://docs.astral.sh/uv/getting-started/installation/). If you ha
 uv pip install geb --prerelease=allow
 ```
 
-To run SFINCS (the hydrodynamic model), you also need to install Docker (on Windows) or Apptainer (on Linux and Mac OS X). To install Docker you need to obtain and install Docker from their website (https://www.docker.com/get-started) and make sure Docker or Apptainer is running. By default, GEB runs SFINCS using a natively compiled binary (`/scistor/ivm/GEB/sfincs/bin/sfincs`, or `sfincs-gpu` if a GPU is available; override with the `SFINCS_BINARY` and `SFINCS_BINARY_GPU` environment variables). To use a container instead, set the environment variable `SFINCS_RUNTIME` to `apptainer` or `docker`, together with `SFINCS_CONTAINER` (and `SFINCS_CONTAINER_GPU`).
+By default, GEB runs SFINCS (the hydrodynamic model) using a natively compiled binary. Ensure that the selected executable is installed at `/scistor/ivm/GEB/sfincs/bin/sfincs` (CPU) or `/scistor/ivm/GEB/sfincs/bin/sfincs-gpu` (when a GPU is detected), or override its location with `SFINCS_BINARY` or `SFINCS_BINARY_GPU`, respectively. To use a container instead, install Docker or Apptainer, set `SFINCS_RUNTIME` to `docker` or `apptainer`, and set `SFINCS_CONTAINER` for CPU runs or `SFINCS_CONTAINER_GPU` for GPU runs to the corresponding image. Docker can be installed from https://www.docker.com/get-started and its daemon must be running when selected.
 
 ## Installation as a tool
 
