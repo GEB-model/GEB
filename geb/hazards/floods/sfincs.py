@@ -460,8 +460,8 @@ class SFINCSRootModel:
         assert flood_plain.union_all().boundary is not None, (
             "Clipped flood plain unions to a geometry with no boundary"
         )
-
-        sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
+        ### USING self.subbasins instead of flood_plain because the flood plain now breaks outflow points.
+        sf.mask.create_active(include_polygon=self.subbasins, reset_mask=True)
 
         self.rivers["outflow_elevation"] = np.nan
         self.rivers["outflow_point_xy"] = None
