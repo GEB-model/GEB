@@ -13,6 +13,10 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b37": [
+        "[update-method;setup_coastal_water_levels]",
+        "[manual] Coastal water levels have name changes. Add setup_coastal_water_levels to custom build.yml files unless inherited from reasonable_default_build.yml and remove the old setup_gtsm_station_data.",
+    ],
     "1.0.0b36": [
         "[update-method;setup_karst]",
         "[manual] Karst is included in every hydrology run. Add setup_karst to custom build.yml files unless inherited from reasonable_default_build.yml, then rerun spinup and simulation.",
