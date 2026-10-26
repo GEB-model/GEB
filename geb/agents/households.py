@@ -1543,7 +1543,12 @@ class Households(AgentBaseClass):
         )
 
     def update_monetary_variables_to_ssp(self) -> None:
-        """Update monetary variables to match the specified SSP scenario."""
+        """Update monetary variables to match the specified SSP scenario.
+
+        Raises:
+            ValueError: If the SSP, damage function, RCP, or warming percentile is
+                invalid, or if the requested scenario map has not been built.
+        """
         # We consider 2020 to be the base year
         base_year=2020
         if not hasattr(self, "factor_change"):
@@ -1870,7 +1875,6 @@ class Households(AgentBaseClass):
         Returns:
             Number of households exposed to flooding.
         """
-
         return np.int32(self.households_exposed_to_flooding.size)
 
     @property

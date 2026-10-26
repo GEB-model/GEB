@@ -5,6 +5,7 @@ from typing import Any
 
 from .aquastat import AQUASTAT
 from .base import Adapter
+from .climrisk import CLIMRISK
 from .cmip6 import CMIP6
 from .coast_rp import CoastRP
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
@@ -38,7 +39,6 @@ from .grow import GROW
 from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .iiasa_ssp import IIASA_SSP
-from .climrisk import CLIMRISK
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
 from .lowder import Lowder

@@ -7,15 +7,14 @@ selected countries, and returns the result as an xarray Dataset.
 from __future__ import annotations
 
 import warnings
-from functools import cache
 from typing import Any
 
+import geopandas as gpd
 import h5py
 import numpy as np
+import shapely
 import xarray as xr
 from scipy.io import loadmat
-import geopandas as gpd
-import shapely
 
 from geb.build.data_catalog.base import Adapter
 
@@ -38,9 +37,6 @@ class CLIMRISK(Adapter):
         Args:
             args: Additional positional arguments passed to the Adapter.
             kwargs: Additional keyword arguments passed to the Adapter.
-
-        Returns:
-            None.
         """
         super().__init__(*args, **kwargs)
 

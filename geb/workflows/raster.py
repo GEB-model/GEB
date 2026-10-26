@@ -191,7 +191,7 @@ def sample_from_map(
     coords: np.ndarray,
     gt: tuple[float, float, float, float, float, float],
     out_of_bounds_value: float | int | bool | None = None,
-    ssp_map=False
+    ssp_map: bool = False
 ) -> np.ndarray:
     """Sample coordinates from a map. Can handle multiple dimensions.
 
