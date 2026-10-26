@@ -613,7 +613,7 @@ class Households(AgentBaseClass):
 
         self.var.households_with_postal_codes = households_with_postal_codes
 
-        print(
+        self.model.logger.info(
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
         )
 
@@ -678,7 +678,7 @@ class Households(AgentBaseClass):
                     n_flooded_buildings = buildings_proj["flooded"].sum()
                     n_flooded_households = flooded_households.sum()
 
-                    print(
+                    self.model.logger.info(
                         f"Flooded buildings: {n_flooded_buildings}/{n_buildings}, "
                         f"Flooded households: {n_flooded_households}"
                     )
@@ -795,7 +795,7 @@ class Households(AgentBaseClass):
             / "critical_facilities.geoparquet"
         )
         all_critical_facilities.to_parquet(save_path)
-        print(f"Loaded {len(all_critical_facilities)} critical facilities.")
+        self.model.logger.info(f"Loaded {len(all_critical_facilities)} critical facilities.")
 
         # Update buildings with critical infrastructure attributes
         buildings = self.update_buildings_w_critical_infrastructure(
@@ -1233,7 +1233,7 @@ class Households(AgentBaseClass):
         self.update_building_adaptation_status(household_adapting)
 
         # print percentage of households that adapted
-        print(f"N households that adapted: {len(household_adapting)}")
+        self.model.logger.info(f"N households that adapted: {len(household_adapting)}")
 
         self.var.ead_usd_per_year[:] = self.flood_risk_module.calculate_ead(
             damages_do_not_adapt, damages_adapt, self.var.adapted.data
@@ -1329,7 +1329,7 @@ class Households(AgentBaseClass):
                 self._cached_mapped_comids = self._cached_mapped_comids[:-1]
             setattr(self, "_comid_map", comid_map)
         # Print the number of households that are removed
-        print(f"N households that relocated: {len(household_relocating)}")
+        self.model.logger.info(f"N households that relocated: {len(household_relocating)}")
 
     def spinup(self) -> None:
         """This function runs the spin-up process for the household agents."""
@@ -1691,7 +1691,7 @@ class Households(AgentBaseClass):
                 ) or is_flood_triggered:
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
-                    # print(f"Thinking about adapting at {current_time}...")
+                    # self.model.logger.info(f"Thinking about adapting at {current_time}...")
                     self.decide_household_strategy()
 
                 end_time: datetime = datetime.combine(
@@ -1699,7 +1699,7 @@ class Households(AgentBaseClass):
                 )
 
                 if self.model.current_time == end_time:
-                    print("end of sim reached")
+                    self.model.logger.info("end of sim reached")
                     df_all: pd.DataFrame = pd.concat(
                         self.flood_risk_perceptions, ignore_index=True
                     )
@@ -1713,7 +1713,7 @@ class Households(AgentBaseClass):
                     out_path: Path = (
                         Path(self.model.output_folder) / "risk_perceptions.gpkg"
                     )
-                    print(f"saved risk perception here: {out_path}")
+                    self.model.logger.info(f"saved risk perception here: {out_path}")
                     gdf.to_file(out_path, layer="perceptions", driver="GPKG")
 
                     df_stats: pd.DataFrame = pd.DataFrame(
@@ -1723,7 +1723,7 @@ class Households(AgentBaseClass):
                         Path(self.model.output_folder) / "risk_perception_stats.csv"
                     )
                     df_stats.to_csv(out_path, index=False)
-                    print(f"Saved risk perception statistics to {out_path}")
+                    self.model.logger.info(f"Saved risk perception statistics to {out_path}")
 
             else:  # Household don't respond to actual floods, but make decision on the first day of the year. Decisions are based on random floods
                 if (
@@ -1738,7 +1738,7 @@ class Households(AgentBaseClass):
                         self.update_monetary_variables_to_ssp()
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
-                    # print("Thinking about adapting...")
+                    # self.model.logger.info("Thinking about adapting...")
                     self.decide_household_strategy()
         self.report(locals())
 
