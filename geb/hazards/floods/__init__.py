@@ -871,6 +871,9 @@ class Floods(Module):
 
         for return_period in self.config["return_periods"]:
             simulations: list[SFINCSSimulation] = []
+            representative_year = self.model.config.get(
+                "representative_year", self.model.current_time.year
+            )
 
             if coastal:
                 sfincs_coastal_simulation: SFINCSSimulation = (
@@ -880,7 +883,7 @@ class Floods(Module):
                         coastal_forcing_locations,
                         offset=coastal_offset,
                         sea_level_rise=sea_level_rise,
-                        year=self.model.current_time.year,
+                        year=representative_year,
                         simulation_root=self.get_simulations_root(
                             sfincs_coastal_root_model
                         ),
