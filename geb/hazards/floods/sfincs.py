@@ -606,6 +606,7 @@ class SFINCSRootModel:
                     self.sfincs_model.grid.region.to_crs(
                         rivers_to_burn.crs
                     ).union_all(),
+                    keep_geom_type=True,
                 )
 
                 # Only burn rivers where width and depth are defined.
@@ -1355,7 +1356,7 @@ class SFINCSRootModel:
         discharge_by_river: pd.DataFrame,
         return_periods: list[int | float],
         prefix: str = "Q",
-        min_exceed: int = 30,
+        min_exceed: int = 10,
         nboot: int = 2000,
         fixed_shape: float | None = None,
         fixed_scale: float | None = None,
