@@ -531,11 +531,15 @@ def compute_cross_section_from_depth(
 
         # In CaMa-Flood style routing, the floodplain acts as a storage reservoir (dead zone):
         # water stored on the floodplain attenuates the flood wave and raises the water surface level,
-        # but downstream conveyance between reaches is carried by the river channel section (channel
-        # area plus the column of water directly above the river channel).
+        # while downstream longitudinal conveyance is carried by the river channel column (channel
+        # area plus the water column directly above the river channel).
+        # To prevent hydraulic radius R = A / P from inflating artificially during overbank flow
+        # (which erroneously lowers Manning resistance and accelerates flood drainage), the wetted
+        # perimeter includes the channel bed perimeter plus the two lateral shear interfaces
+        # of height floodplain_depth on either side of the overbank water column.
         area = bankfull_area_m2 + bankfull_width_m * floodplain_depth
         top_width = bankfull_width_m
-        wetted_perimeter = bankfull_perimeter_m
+        wetted_perimeter = bankfull_perimeter_m + np.float32(2.0) * floodplain_depth
 
     return area, top_width, wetted_perimeter
 

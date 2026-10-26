@@ -40,6 +40,9 @@ class DummyGridVar:
         self.waterbody_outflow_points: np.ndarray = np.full(n, -1, dtype=np.int32)
         self.waterbody_ids: np.ndarray = np.full(n, -1, dtype=np.int32)
         self.river_slope_m_per_m: ArrayFloat32 = np.full(n, 0.001, dtype=np.float32)
+        self.groundwater_hydraulic_conductivity_m_per_day: np.ndarray = np.full(
+            (1, n), 10.0, dtype=np.float32
+        )
 
 
 class DummyGrid:
@@ -288,7 +291,7 @@ def test_compute_cross_section_from_depth() -> None:
     # CaMa-Flood style: floodplain acts as dead storage; flow is carried by the main channel column.
     # W_bf=20.0, h_bf=2.0, effective_depth=2.5 -> floodplain_depth = 0.5 m
     # Channel flow area = bankfull_area + W_bf * floodplain_depth = (40.0 / 1.5) + 20.0 * 0.5 = 36.6667 m2
-    # Top width = W_bf = 20.0 m; Wetted perimeter = bankfull_perimeter
+    # Top width = W_bf = 20.0 m; Wetted perimeter = bankfull_perimeter + 2 * floodplain_depth
     area_ob, top_width_ob, p_wetted_ob = compute_cross_section_from_depth(
         effective_depth_m=np.float32(2.5),
         bankfull_width_m=bankfull_width_m,
@@ -300,9 +303,10 @@ def test_compute_cross_section_from_depth() -> None:
         width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
     )
     expected_area_ob = (40.0 / 1.5) + (20.0 * 0.5)
+    expected_p_wetted_ob = bankfull_perimeter_arr[0] + np.float32(2.0 * 0.5)
     assert np.isclose(area_ob, expected_area_ob, atol=1e-4)
     assert np.isclose(top_width_ob, 20.0, atol=1e-4)
-    assert np.isclose(p_wetted_ob, bankfull_perimeter_arr[0], atol=1e-4)
+    assert np.isclose(p_wetted_ob, expected_p_wetted_ob, atol=1e-4)
 
 
 def test_free_overfall_slope_bounded_by_bed_slope() -> None:
@@ -876,12 +880,14 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
             },
         },
         "retention_basins": {"release_threshold_factor": 1.0},
+        "riverbed_hydraulic_conductivity_multiplier": 0.1,
     }
     routing.default_missing_channel_width = 0.5
     routing.retention_max_storage_m3 = np.zeros(0, dtype=np.float32)
     routing.retention_basin_ids = np.full(2, -1, dtype=np.int32)
     routing.controlled_retention = np.zeros(0, dtype=bool)
     routing.river_network = None  # ty:ignore[invalid-assignment]
+    routing._riverbed_hydraulic_conductivity_m_per_s = np.zeros(2, dtype=np.float32)
 
     var: RoutingVariables = RoutingVariables()
     var.river_ids = np.array([10, 20], dtype=np.int32)
@@ -915,6 +921,9 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
         river_slope_m_per_m: ArrayFloat32 = np.array([0.001, 0.001], dtype=np.float32)
         river_length: ArrayFloat32 = np.array([1000.0, 1000.0], dtype=np.float32)
         waterbody_ids: np.ndarray = np.array([-1, -1], dtype=np.int32)
+        groundwater_hydraulic_conductivity_m_per_day: np.ndarray = np.array(
+            [[10.0, 10.0]], dtype=np.float32
+        )
 
     class DummyGrid:
         var = DummyGridVar()
