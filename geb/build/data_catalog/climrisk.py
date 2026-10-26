@@ -12,9 +12,9 @@ from typing import Any
 import geopandas as gpd
 import h5py
 import numpy as np
-from scipy.io import loadmat
 import shapely
 import xarray as xr
+from scipy.io import loadmat
 
 from geb.build.data_catalog.base import Adapter
 
