@@ -507,7 +507,7 @@ class Routing(Module):
             expected_time_steps = pd.date_range(
                 start=self.model.simulation_start,
                 end=self.model.simulation_end + self.model.timestep_length,
-                freq="H",
+                freq="h",
             )
             inflow_per_location = inflow_per_location.loc[expected_time_steps]
 
