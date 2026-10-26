@@ -1615,6 +1615,7 @@ class SFINCSRootModel:
         Args:
             *args: Positional arguments to pass to the SFINCSSimulation constructor.
             **kwargs: Keyword arguments to pass to the SFINCSSimulation constructor.
+                Use `simulation_root` to create the simulation outside of the root model folder.
 
         Returns:
             An instance of SFINCSSimulation with the configured forcing.
@@ -1634,6 +1635,7 @@ class SFINCSRootModel:
         offset: xr.DataArray,
         sea_level_rise: pd.DataFrame | None = None,
         year: int | None = None,
+        simulation_root: Path | None = None,
     ) -> SFINCSSimulation:
         """
         Creates a SFINCS simulation with coastal water level forcing for a specified return period.
@@ -1647,6 +1649,8 @@ class SFINCSRootModel:
             offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
             sea_level_rise: A DataFrame containing sea level rise data.
             year: The year for which to apply sea level rise adjustments.
+            simulation_root: Directory in which the simulation folder is created. If None,
+                the simulation is created in the 'simulations' folder of the root model.
         Returns:
             An instance of SFINCSSimulation configured with coastal water level forcing.
         Raises:
@@ -1706,7 +1710,9 @@ class SFINCSRootModel:
             create_max_intensity_map=True,
         )
 
-        simulation: SFINCSSimulation = self.create_simulation(event=event)
+        simulation: SFINCSSimulation = self.create_simulation(
+            event=event, simulation_root=simulation_root
+        )
 
         # set coastal forcing model
         simulation.set_coastal_waterlevel_forcing(
@@ -1919,6 +1925,7 @@ class SFINCSSimulation:
         write_figures: bool = False,
         flood_map_output_interval_seconds: int | None = None,
         setup_river_outflow: bool = True,
+        simulation_root: Path | None = None,
     ) -> None:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
@@ -1932,6 +1939,9 @@ class SFINCSSimulation:
             flood_map_output_interval_seconds: The interval in seconds at which to output flood maps. Defaults to None (15 minutes).
                 None means no output.
             setup_river_outflow: Whether to set up river outflow boundary conditions. Defaults to True.
+            simulation_root: Directory in which the simulation folder is created. If None, the
+                simulation is created in the 'simulations' folder of the root model. Setting this
+                allows the (read-only) root model to be located elsewhere than the simulations.
 
         Raises:
             ValueError: If flood_map_output_interval_seconds is not None when exporting final intensity.
@@ -1939,6 +1949,7 @@ class SFINCSSimulation:
         self.logger = logger
         self.event = event
         self.write_figures = write_figures
+        self._simulation_root: Path | None = simulation_root
 
         # Read a new independent instance of the SFINCS model to avoid shared state
         self.sfincs_root_model = SFINCSRootModel(
@@ -2548,7 +2559,12 @@ class SFINCSSimulation:
     @property
     def path(self) -> Path:
         """Returns the root directory for the SFINCS simulation files."""
-        folder: Path = self.root_path / "simulations" / self.name
+        simulation_root: Path = (
+            self._simulation_root
+            if self._simulation_root is not None
+            else self.root_path / "simulations"
+        )
+        folder: Path = simulation_root / self.name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
