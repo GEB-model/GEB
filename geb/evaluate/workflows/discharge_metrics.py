@@ -128,7 +128,8 @@ def calculate_discharge_metrics(
         DischargeMetrics with KGE, modified KGE, KGE correlation/bias/variability
         components, NSE, squared Pearson correlation r² (stored as `R2`), RMSE,
         and RRMSE; all NaN when there are fewer than 2 valid pairs. RMSE is in
-        m3/s; all other metrics are dimensionless.
+        m3/s; all other metrics are dimensionless. All calculated metrics are
+        rounded to 4 decimal places.
 
     """
     discharge_columns: list[str] = [
@@ -191,16 +192,16 @@ def calculate_discharge_metrics(
     rrmse: float = rmse / observed_std if observed_std > 0 else float("nan")
 
     return DischargeMetrics(
-        KGE=kge,
-        KGE_modified=modified_kge,
-        KGE_correlation=correlation,
-        KGE_bias_ratio=bias_ratio,
-        KGE_variability_ratio=variability_ratio,
-        NSE=nse,
+        KGE=round(kge, 4),
+        KGE_modified=round(modified_kge, 4),
+        KGE_correlation=round(correlation, 4),
+        KGE_bias_ratio=round(bias_ratio, 4),
+        KGE_variability_ratio=round(variability_ratio, 4),
+        NSE=round(nse, 4),
         # R2 stores Pearson r², not the coefficient of determination.
-        R2=correlation**2,
-        RMSE=rmse,
-        RRMSE=rrmse,
+        R2=round(correlation**2, 4),
+        RMSE=round(rmse, 4),
+        RRMSE=round(rrmse, 4),
     )
 
 

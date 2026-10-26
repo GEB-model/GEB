@@ -116,7 +116,8 @@ def evaluate_discharge(
 
     Returns:
         Dictionary containing median frequency-specific discharge skill
-        scores (e.g., KGE_hourly, KGE_daily) and median seasonal daily KGE.
+        scores (e.g., KGE_hourly, KGE_daily) and median seasonal daily KGE,
+        rounded to 4 decimal places.
         Stations with hourly data are also evaluated on the daily resampled data, and those metrics are included in
         the returned dictionary. Stations with only daily data are not evaluated on the hourly data.
 
@@ -519,6 +520,11 @@ def evaluate_discharge(
     else:
         station_scores = pd.DataFrame(station_score_records).set_index("station_ID")
 
+    # Round skill score columns to 4 decimal places for consistent reporting and storage.
+    for score_column in DISCHARGE_SCORE_COLUMNS:
+        if score_column in station_scores.columns:
+            station_scores[score_column] = station_scores[score_column].round(4)
+
     excluded_station_scores: pd.DataFrame = station_scores.loc[
         station_scores.index.isin(excluded_stations.index)
     ].copy()
@@ -630,8 +636,8 @@ def evaluate_discharge(
 
         for metric_column in median_skill_scores:
             if metric_column in station_scores.columns:
-                median_skill_scores[metric_column] = float(
-                    station_scores[metric_column].median()
+                median_skill_scores[metric_column] = round(
+                    float(station_scores[metric_column].median()), 4
                 )
     else:
         self.model.logger.warning(
