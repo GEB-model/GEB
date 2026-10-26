@@ -19,7 +19,6 @@ from scipy.io import loadmat
 from geb.build.data_catalog.base import Adapter
 
 
-
 class CLIMRISK(Adapter):
     """Read and process locally stored CLIMRISK data."""
 
