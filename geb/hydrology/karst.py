@@ -14,6 +14,10 @@ if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
+# Maximum daily surface runoff and interflow depth captured by karst depressions and dry valleys (m/day, 25 mm/day).
+MAX_RUNOFF_CAPTURE_M_PER_DAY: np.float32 = np.float32(0.025)
+
+
 class Karst(Module):
     """Load karst coverage and release stored water gradually."""
 
@@ -68,7 +72,7 @@ class Karst(Module):
         Notes:
             Updates the input arrays in place to remove captured water. Sealed
             land and open water contribute no karst recharge. Hillslope runoff
-            and interflow are captured up to max_runoff_capture_m_per_day, with
+            and interflow are captured up to MAX_RUNOFF_CAPTURE_M_PER_DAY, with
             excess overflowing to surface stream routes. The store follows
             dS/dt = inflow - S/K, with constant inflow over the daily step.
             When max_storage_m is configured, any stored water exceeding the
@@ -100,27 +104,21 @@ class Karst(Module):
         base_capture_fraction: np.float32 = np.float32(
             self.model.config["hydrology"]["karst"]["capture_fraction"]
         )
-        max_capture_m: float | None = self.model.config["hydrology"]["karst"][
-            "max_runoff_capture_m_per_day"
-        ]
-        if max_capture_m is not None:
-            # Swallow up to max_runoff_capture_m_per_day into karst features.
-            potential_capture_m: ArrayFloat32 = (
-                np.minimum(
-                    total_surface_flow_m * base_capture_fraction,
-                    np.float32(max_capture_m),
-                )
-                * karst_presence
+        # Swallow up to MAX_RUNOFF_CAPTURE_M_PER_DAY into karst features.
+        potential_capture_m: ArrayFloat32 = (
+            np.minimum(
+                total_surface_flow_m * base_capture_fraction,
+                MAX_RUNOFF_CAPTURE_M_PER_DAY,
             )
-            # Effective capture fraction scales with the swallowing capacity ceiling.
-            surface_capture_fraction: ArrayFloat32 = np.divide(
-                potential_capture_m,
-                total_surface_flow_m,
-                out=np.zeros_like(potential_capture_m),
-                where=total_surface_flow_m > np.float32(0.0),
-            )
-        else:
-            surface_capture_fraction = karst_presence * base_capture_fraction
+            * karst_presence
+        )
+        # Effective capture fraction scales with the swallowing capacity ceiling.
+        surface_capture_fraction: ArrayFloat32 = np.divide(
+            potential_capture_m,
+            total_surface_flow_m,
+            out=np.zeros_like(potential_capture_m),
+            where=total_surface_flow_m > np.float32(0.0),
+        )
 
         captured_runoff_m: ArrayFloat32 = (
             total_surface_flow_m * surface_capture_fraction

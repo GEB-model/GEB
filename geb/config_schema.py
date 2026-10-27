@@ -330,12 +330,6 @@ class KarstConfig(BaseModel):
         le=1.0,
         description="Fraction of runoff and interflow captured on karst land below the swallowing ceiling (0–1).",
     )
-    max_runoff_capture_m_per_day: float | None = Field(
-        None,
-        gt=0.0,
-        allow_inf_nan=False,
-        description="Maximum daily runoff and interflow depth captured on karst land (m/day), or None for unlimited.",
-    )
     max_storage_m: float | None = Field(
         None,
         gt=0.0,

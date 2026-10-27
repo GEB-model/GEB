@@ -69,7 +69,6 @@ hazards:
 hydrology:
   karst:
     capture_fraction: 1.0 # Fraction of surface runoff and interflow captured on karst land below the swallowing ceiling.
-    max_runoff_capture_m_per_day: 0.025 # Maximum daily runoff and interflow captured by dry valleys and karst depressions (m/day, 25 mm/day).
     max_storage_m: 0.05 # Maximum water depth stored in karst aquifer delay storage (m, 50 mm). Excess overflows to stream discharge.
     release_time_days: 10.0 # Starting value in days.
     vertical_conductivity_multiplier: 10.0 # Multiplier for vertical hydraulic conductivity in karst soils.
