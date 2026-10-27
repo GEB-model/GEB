@@ -987,11 +987,14 @@ class SFINCSRootModel:
                         self.mask.rio.transform().to_gdal(),
                     )
                     iteration_count += 1
-                    print(
+                    self.logger.info(
                         f"Outflow point is outside of the model grid. Moving 1 m upstream along the river. Iteration {iteration_count}."
                     )
-                    if iteration_count > np.int32(self.estimated_cell_size_m):
+                    if iteration_count > 5:
                         export_diagnostics(outflow_point)
+                        self.logger.error(
+                            "Outflow point is still outside the model grid after 5 iterations. This is unexpected, please check the river geometries and subbasins boundary."
+                        )
                         # export original outflow point for debugging
                         gpd.GeoDataFrame(
                             [nearest_boundary_point], columns=["geometry"]
