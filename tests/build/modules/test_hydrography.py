@@ -172,7 +172,9 @@ def test_calculate_dem_floodplain_geometry() -> None:
     assert np.isnan(fp_slope_m_per_m.values[1, 0])
     assert not np.isnan(fp_slope_m_per_m.values[0, 1])
     assert not np.isnan(fp_slope_m_per_m.values[1, 1])
-    assert (fp_slope_m_per_m.values[:, 1] >= 0.5).all()
+    assert (fp_slope_m_per_m.values[:, 1] >= 0.0).all()
+    # When top width is constant across the final interval, side slope is 0.0 (vertical continuation)
+    assert np.allclose(fp_slope_m_per_m.values[:, 1], 0.0)
 
     # 3D 10-point profile assertions
     assert fp_profile_w_m.shape == (10, 2, 2)

@@ -95,7 +95,11 @@ def test_snap_point_to_river_network_waterbody_handling() -> None:
     uparea_subgrid = uparea_grid.copy()
 
     # Case 1: All cells on river segment are inside a lake/reservoir (waterbody_id >= 0)
-    wb_all = np.array([[42, 42], [-1, -1]], dtype=np.int32)
+    wb_all = xr.DataArray(
+        np.array([[42, 42], [-1, -1]], dtype=np.int32),
+        coords={"y": y_coords, "x": x_coords},
+        dims=("y", "x"),
+    )
     res_all_wb = snap_point_to_river_network(
         point=point,
         rivers=rivers,
@@ -107,7 +111,11 @@ def test_snap_point_to_river_network_waterbody_handling() -> None:
     assert res_all_wb is None
 
     # Case 2: One cell is in waterbody, one cell is valid river
-    wb_partial = np.array([[42, -1], [-1, -1]], dtype=np.int32)
+    wb_partial = xr.DataArray(
+        np.array([[42, -1], [-1, -1]], dtype=np.int32),
+        coords={"y": y_coords, "x": x_coords},
+        dims=("y", "x"),
+    )
     res_partial = snap_point_to_river_network(
         point=point,
         rivers=rivers,

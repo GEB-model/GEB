@@ -386,19 +386,16 @@ def calculate_dem_floodplain_geometry(
                 profile_widths_data[k - 1, segment_mask],
             )
 
-        # Valley side slope z beyond 5.0m: compare level 9 (5.0m) to level 6 (2.0m)
-        w_top: float = float(profile_widths_data[9, segment_mask][0])
-        w_mid: float = float(profile_widths_data[6, segment_mask][0])
-        dw: float = max((w_top - w_mid) * 0.5, 0.0)
-        dh: float = 3.0
-        if dw > 0.0:
-            seg_side_slope = np.clip(
-                np.float32(dw / dh),
-                np.float32(0.5),
-                np.float32(100.0),
-            )
-        else:
-            seg_side_slope = np.float32(2.0)
+        # Valley side slope z beyond maximum profile depth:
+        # Linearly extend the slope from the final profile interval without artificial fallbacks or clipping.
+        # When width does not expand in the final interval, z = 0.0 (vertical continuation of the top width).
+        w_top: float = float(profile_widths_data[-1, segment_mask][0])
+        w_prev: float = float(profile_widths_data[-2, segment_mask][0])
+        dh: float = float(FLOODPLAIN_PROFILE_DEPTHS[-1] - FLOODPLAIN_PROFILE_DEPTHS[-2])
+        dw: float = max((w_top - w_prev) * 0.5, 0.0)
+        seg_side_slope: np.float32 = (
+            np.float32(dw / dh) if dh > 0.0 and np.isfinite(dw) else np.float32(0.0)
+        )
 
         floodplain_side_slope_m_per_m_data[segment_mask] = seg_side_slope
 
@@ -2443,13 +2440,16 @@ class Hydrography(BuildModelBase):
 
             rivers = self.geom["routing/rivers"]
 
-            has_waterbodies = "waterbodies/waterbody_id" in self.grid
-            if has_waterbodies:
-                waterbody_id_grid = self.grid["waterbodies/waterbody_id"].compute()
-                wb_values = waterbody_id_grid.values
-            else:
-                waterbody_id_grid = None
-                wb_values = None
+            upstream_area_grid = self.grid["routing/upstream_area_m2"].compute()
+            upstream_area_subgrid = self.other[
+                "drainage/original_d8_upstream_area_m2"
+            ].compute()
+
+            waterbody_id_grid: xr.DataArray = self.grid[
+                "waterbodies/waterbody_id"
+            ].compute()
+
+            wb_values: np.ndarray = waterbody_id_grid.values
 
             has_river_ids = "routing/river_ids" in self.grid
             if has_river_ids:
@@ -2458,11 +2458,6 @@ class Hydrography(BuildModelBase):
                 river_ids_grid = None
 
             retention_basin_data = []
-
-            upstream_area_grid = self.grid["routing/upstream_area_m2"].compute()
-            upstream_area_subgrid = self.other[
-                "drainage/original_d8_upstream_area_m2"
-            ].compute()
 
             ldd = self.grid["routing/ldd"]
             flow_direction_raster = pyflwdir.from_array(
@@ -2500,9 +2495,9 @@ class Hydrography(BuildModelBase):
                     rivers=rivers_with_min_shreve_order,
                     upstream_area_grid=upstream_area_grid,
                     upstream_area_subgrid=upstream_area_subgrid,
+                    waterbody_id_grid=waterbody_id_grid,
                     max_spatial_difference_degrees=180,
                     dominant_river_buffer_m=dominant_river_search_radius_m,
-                    waterbody_id_grid=waterbody_id_grid,
                 )
                 if snapped_data is None:
                     raise ValueError(
@@ -2513,10 +2508,9 @@ class Hydrography(BuildModelBase):
                 def is_invalid_cell(col: int, row: int) -> bool:
                     if retention_basin_ids.values[row, col] != -1:
                         return True
-                    if wb_values is not None:
-                        wb_val = wb_values[row, col]
-                        if wb_val != -1 and not np.isnan(wb_val):
-                            return True
+                    wb_val = wb_values[row, col]
+                    if wb_val != -1 and not np.isnan(wb_val):
+                        return True
                     if river_ids_grid is not None:
                         if river_ids_grid[row, col] == -1:
                             return True
