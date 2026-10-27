@@ -16,7 +16,7 @@ setup_assets:
   - rails
 
 setup_coastal_water_levels:
-  percentile: 0.5
+  projection_quantile: 0.5
 
 setup_cell_area:
 
