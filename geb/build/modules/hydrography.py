@@ -158,60 +158,70 @@ def _extract_1sec_subgrid(
         2D float32 array of shape (3 * H_hd, 3 * W_hd) containing 1 arc-second elevations.
 
     Raises:
-        ValueError: If elevation_1sec cannot be aligned or does not have expected shape.
+        ValueError: If elevation_1sec or elevation_high_res is missing coordinates,
+            has degenerate coordinate dimensions, or does not overlap spatially.
     """
+    if "x" not in elevation_1sec.coords or "y" not in elevation_1sec.coords:
+        raise ValueError(
+            "elevation_1sec is missing 'x' or 'y' coordinates required for subgrid alignment."
+        )
+    if "x" not in elevation_high_res.coords or "y" not in elevation_high_res.coords:
+        raise ValueError(
+            "elevation_high_res is missing 'x' or 'y' coordinates required for subgrid alignment."
+        )
+
+    x3: npt.NDArray[np.floating] = elevation_high_res.x.values
+    y3: npt.NDArray[np.floating] = elevation_high_res.y.values
+    x1: npt.NDArray[np.floating] = elevation_1sec.x.values
+    y1: npt.NDArray[np.floating] = elevation_1sec.y.values
+
+    if x1.size <= 1 or y1.size <= 1:
+        raise ValueError(
+            f"elevation_1sec coordinate arrays must have length > 1, got x={x1.size}, y={y1.size}."
+        )
+
+    dx1: float = float(x1[1] - x1[0])
+    dy1: float = float(y1[1] - y1[0])
+
+    if dx1 == 0.0 or dy1 == 0.0:
+        raise ValueError("elevation_1sec coordinate spacing must be non-zero.")
+
     H_hd: int = int(elevation_high_res.shape[0])
     W_hd: int = int(elevation_high_res.shape[1])
     target_shape: tuple[int, int] = (3 * H_hd, 3 * W_hd)
 
-    if elevation_1sec.shape == target_shape and (
-        "x" not in elevation_1sec.coords or "x" not in elevation_high_res.coords
-    ):
-        return elevation_1sec.values.astype(np.float32)
+    c_center: npt.NDArray[np.int_] = np.round((x3 - x1[0]) / dx1).astype(int)
+    r_center: npt.NDArray[np.int_] = np.round((y3 - y1[0]) / dy1).astype(int)
 
-    if "x" in elevation_1sec.coords and "x" in elevation_high_res.coords:
-        x3 = elevation_high_res.x.values
-        y3 = elevation_high_res.y.values
-        x1 = elevation_1sec.x.values
-        y1 = elevation_1sec.y.values
+    c_start: int = int(c_center[0] - 1)
+    c_end: int = int(c_center[-1] + 2)
+    r_start: int = int(r_center[0] - 1)
+    r_end: int = int(r_center[-1] + 2)
 
-        if x1.size > 1 and y1.size > 1:
-            dx1: float = float(x1[1] - x1[0])
-            dy1: float = float(y1[1] - y1[0])
+    src_r0: int = max(0, r_start)
+    src_r1: int = min(int(elevation_1sec.shape[0]), r_end)
+    src_c0: int = max(0, c_start)
+    src_c1: int = min(int(elevation_1sec.shape[1]), c_end)
 
-            c_center = np.round((x3 - x1[0]) / dx1).astype(int)
-            r_center = np.round((y3 - y1[0]) / dy1).astype(int)
+    if src_r1 <= src_r0 or src_c1 <= src_c0:
+        raise ValueError(
+            "elevation_1sec does not overlap with elevation_high_res. "
+            f"elevation_1sec extent: x=[{float(x1[0])}, {float(x1[-1])}], y=[{float(y1[0])}, {float(y1[-1])}]; "
+            f"elevation_high_res extent: x=[{float(x3[0])}, {float(x3[-1])}], y=[{float(y3[0])}, {float(y3[-1])}]."
+        )
 
-            c_start: int = int(c_center[0] - 1)
-            c_end: int = int(c_center[-1] + 2)
-            r_start: int = int(r_center[0] - 1)
-            r_end: int = int(r_center[-1] + 2)
+    dst_r0: int = src_r0 - r_start
+    dst_r1: int = src_r1 - r_start
+    dst_c0: int = src_c0 - c_start
+    dst_c1: int = src_c1 - c_start
 
-            fathomdem_sub = np.full(target_shape, np.nan, dtype=np.float32)
-
-            src_r0: int = max(0, r_start)
-            src_r1: int = min(int(elevation_1sec.shape[0]), r_end)
-            src_c0: int = max(0, c_start)
-            src_c1: int = min(int(elevation_1sec.shape[1]), c_end)
-
-            dst_r0: int = src_r0 - r_start
-            dst_r1: int = src_r1 - r_start
-            dst_c0: int = src_c0 - c_start
-            dst_c1: int = src_c1 - c_start
-
-            if src_r1 > src_r0 and src_c1 > src_c0:
-                fathomdem_sub[dst_r0:dst_r1, dst_c0:dst_c1] = elevation_1sec.values[
-                    src_r0:src_r1, src_c0:src_c1
-                ]
-            return fathomdem_sub
-
-    if elevation_1sec.shape == target_shape:
-        return elevation_1sec.values.astype(np.float32)
-
-    raise ValueError(
-        f"Unable to align elevation_1sec of shape {elevation_1sec.shape} with "
-        f"elevation_high_res of shape {elevation_high_res.shape}."
+    fathomdem_sub: npt.NDArray[np.float32] = np.full(
+        target_shape, np.nan, dtype=np.float32
     )
+    fathomdem_sub[dst_r0:dst_r1, dst_c0:dst_c1] = elevation_1sec.values[
+        src_r0:src_r1, src_c0:src_c1
+    ]
+    return fathomdem_sub
 
 
 def calculate_dem_floodplain_geometry(

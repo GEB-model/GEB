@@ -146,8 +146,12 @@ def test_calculate_dem_floodplain_geometry() -> None:
     river_raster_low_res = np.array([[-1, 101], [-1, 102]], dtype=np.int32)
 
     # 1 arc-second DEM: 3x3 refinement of 3-arcsecond elevations
+    dx1, dy1 = 0.01 / 3.0, -0.01 / 3.0
+    x1 = 0.0 + (np.arange(12) - 1) * dx1
+    y1 = 0.0 + (np.arange(12) - 1) * dy1
     elev_1sec = xr.DataArray(
         np.repeat(np.repeat(elev_vals, 3, axis=0), 3, axis=1),
+        coords={"y": y1, "x": x1},
         dims=("y", "x"),
     )
 
@@ -207,15 +211,29 @@ def test_extract_1sec_subgrid() -> None:
     assert extracted.shape == (12, 12)
     assert not np.isnan(extracted).any()
 
-    # Exact 3:1 shape without coords
+    # Missing coordinates raises ValueError
     da3_nocoords = xr.DataArray(np.zeros((4, 4), dtype=np.float32))
     da1_nocoords = xr.DataArray(np.ones((12, 12), dtype=np.float32))
-    assert _extract_1sec_subgrid(da1_nocoords, da3_nocoords).shape == (12, 12)
+    with pytest.raises(ValueError, match="missing 'x' or 'y' coordinates"):
+        _extract_1sec_subgrid(da1_nocoords, da3_nocoords)
 
-    # Incompatible shape raises ValueError
-    da_incompatible = xr.DataArray(np.zeros((5, 5), dtype=np.float32))
-    with pytest.raises(ValueError, match="Unable to align elevation_1sec"):
-        _extract_1sec_subgrid(da_incompatible, da3_nocoords)
+    # Non-overlapping coordinates raises ValueError
+    da1_nonoverlapping = xr.DataArray(
+        np.ones((20, 20), dtype=np.float32),
+        coords={"y": y1 + 100.0, "x": x1 + 100.0},
+        dims=("y", "x"),
+    )
+    with pytest.raises(ValueError, match="does not overlap"):
+        _extract_1sec_subgrid(da1_nonoverlapping, da3)
+
+    # Incompatible single-point coordinates raises ValueError
+    da1_single = xr.DataArray(
+        np.zeros((1, 1), dtype=np.float32),
+        coords={"y": [50.0], "x": [10.0]},
+        dims=("y", "x"),
+    )
+    with pytest.raises(ValueError, match="must have length > 1"):
+        _extract_1sec_subgrid(da1_single, da3)
 
 
 def test_setup_floodplains_method() -> None:
@@ -254,8 +272,12 @@ def test_setup_floodplains_method() -> None:
     ups_vals = flw.upstream_area(unit="m2").astype(np.float32)
     ups_da = xr.DataArray(ups_vals, coords=coords, dims=("y", "x"))
 
+    dx1, dy1 = 0.01 / 3.0, -0.01 / 3.0
+    x1 = 0.0 + (np.arange(12) - 1) * dx1
+    y1 = 0.0 + (np.arange(12) - 1) * dy1
     elev_1sec = xr.DataArray(
         np.repeat(np.repeat(elev_vals, 3, axis=0), 3, axis=1),
+        coords={"y": y1, "x": x1},
         dims=("y", "x"),
     )
 
