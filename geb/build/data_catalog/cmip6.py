@@ -220,8 +220,16 @@ class CMIP6(Adapter):
 
         # expand the 12 monthly deltas to every month of the forcing period, so the
         # output keeps the monthly time axis that the forcing adjustment expects
-        forcing_time = merged.sel(
-            time=slice(f"{start_year}-01-01", f"{end_year + 1}-12-31")
+        forcing_time: xr.DataArray = xr.Dataset(
+            coords={
+                "time": xr.date_range(
+                    start=f"{start_year}-01-01",
+                    end=f"{end_year + 1}-12-01",
+                    freq="MS",
+                    calendar=merged.time.dt.calendar,
+                    use_cftime=True,
+                )
+            }
         ).time
         delta = monthly_delta.sel(month=forcing_time.dt.month).drop_vars("month")
 
