@@ -529,17 +529,25 @@ def compute_cross_section_from_depth(
             effective_depth_m - bankfull_depth_m, np.float32(0.0)
         )
 
-        # In CaMa-Flood style routing, the floodplain acts as a storage reservoir (dead zone):
-        # water stored on the floodplain attenuates the flood wave and raises the water surface level,
-        # while downstream longitudinal conveyance is carried by the river channel column (channel
-        # area plus the water column directly above the river channel).
-        # To prevent hydraulic radius R = A / P from inflating artificially during overbank flow
-        # (which erroneously lowers Manning resistance and accelerates flood drainage), the wetted
-        # perimeter includes the channel bed perimeter plus the two lateral shear interfaces
-        # of height floodplain_depth on either side of the overbank water column.
+        # Conveyance area includes the bankfull river channel plus the column of water
+        # flowing directly above it.
         area = bankfull_area_m2 + bankfull_width_m * floodplain_depth
         top_width = bankfull_width_m
-        wetted_perimeter = bankfull_perimeter_m + np.float32(2.0) * floodplain_depth
+
+        # Turbulent momentum exchange (apparent shear stress) during overbank flow:
+        # In compound channel hydraulics, water rushing down the main channel meets sluggish,
+        # shallow water on the rough, vegetated floodplain. This sharp velocity gradient generates
+        # turbulent shear vortices along the lateral boundaries, transferring momentum away
+        # from the main channel and acting as an hydraulic brake.
+        # Consequently, the hydraulic efficiency of the conveyed cross section cannot exceed its
+        # bankfull efficiency (R <= R_bankfull).
+        # To represent this turbulent shear drag in 1D routing and prevent artificial friction
+        # collapse and numerical spikiness, the wetted perimeter accounts for the bankfull hydraulic
+        # efficiency plus the lateral shear interfaces on either side of the overbank column.
+        bankfull_rh: np.float32 = bankfull_area_m2 / max(
+            bankfull_perimeter_m, np.float32(1e-4)
+        )
+        wetted_perimeter = (area / bankfull_rh) + np.float32(2.0) * floodplain_depth
 
     return area, top_width, wetted_perimeter
 

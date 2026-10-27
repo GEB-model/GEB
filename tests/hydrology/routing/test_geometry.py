@@ -303,7 +303,10 @@ def test_compute_cross_section_from_depth() -> None:
         width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
     )
     expected_area_ob = (40.0 / 1.5) + (20.0 * 0.5)
-    expected_p_wetted_ob = bankfull_perimeter_arr[0] + np.float32(2.0 * 0.5)
+    expected_bankfull_rh = bankfull_area_arr[0] / bankfull_perimeter_arr[0]
+    expected_p_wetted_ob = (expected_area_ob / expected_bankfull_rh) + np.float32(
+        2.0 * 0.5
+    )
     assert np.isclose(area_ob, expected_area_ob, atol=1e-4)
     assert np.isclose(top_width_ob, 20.0, atol=1e-4)
     assert np.isclose(p_wetted_ob, expected_p_wetted_ob, atol=1e-4)
