@@ -76,7 +76,7 @@ hydrology:
   routing:
     max_threads: null
     retention_basins:
-      release_threshold_factor: 0.2
+      release_threshold_factor: 0.85
       activation_threshold_return_period_years: 2
     riverbed_hydraulic_conductivity_multiplier: 0.1
     river_width:
