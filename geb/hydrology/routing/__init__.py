@@ -807,16 +807,6 @@ class Routing(Module):
         self.var.river_transmission_loss_m3 = self.grid.full_compressed(
             0, dtype=np.float32
         )
-        riverbed_conductivity_multiplier: np.float32 = np.float32(
-            self.config["riverbed_hydraulic_conductivity_multiplier"]
-        )
-        groundwater_conductivity_m_per_s: np.ndarray = (
-            self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0]
-            / np.float32(86400.0)
-        )
-        self._riverbed_hydraulic_conductivity_m_per_s[:] = (
-            groundwater_conductivity_m_per_s * riverbed_conductivity_multiplier
-        ).astype(np.float32)
         self._pot_evap_ret_buf: ArrayFloat32 = np.zeros(
             len(self.retention_basin_data), dtype=np.float32
         )
@@ -1818,6 +1808,17 @@ class Routing(Module):
             waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
             in_spinup=self.model.in_spinup,
         )
+
+        riverbed_conductivity_multiplier: np.float32 = np.float32(
+            self.config["riverbed_hydraulic_conductivity_multiplier"]
+        )
+        groundwater_conductivity_m_per_s: np.ndarray = (
+            self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0]
+            / np.float32(86400.0)
+        )
+        self._riverbed_hydraulic_conductivity_m_per_s[:] = (
+            groundwater_conductivity_m_per_s * riverbed_conductivity_multiplier
+        ).astype(np.float32)
 
     def spinup(self) -> None:
         """Initialize routing variables during model spinup.
