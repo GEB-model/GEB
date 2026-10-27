@@ -441,11 +441,15 @@ class SFINCSRootModel:
         del rivers
 
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
+        # export
+        flood_plain.to_parquet(self.path / "flood_plain_raw.geoparquet")
         # Clip the flood plain (incl. the river buffer) to the modelled subbasins,
         # so no active cells end up on interpolated elevation outside the DEM coverage.
         subbasin_area = self.subbasins.to_crs(flood_plain.crs).union_all()
         flood_plain = flood_plain[flood_plain.intersects(subbasin_area)].copy()
         flood_plain["geometry"] = flood_plain.intersection(subbasin_area)
+        # export
+        flood_plain.to_parquet(self.path / "flood_plain_clipped.geoparquet")
 
         # Keep only polygonal parts; grazing intersections give lines/points whose
         # union has no boundary, which breaks calculate_outflow_conditions.
@@ -460,8 +464,10 @@ class SFINCSRootModel:
         assert flood_plain.union_all().boundary is not None, (
             "Clipped flood plain unions to a geometry with no boundary"
         )
+        # export
+        flood_plain.to_parquet(self.path / "flood_plain_exploded.geoparquet")
         ### USING self.subbasins instead of flood_plain because the flood plain now breaks outflow points.
-        sf.mask.create_active(include_polygon=self.subbasins, reset_mask=True)
+        sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
 
         self.rivers["outflow_elevation"] = np.nan
         self.rivers["outflow_point_xy"] = None
@@ -530,13 +536,15 @@ class SFINCSRootModel:
                     crs=self.mask.rio.crs,
                 )
                 if len(area) > 1:
-                    # remove isolated cells by keeping only the largest polygon
-                    area["area"] = area.geometry.area
-                    area = area.sort_values("area", ascending=False).iloc[0:1]
-                    area = area.drop(columns=["area"])
-                    # raise ValueError(
-                    #     "Calculated outflow area is not a single polygon, cannot calculate outflow conditions"
-                    # )
+                    # remove isolated cells by keeping only the polygon touching the active rivers
+                    area = area[
+                        area.geometry.intersects(self.active_rivers.union_all())
+                    ]
+                if len(area) > 1:
+                    # if there are still multiple polygons, raise an error
+                    raise ValueError(
+                        "Multiple polygons found in the model mask after creating outflow boundary. This should not happen."
+                    )
 
                 self.calculate_outflow_conditions(area=area)
 
