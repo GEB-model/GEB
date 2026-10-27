@@ -440,6 +440,26 @@ class SFINCSRootModel:
         del rivers
 
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
+        # Clip the flood plain (incl. the river buffer) to the modelled subbasins,
+        # so no active cells end up on interpolated elevation outside the DEM coverage.
+        subbasin_area = self.subbasins.to_crs(flood_plain.crs).union_all()
+        flood_plain = flood_plain[flood_plain.intersects(subbasin_area)].copy()
+        flood_plain["geometry"] = flood_plain.intersection(subbasin_area)
+
+        # Keep only polygonal parts; grazing intersections give lines/points whose
+        # union has no boundary, which breaks calculate_outflow_conditions.
+        flood_plain = flood_plain.explode(index_parts=False)
+        flood_plain = flood_plain[
+            flood_plain.geom_type.isin(("Polygon", "MultiPolygon"))
+        ]
+        flood_plain = flood_plain[~flood_plain.is_empty & flood_plain.geometry.notna()]
+        assert not flood_plain.empty, (
+            "Flood plain is empty after clipping to the subbasins"
+        )
+        assert flood_plain.union_all().boundary is not None, (
+            "Clipped flood plain unions to a geometry with no boundary"
+        )
+
         sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
 
         self.rivers["outflow_elevation"] = np.nan
@@ -1605,7 +1625,7 @@ class SFINCSRootModel:
         Args:
             output_folder: The folder containing the coastal hydrograph timeseries and locations.
             return_period: The return period for which to create the coastal simulation.
-            locations: A GeoDataFrame containing the locations of GTSM forcing stations.
+            locations: A GeoDataFrame containing the locations of water level forcing stations.
             offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
             sea_level_rise: A DataFrame containing sea level rise data.
             year: The year for which to apply sea level rise adjustments.
@@ -1617,7 +1637,8 @@ class SFINCSRootModel:
         # prepare coastal timeseries and locations
         timeseries = pd.read_csv(
             output_folder
-            / f"hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv",
+            / "hydrographs"
+            / f"water_levels_spring_tide_hydrograph_rp{return_period:04d}.csv",
             index_col=0,
         )
 
