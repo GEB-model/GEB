@@ -191,7 +191,7 @@ def sample_from_map(
     coords: np.ndarray,
     gt: tuple[float, float, float, float, float, float],
     out_of_bounds_value: float | int | bool | None = None,
-    ssp_map: bool = False
+    sample_closest_valid_value: bool = False
 ) -> np.ndarray:
     """Sample coordinates from a map. Can handle multiple dimensions.
 
@@ -202,7 +202,7 @@ def sample_from_map(
         coords: The coordinates used to sample (shape: m, 2).
         gt: The geotransformation. Must be unrotated.
         out_of_bounds_value: The value to return for coordinates that are out of bounds. If None, an error will be raised.
-        ssp_map: If True, fill missing values by searching for the nearest valid
+        sample_closest_valid_value: If True, fill missing values by searching for the nearest valid
             nearby cell.
 
     Returns:
@@ -238,7 +238,7 @@ def sample_from_map(
         sampled_values = array[..., y_idx, x_idx]
         values[i] = sampled_values
 
-        if ssp_map:
+        if sample_closest_valid_value:
             if np.any(np.isnan(sampled_values)):
                 closest_distance = rows * rows + columns * columns + 1
 

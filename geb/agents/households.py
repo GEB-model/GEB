@@ -1634,7 +1634,7 @@ class Households(AgentBaseClass):
                     self.growth_rate.attrs["lat_resolution"]  # y_step = gt[5]
                 ), 
                 out_of_bounds_value=None,
-                ssp_map=True
+                sample_closest_valid_value=True
             )
         else: 
             growth_rate = float(self.growth_rate.sel({
