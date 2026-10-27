@@ -852,7 +852,10 @@ class TestSpecialExportersSingleFile:
             "floodplain_side_slope_m_per_m": [2.0, 2.0],
         }
         for k in range(10):
-            rivers_data[f"floodplain_profile_width_{k}_m"] = [15.0 + k * 5.0, 25.0 + k * 5.0]
+            rivers_data[f"floodplain_profile_width_{k}_m"] = [
+                15.0 + k * 5.0,
+                25.0 + k * 5.0,
+            ]
         rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
             rivers_data,
             index=[10, 20],
