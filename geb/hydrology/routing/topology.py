@@ -659,9 +659,12 @@ def compute_retention_routing(
     diverted_volume_m3: np.float32 = np.float32(0.0)
     outflow_volume_m3: np.float32 = np.float32(0.0)
 
-    # Determine release threshold below which stored water can safely return to the river
+    # Only release water ont he falling limb
+    effective_release_factor: np.float32 = (
+        release_threshold_factor if not is_rising_limb else release_threshold_factor
+    )
     release_threshold_m3_s: np.float32 = (
-        activation_threshold_m3_s * release_threshold_factor
+        activation_threshold_m3_s * effective_release_factor
     )
 
     # High flow regime: divert peak discharge above activation threshold into the basin
@@ -683,7 +686,7 @@ def compute_retention_routing(
                 ),
             )
 
-    # Low flow regime: release stored water back to river without exceeding release threshold
+    # Low/recession flow regime: release stored water back to river without exceeding release threshold
     elif discharge_before_diversion_m3_s <= release_threshold_m3_s:
         if retention_storage_m3 > np.float32(0.0):
             # Limit release so resulting river discharge does not exceed the release threshold
@@ -693,9 +696,9 @@ def compute_retention_routing(
             outflow_volume_m3 = min(
                 allowed_extra_outflow_m3,
                 max_outflow_limit_m3,
+                retention_storage_m3,
             )
             outflow_volume_m3 = max(np.float32(0.0), outflow_volume_m3)
-            outflow_volume_m3 = min(outflow_volume_m3, retention_storage_m3)
 
     # Update retention storage and remaining river volume conserving total mass.
     updated_retention_storage_m3: np.float32 = (
