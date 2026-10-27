@@ -252,7 +252,7 @@ class RetentionBasinsConfig(BaseModel):
     """Configuration for retention basins in routing."""
 
     release_threshold_factor: float = Field(
-        0.2,
+        0.85,
         description="Factor to multiply the activation threshold by to get the release threshold.",
     )
     activation_threshold_return_period_years: float = Field(
