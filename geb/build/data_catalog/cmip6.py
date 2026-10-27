@@ -174,8 +174,8 @@ class CMIP6(Adapter):
         # Merge along time and sort by time to ensure proper alignment
         merged = xr.concat([historical, future], dim="time").sortby("time")
 
-        month_index: np.ndarray = merged.indexes["time"].year * 12 + (
-            merged.indexes["time"].month - 1
+        month_index: np.ndarray = merged["time"].dt.year.values * 12 + (
+            merged["time"].dt.month.values - 1
         )
         if not (np.diff(month_index) == 1).all():
             raise ValueError(

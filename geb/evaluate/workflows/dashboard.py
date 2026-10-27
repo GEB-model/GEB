@@ -1082,27 +1082,36 @@ def determine_main_time_index(
         return None
 
     # Read the simulation index from the first available station routing file.
-    simulated_index: pd.Index = pd.read_parquet(first_parquet_file).index
-    if not isinstance(simulated_index, pd.DatetimeIndex) or simulated_index.empty:
+    raw_simulated_index: pd.Index = pd.read_parquet(first_parquet_file).index
+    if (
+        not isinstance(raw_simulated_index, pd.DatetimeIndex)
+        or raw_simulated_index.empty
+    ):
         return None
+    simulated_index: pd.DatetimeIndex = raw_simulated_index
+
+    sim_min: pd.Timestamp = cast(pd.Timestamp, simulated_index.min())
+    sim_max: pd.Timestamp = cast(pd.Timestamp, simulated_index.max())
 
     if frequency == "daily":
         # Match GEB daily aggregation: noon (12:00:00) midpoint timestamps.
-        sim_start: pd.Timestamp = simulated_index.min().floor("D") + pd.Timedelta(
-            hours=12
+        sim_start: pd.Timestamp = cast(
+            pd.Timestamp, sim_min.floor("D") + pd.Timedelta(hours=12)
         )
-        sim_end: pd.Timestamp = simulated_index.max().floor("D") + pd.Timedelta(
-            hours=12
+        sim_end: pd.Timestamp = cast(
+            pd.Timestamp, sim_max.floor("D") + pd.Timedelta(hours=12)
         )
         freq_step: str = "D"
     else:
         # Match GEB hourly timestamp convention (half-hour HH:30:00).
-        sim_start = simulated_index.min()
-        sim_end = simulated_index.max()
+        sim_start = sim_min
+        sim_end = sim_max
         freq_step = "h"
 
-    start_timestamp: pd.Timestamp = max(observations_index.min(), sim_start)
-    end_timestamp: pd.Timestamp = min(observations_index.max(), sim_end)
+    obs_min: pd.Timestamp = cast(pd.Timestamp, observations_index.min())
+    obs_max: pd.Timestamp = cast(pd.Timestamp, observations_index.max())
+    start_timestamp: pd.Timestamp = max(obs_min, sim_start)
+    end_timestamp: pd.Timestamp = min(obs_max, sim_end)
 
     if period_start is not None:
         aligned_period_start: pd.Timestamp = (

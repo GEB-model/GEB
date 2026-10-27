@@ -145,6 +145,12 @@ class BuildModelBase(ABC):
         """Abstract property for report directory."""
         pass
 
+    @property
+    @abstractmethod
+    def ssp_rcp(self) -> int:
+        """Abstract property for SSP-RCP identifier."""
+        pass
+
     @abstractmethod
     def set_table(self, table: pd.DataFrame, name: str, write: bool = True) -> None:
         """Abstract method to set a table."""

@@ -21,7 +21,7 @@ from pyflwdir import FlwdirRaster
 from rasterio.enums import MergeAlg
 from scipy import interpolate
 from scipy.ndimage import value_indices
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
 from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import DataCatalog
@@ -2176,7 +2176,7 @@ class Hydrography(BuildModelBase):
         # with great-circle distance, so a KD-tree on 3D unit vectors gives the same
         # nearest neighbour as the Haversine distance, without an
         # (n_stations x n_locations) distance matrix.
-        tree: cKDTree = cKDTree(
+        tree: KDTree = KDTree(
             to_unit_vectors(
                 lon_deg,
                 lat_deg,

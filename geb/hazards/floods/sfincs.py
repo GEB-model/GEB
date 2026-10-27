@@ -12,7 +12,7 @@ import shutil
 import warnings
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -2144,7 +2144,9 @@ class SFINCSSimulation:
         # discard it
         self.total_discharge_volume_m3 += (
             timeseries[:-1].sum(axis=1)
-            * (timeseries.index[1:] - timeseries.index[:-1]).total_seconds()
+            * cast(
+                pd.TimedeltaIndex, timeseries.index[1:] - timeseries.index[:-1]
+            ).total_seconds()
         ).sum()
 
         self.print_forcing_volume()

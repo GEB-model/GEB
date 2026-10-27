@@ -22,7 +22,7 @@ class AR6(Adapter):
 
     def fetch(
         self,
-        url: str | None = None,
+        url: str = "https://zenodo.org/records/6382554/files/ar6-regional-confidence.zip?download=1",
     ) -> AR6:
         """Fetch the dataset from the given URL if not already present.
 

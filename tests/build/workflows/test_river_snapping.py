@@ -12,7 +12,7 @@ from geb.build.workflows.river_snapping import (
 
 
 def test_select_river_segment_dominant_within_buffer() -> None:
-    """Test selecting dominant river within buffer and returning None when outside."""
+    """Test selecting dominant river within buffer and falling back to closest river when none is within buffer."""
     point = shapely.geometry.Point(5.0, 50.0)
 
     # Distances in degrees: ~111,139 m per deg latitude
@@ -46,14 +46,24 @@ def test_select_river_segment_dominant_within_buffer() -> None:
     assert selected.ID == 102
     assert selected.uparea_m2 == 1_000_000.0
 
-    # No fallback: if buffer is 300m, no river candidate is within buffer, must return None
+    # Fallback to closest river if no candidate is within dominant buffer
     selected_outside = select_river_segment(
         rivers_sorted=rivers,
         max_spatial_difference_degrees=1.0,
         dominant_river_buffer_m=300.0,
         point=point,
     )
-    assert selected_outside is None
+    assert selected_outside is not None
+    assert selected_outside.ID == 101
+
+    # Returns None if closest river exceeds max_spatial_difference_degrees
+    selected_too_far = select_river_segment(
+        rivers_sorted=rivers,
+        max_spatial_difference_degrees=0.001,
+        dominant_river_buffer_m=300.0,
+        point=point,
+    )
+    assert selected_too_far is None
 
 
 def test_snap_point_to_river_network_waterbody_handling() -> None:
