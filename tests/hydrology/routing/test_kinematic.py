@@ -10,9 +10,6 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from geb.hydrology.routing import (
-    get_channel_ratio,
-)
 from geb.hydrology.routing.kinematic import update_node_kinematic
 
 
@@ -129,23 +126,6 @@ def test_update_node_kinematic_evaporation_limiter() -> None:
         river_length_m=np.float32(1000.0),
     )
     assert math.isclose(actual_evap_3, 1.0, rel_tol=1e-5)
-
-
-def test_get_channel_ratio() -> None:
-    """Test calculation of channel ratio for routing.
-
-    Verifies that the channel ratio is correctly computed
-    based on channel width and length parameters.
-    """
-    river_width = np.array([1, 2, 3, 4, 5], dtype=np.float32)
-    river_length = np.array([1000, 2000, 3000, 4000, 5000], dtype=np.float32)
-    cell_area = np.full_like(river_width, 10000, dtype=np.float32)
-
-    channel_ratio = get_channel_ratio(
-        river_width=river_width, river_length=river_length, cell_area=cell_area
-    )
-
-    assert np.allclose(channel_ratio, np.array([0.1, 0.4, 0.9, 1.0, 1.0]))
 
 
 def test_update_node_kinematic_residual() -> None:

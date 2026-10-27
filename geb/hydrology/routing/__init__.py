@@ -33,7 +33,8 @@ from geb.workflows.io import read_geom, read_table
 
 from .geometry import (
     NUM_FLOODPLAIN_LEVELS,
-    compute_top_width_from_overbank_depth,
+    compute_hydraulic_geometry_width,
+    compute_top_width_from_depth,
     estimate_outflow_height,
     get_lake_factor,
 )
@@ -154,30 +155,6 @@ def get_river_width(
     return alpha * np.abs(discharge_m3_s) ** beta
 
 
-def get_channel_ratio(
-    river_width: ArrayFloat32,
-    river_length: ArrayFloat32,
-    cell_area: ArrayFloat32,
-) -> ArrayFloat32:
-    """Calculate the ratio of the river channel area to the cell area.
-
-    Args:
-        river_width: The width of the river in each cell, in meters.
-        river_length: The length of the river in each cell, in meters.
-        cell_area: The area of each cell, in square meters.
-
-    Returns:
-        A 1D array with the ratio of the river channel area to the cell area.
-    """
-    channel_ratio: ArrayFloat32 = np.minimum(
-        1.0,
-        river_width * river_length / cell_area,
-    )
-
-    assert not np.isnan(channel_ratio).any()
-    return channel_ratio
-
-
 @njit(fastmath=True, parallel=True)
 def calculate_wetted_channel_area(
     use_kinematic: ArrayBool,
@@ -201,9 +178,9 @@ def calculate_wetted_channel_area(
     Differentiates between local inertial and kinematic routing reaches:
     - Local Inertial: Top width is determined from simulated water surface elevation relative
       to channel bed and cross-sectional geometry (in-bank power-law profile and overbank multi-level
-      floodplain profile widths).
+      floodplain profile widths via compute_top_width_from_depth).
     - Kinematic: Top width is determined from instantaneous discharge using the hydraulic
-      geometry power law w = alpha * |Q|^beta.
+      geometry power law w = alpha * |Q|^beta via compute_hydraulic_geometry_width.
 
     Args:
         use_kinematic: Boolean mask identifying kinematic wave reaches (True) vs local inertial reaches (False).
@@ -230,38 +207,22 @@ def calculate_wetted_channel_area(
 
         if use_kinematic[i]:
             # Kinematic wave reaches derive channel width from instantaneous discharge
-            flow_rate_m3_s: np.float32 = np.abs(discharge_m3_s[i])
-            if flow_rate_m3_s <= np.float32(1e-12):
-                wetted_channel_area_m2[i] = np.float32(0.0)
-                continue
-            top_width_m: np.float32 = river_width_alpha[i] * (
-                flow_rate_m3_s ** river_width_beta[i]
+            top_width_m: np.float32 = compute_hydraulic_geometry_width(
+                discharge_m3_s=discharge_m3_s[i],
+                alpha=river_width_alpha[i],
+                beta=river_width_beta[i],
             )
         else:
             # Local inertial reaches derive channel width from simulated depth and cross section geometry
             water_depth_m: np.float32 = water_stage_m[i] - bed_elevation_m[i]
-            if water_depth_m <= np.float32(0.0):
-                wetted_channel_area_m2[i] = np.float32(0.0)
-                continue
-
-            bankfull_depth: np.float32 = bankfull_depth_m[i]
-            bankfull_width: np.float32 = bankfull_width_m[i]
-
-            if water_depth_m <= bankfull_depth or bankfull_depth <= np.float32(0.0):
-                # In-bank flow
-                depth_ratio: np.float32 = water_depth_m / max(
-                    bankfull_depth, np.float32(1e-4)
-                )
-                top_width_m = bankfull_width * (depth_ratio ** shape_exponent[i])
-            else:
-                # Overbank flow
-                overbank_depth_m: np.float32 = water_depth_m - bankfull_depth
-                top_width_m = compute_top_width_from_overbank_depth(
-                    overbank_depth_m=overbank_depth_m,
-                    bankfull_width_m=bankfull_width,
-                    floodplain_widths=floodplain_profile_widths_m[i],
-                    side_slope_z=floodplain_side_slope_m_per_m[i],
-                )
+            top_width_m = compute_top_width_from_depth(
+                water_depth_m=water_depth_m,
+                bankfull_depth_m=bankfull_depth_m[i],
+                bankfull_width_m=bankfull_width_m[i],
+                shape_exponent=shape_exponent[i],
+                floodplain_widths=floodplain_profile_widths_m[i],
+                side_slope_z=floodplain_side_slope_m_per_m[i],
+            )
 
         wetted_channel_area_m2[i] = min(
             cell_area_m2[i], top_width_m * river_length_m[i]

@@ -17,11 +17,14 @@ from geb.hydrology.routing import (
 )
 from geb.hydrology.routing.geometry import (
     FLOODPLAIN_PROFILE_DEPTHS,
+    NUM_FLOODPLAIN_LEVELS,
     build_inertial_geometry,
     compute_cfl_area_and_top_width,
     compute_cross_section_from_depth,
+    compute_hydraulic_geometry_width,
     compute_overbank_depth_and_top_width,
     compute_static_geometry,
+    compute_top_width_from_depth,
 )
 
 
@@ -2736,3 +2739,79 @@ def test_routing_calculate_bankfull_bjerklie_coupled_system() -> None:
 
     # In flatter reach, depth is greater:
     assert depths[1] > depths[0]
+
+
+def test_compute_hydraulic_geometry_width() -> None:
+    """Verifies hydraulic geometry power law w = alpha * |Q|^beta and zero flow handling."""
+    alpha = np.float32(3.5)
+    beta = np.float32(0.5)
+
+    # Zero and near-zero flow
+    assert compute_hydraulic_geometry_width(np.float32(0.0), alpha, beta) == np.float32(
+        0.0
+    )
+    assert compute_hydraulic_geometry_width(
+        np.float32(1e-15), alpha, beta
+    ) == np.float32(0.0)
+
+    # Positive flow
+    q_pos = np.float32(16.0)
+    w_pos: np.float32 = compute_hydraulic_geometry_width(q_pos, alpha, beta)
+    assert np.isclose(float(w_pos), 3.5 * (16.0**0.5), rtol=1e-5)
+
+    # Negative flow (uses absolute magnitude)
+    q_neg = np.float32(-16.0)
+    w_neg: np.float32 = compute_hydraulic_geometry_width(q_neg, alpha, beta)
+    assert np.isclose(float(w_neg), float(w_pos), rtol=1e-5)
+
+
+def test_compute_top_width_from_depth() -> None:
+    """Verifies unified top width calculation across in-bank and overbank regimes."""
+    bankfull_depth = np.float32(2.0)
+    bankfull_width = np.float32(20.0)
+    shape_exponent = np.float32(0.5)
+    fp_widths = np.full(NUM_FLOODPLAIN_LEVELS, 40.0, dtype=np.float32)
+    fp_widths[0] = 30.0  # at 0.1 m overbank
+    fp_widths[1] = 40.0  # at 0.25 m overbank
+    side_slope_z = np.float32(2.0)
+
+    # Dry / negative water depth
+    assert compute_top_width_from_depth(
+        water_depth_m=np.float32(0.0),
+        bankfull_depth_m=bankfull_depth,
+        bankfull_width_m=bankfull_width,
+        shape_exponent=shape_exponent,
+        floodplain_widths=fp_widths,
+        side_slope_z=side_slope_z,
+    ) == np.float32(0.0)
+    assert compute_top_width_from_depth(
+        water_depth_m=np.float32(-1.0),
+        bankfull_depth_m=bankfull_depth,
+        bankfull_width_m=bankfull_width,
+        shape_exponent=shape_exponent,
+        floodplain_widths=fp_widths,
+        side_slope_z=side_slope_z,
+    ) == np.float32(0.0)
+
+    # In-bank flow at half bankfull depth (depth = 0.5 m, bankfull = 2.0 m -> depth_ratio = 0.25)
+    w_inbank: np.float32 = compute_top_width_from_depth(
+        water_depth_m=np.float32(0.5),
+        bankfull_depth_m=bankfull_depth,
+        bankfull_width_m=bankfull_width,
+        shape_exponent=shape_exponent,
+        floodplain_widths=fp_widths,
+        side_slope_z=side_slope_z,
+    )
+    # 20.0 * (0.25 ** 0.5) = 10.0
+    assert np.isclose(float(w_inbank), 10.0, rtol=1e-5)
+
+    # Overbank flow at depth = 2.1 m (overbank depth = 0.1 m, matching profile level 0)
+    w_overbank: np.float32 = compute_top_width_from_depth(
+        water_depth_m=np.float32(2.1),
+        bankfull_depth_m=bankfull_depth,
+        bankfull_width_m=bankfull_width,
+        shape_exponent=shape_exponent,
+        floodplain_widths=fp_widths,
+        side_slope_z=side_slope_z,
+    )
+    assert np.isclose(float(w_overbank), 30.0, rtol=1e-5)

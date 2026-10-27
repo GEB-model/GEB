@@ -39,7 +39,9 @@ __all__: list[str] = [
     "build_inertial_geometry",
     "compute_cfl_area_and_top_width",
     "compute_cross_section_from_depth",
+    "compute_hydraulic_geometry_width",
     "compute_overbank_depth_and_top_width",
+    "compute_top_width_from_depth",
     "compute_top_width_from_overbank_depth",
     "compute_static_geometry",
     "estimate_lake_outflow",
@@ -459,6 +461,74 @@ def compute_top_width_from_overbank_depth(
     extra_h: np.float32 = overbank_depth_m - d_max
     z: np.float32 = max(side_slope_z, np.float32(0.0))
     return floodplain_widths[NUM_FLOODPLAIN_LEVELS - 1] + np.float32(2.0) * z * extra_h
+
+
+@njit(inline="always")
+def compute_hydraulic_geometry_width(
+    discharge_m3_s: np.float32,
+    alpha: np.float32,
+    beta: np.float32,
+) -> np.float32:
+    """Calculates channel top width using hydraulic geometry power law w = alpha * |Q|^beta.
+
+    Args:
+        discharge_m3_s: River discharge rate (m³/s).
+        alpha: Hydraulic geometry width coefficient (m / (m³/s)^beta).
+        beta: Hydraulic geometry width exponent (dimensionless).
+
+    Returns:
+        Calculated river channel width (meters).
+    """
+    flow_rate_m3_s: np.float32 = np.abs(discharge_m3_s)
+    if flow_rate_m3_s <= np.float32(1e-12):
+        return np.float32(0.0)
+    return alpha * (flow_rate_m3_s**beta)
+
+
+@njit(inline="always")
+def compute_top_width_from_depth(
+    water_depth_m: np.float32,
+    bankfull_depth_m: np.float32,
+    bankfull_width_m: np.float32,
+    shape_exponent: np.float32,
+    floodplain_widths: ArrayFloat32,
+    side_slope_z: np.float32,
+) -> np.float32:
+    """Calculates channel top width across in-bank and overbank regimes from water depth.
+
+    For water depths at or below bankfull depth, top width follows the in-bank power-law
+    profile w = w_bf * (h / h_bf)^r. For depths above bankfull, top width is derived
+    from the 10-point cross-sectional floodplain profile with piecewise linear
+    interpolation and side-slope extrapolation.
+
+    Args:
+        water_depth_m: Water depth relative to channel bed (meters).
+        bankfull_depth_m: Bankfull channel depth before floodplain spilling occurs (meters).
+        bankfull_width_m: Main channel bankfull width (meters).
+        shape_exponent: Channel cross-sectional shape exponent (dimensionless).
+        floodplain_widths: 10-point cross-sectional top widths at fixed depth levels (meters).
+        side_slope_z: Valley side-slope ratio z (m/m horizontal:vertical).
+
+    Returns:
+        Total top width across channel and floodplain (meters).
+    """
+    if water_depth_m <= np.float32(0.0):
+        return np.float32(0.0)
+
+    if water_depth_m <= bankfull_depth_m or bankfull_depth_m <= np.float32(0.0):
+        # In-bank flow regime: width increases smoothly from bed to bankfull following channel shape
+        depth_ratio: np.float32 = water_depth_m / max(
+            bankfull_depth_m, np.float32(1e-4)
+        )
+        return bankfull_width_m * (depth_ratio**shape_exponent)
+
+    # Overbank regime: top width spills onto floodplain profiles
+    return compute_top_width_from_overbank_depth(
+        overbank_depth_m=water_depth_m - bankfull_depth_m,
+        bankfull_width_m=bankfull_width_m,
+        floodplain_widths=floodplain_widths,
+        side_slope_z=side_slope_z,
+    )
 
 
 @njit(inline="always")

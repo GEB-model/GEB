@@ -28,9 +28,11 @@ from .geometry import (
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_RIVER_WIDTH,
+    GEOM_IN_SHAPE_EXPONENT,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
     InertialGeometry,
     compute_overbank_depth_and_top_width,
+    compute_top_width_from_depth,
     compute_top_width_from_overbank_depth,
 )
 from .solver import evaluate_discharge_pow_0_6, solve_inertial_momentum
@@ -1157,27 +1159,18 @@ def _apply_confluence_inflow_limits(
             reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
         ]
 
-        if depth_c > bankfull_depth_c:
-            top_width_c: np.float32 = compute_top_width_from_overbank_depth(
-                overbank_depth_m=depth_c - bankfull_depth_c,
+        shape_exp_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_SHAPE_EXPONENT]
+        top_width_c: np.float32 = max(
+            compute_top_width_from_depth(
+                water_depth_m=depth_c,
+                bankfull_depth_m=bankfull_depth_c,
                 bankfull_width_m=bf_width_c,
+                shape_exponent=shape_exp_c,
                 floodplain_widths=geom_floodplain_widths[reach_idx],
                 side_slope_z=fp_slope_c,
-            )
-        else:
-            depth_ratio: np.float32 = depth_c / max(bankfull_depth_c, np.float32(1e-3))
-            inv_shape_exp_plus_one: np.float32 = geom_inbank[
-                reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
-            ]
-            shape_exponent: np.float32 = (
-                np.float32(0.5)
-                if inv_shape_exp_plus_one == np.float32(1.0 / 1.5)
-                else (np.float32(1.0) / inv_shape_exp_plus_one) - np.float32(1.0)
-            )
-            top_width_c = max(
-                bf_width_c * (depth_ratio**shape_exponent),
-                bf_width_c * np.float32(0.1),
-            )
+            ),
+            bf_width_c * np.float32(0.1),
+        )
 
         surface_area_c: np.float32 = top_width_c * reach_length_c
         delta_v_cap: np.float32 = surface_area_c * delta_z_max
