@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from packaging.version import Version
 
-from geb import __version__
+from geb.version import __version__
 
 if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild

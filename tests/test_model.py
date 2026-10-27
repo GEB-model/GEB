@@ -49,6 +49,10 @@ DEFAULT_BUILD_ARGS: dict[str, Any] = {"continue_": True}
 DEFAULT_RUN_ARGS: dict[str, Any] = {}
 
 
+@pytest.mark.parametrize(
+    "clean_working_directory",
+    [False, True],
+)
 def test_init(clean_working_directory: bool) -> None:
     """Test model initialization from example configuration.
 

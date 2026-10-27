@@ -32,10 +32,11 @@ from shapely.geometry import Point, box, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from geb import GEB_PACKAGE_DIR, __version__
+from geb import GEB_PACKAGE_DIR
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
 from geb.build.version_updates import get_and_maybe_do_version_updates
+from geb.version import __version__
 from geb.workflows.io import (
     read_params,
     write_array,

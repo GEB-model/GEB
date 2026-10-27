@@ -18,7 +18,7 @@ import xarray as xr
 from dateutil.relativedelta import relativedelta
 from packaging.version import Version
 
-from geb import GEB_PACKAGE_DIR, __version__
+from geb import GEB_PACKAGE_DIR
 from geb.agents import Agents
 from geb.build.version_updates import get_and_maybe_do_version_updates
 from geb.hazards.driver import HazardDriver
@@ -28,6 +28,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Bucket, Store
+from geb.version import __version__
 from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate

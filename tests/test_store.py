@@ -467,8 +467,8 @@ def test_store_checkpoint_metadata() -> None:
     import datetime
     import json
 
-    from geb import __version__
     from geb.store import Store
+    from geb.version import __version__
 
     class DummyModel:
         def __init__(self) -> None:

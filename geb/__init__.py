@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 from llvmlite import binding
 from numba import config, njit, prange, threading_layer
 
-from geb.version import __version__ as __version__
 from geb.workflows.io import fetch_and_save
 
 # set environment variable for GEB package directory
@@ -58,20 +57,18 @@ else:
         "SFINCS_SIF_CONTAINER_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
     )
 
+TBB_VERSION: str = "2023.1.0"
 
-def load_numba_threading_layer(version: str = "2022.1.0") -> None:
+
+def load_numba_threading_layer() -> None:
     """Load TBB shared library, a very efficient threading layer for parallelizing CPU-bound tasks in Numba-compiled functions.
-
-    Args:
-        version: version of TBB to use, default is "2022.1.0".
 
     Raises:
         RuntimeError: If the platform is not supported.
 
     """
-    version = "2022.1.0"
     bin_path: Path = GEB_PACKAGE_DIR / "bin" / "tbb"
-    tbb_uncompressed_folder: Path = Path("oneapi-tbb-" + version)
+    tbb_uncompressed_folder: Path = Path("oneapi-tbb-" + TBB_VERSION)
 
     if platform.system() == "Linux":
         tbb_platform: str = "lin"
@@ -92,7 +89,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     tbb_library: Path = tbb_path / tbb_uncompressed_folder / tbb_file
 
     if not tbb_library.exists():
-        tbb_url: str = f"https://github.com/uxlfoundation/oneTBB/releases/download/v{version}/oneapi-tbb-{version}-{tbb_compressed_file}"
+        tbb_url: str = f"https://github.com/uxlfoundation/oneTBB/releases/download/v{TBB_VERSION}/oneapi-tbb-{TBB_VERSION}-{tbb_compressed_file}"
 
         tbb_path.mkdir(parents=True, exist_ok=True)
 
