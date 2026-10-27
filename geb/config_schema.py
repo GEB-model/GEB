@@ -330,12 +330,6 @@ class KarstConfig(BaseModel):
         le=1.0,
         description="Fraction of runoff and interflow captured on karst land below the swallowing ceiling (0–1).",
     )
-    max_storage_m: float | None = Field(
-        None,
-        gt=0.0,
-        allow_inf_nan=False,
-        description="Maximum water depth held in karst delay storage (m), or None for unlimited. Excess storage overflows to river discharge.",
-    )
     release_time_days: float = Field(
         gt=0.0,
         allow_inf_nan=False,

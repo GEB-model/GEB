@@ -23,7 +23,6 @@ def karst() -> Karst:
         "hydrology": {
             "karst": {
                 "capture_fraction": 1.0,
-                "max_storage_m": None,
                 "release_time_days": 10.0,
             }
         }
@@ -139,7 +138,7 @@ def test_karst_dry_recession(karst: Karst) -> None:
         karst: Isolated karst module.
     """
     karst.model.config["hydrology"]["karst"]["capture_fraction"] = 0.0
-    karst.storage_m[:] = [0.1, 0.2]
+    karst.storage_m[:] = [0.02, 0.04]
     initial_storage_m: np.ndarray = karst.storage_m.copy()
     cumulative_recharge_m: np.ndarray = np.zeros(2)
     for day in range(1, 31):
@@ -221,7 +220,6 @@ def test_karst_runoff_capture_ceiling(karst: Karst) -> None:
     karst.karst_fraction[:] = [1.0, 1.0]
     karst.storage_m[:] = [0.0, 0.0]
     karst.model.config["hydrology"]["karst"]["capture_fraction"] = 1.0
-    karst.model.config["hydrology"]["karst"]["max_storage_m"] = None
 
     # Total inflow 24 * 0.002 = 0.048 m (48 mm), exceeding the 0.025 m (25 mm) ceiling.
     runoff_m: np.ndarray = np.full((24, 6), 0.002, dtype=np.float32)
@@ -256,7 +254,7 @@ def test_karst_runoff_capture_ceiling(karst: Karst) -> None:
 
 
 def test_karst_storage_capacity_overflow(karst: Karst) -> None:
-    """Overflow storage exceeding max_storage_m to river discharge.
+    """Overflow storage exceeding MAX_STORAGE_M to river discharge.
 
     Args:
         karst: Isolated karst module.
@@ -264,7 +262,6 @@ def test_karst_storage_capacity_overflow(karst: Karst) -> None:
     karst.karst_fraction[:] = [1.0, 0.0]
     karst.storage_m[:] = [0.04, 0.0]
     karst.model.config["hydrology"]["karst"]["capture_fraction"] = 1.0
-    karst.model.config["hydrology"]["karst"]["max_storage_m"] = 0.05
 
     # Inflow of 0.02 m on cell 0.
     # Initial storage 0.04 m + inflow 0.02 m - recharge ~0.005 m > 0.05 m ceiling.
@@ -280,7 +277,7 @@ def test_karst_storage_capacity_overflow(karst: Karst) -> None:
         runoff_m, interflow_m, soil_m
     )
 
-    # Cell 0 storage must be capped at exactly max_storage_m (0.05 m).
+    # Cell 0 storage must be capped at exactly MAX_STORAGE_M (0.05 m).
     assert karst.storage_m[0] == pytest.approx(0.05, abs=1e-7)
     assert overflow_m[0] > 0.0
     assert overflow_m[1] == 0.0

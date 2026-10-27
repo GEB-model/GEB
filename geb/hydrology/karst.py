@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 # Maximum daily surface runoff and interflow depth captured by karst depressions and dry valleys (m/day, 25 mm/day).
 MAX_RUNOFF_CAPTURE_M_PER_DAY: np.float32 = np.float32(0.025)
 
+# Maximum water depth stored in karst aquifer delay storage (m, 50 mm). Excess overflows to stream discharge.
+MAX_STORAGE_M: np.float64 = np.float64(0.05)
+
 
 class Karst(Module):
     """Load karst coverage and release stored water gradually."""
@@ -75,10 +78,9 @@ class Karst(Module):
             and interflow are captured up to MAX_RUNOFF_CAPTURE_M_PER_DAY, with
             excess overflowing to surface stream routes. The store follows
             dS/dt = inflow - S/K, with constant inflow over the daily step.
-            When max_storage_m is configured, any stored water exceeding the
-            capacity ceiling overflows to surface discharge. K is the release
-            time in days; after K dry days, exp(-1) of the initial storage remains
-            (about 36.8%).
+            Any stored water exceeding MAX_STORAGE_M overflows to surface
+            discharge. K is the release time in days; after K dry days,
+            exp(-1) of the initial storage remains (about 36.8%).
 
         Args:
             runoff_m: Hourly runoff depths (m), per HRU.
@@ -153,16 +155,8 @@ class Karst(Module):
         # Retain water that was captured but has not yet drained to groundwater.
         storage_m += inflow_m - recharge_m
 
-        # If a storage capacity ceiling is configured, release excess water as overflow to river discharge.
-        max_storage_m: float | None = self.model.config["hydrology"]["karst"][
-            "max_storage_m"
-        ]
-        if max_storage_m is not None:
-            overflow_m: ArrayFloat64 = np.maximum(
-                storage_m - np.float64(max_storage_m), 0.0
-            )
-            storage_m -= overflow_m
-        else:
-            overflow_m = np.zeros_like(storage_m)
+        # Release excess water exceeding MAX_STORAGE_M as overflow to river discharge.
+        overflow_m: ArrayFloat64 = np.maximum(storage_m - MAX_STORAGE_M, 0.0)
+        storage_m -= overflow_m
 
         return recharge_m, captured_runoff_m, captured_soil_m, overflow_m
