@@ -2342,12 +2342,14 @@ class Hydrography(BuildModelBase):
         retention_basins: Path | None = None,
         max_storage_m3_to_min_shreve_stream_order_function: str | None = None,
         create_plots: bool = False,
+        dominant_river_search_radius_m: float = 2000.0,
     ) -> None:
         """Setup retention basins.
 
         There can only be a maximum of one retention basin per river pixel. When a retention
-        basin is already occupied, the retention basin being set up will be assigned to the next downstream river
-        pixel that is not occupied by another retention basin.
+        basin is already occupied or falls inside a lake/reservoir, the retention basin being set up
+        will be assigned to the next downstream river pixel that is not occupied and not in a waterbody.
+        Within dominant_river_search_radius_m, basins prioritize the dominant river (largest upstream area).
 
         Args:
             retention_basins: A vector file that can be read by geopandas containing the retention basins,
@@ -2357,6 +2359,7 @@ class Hydrography(BuildModelBase):
                 returns the minimum Shreve stream order of the river pixel to which the retention basin can be snapped. If none, all retention basins will be snapped
                 to the nearest river pixel regardless of its Shreve stream order.
             create_plots: Whether to create plots of the retention basins and their snapped locations on the river network.
+            dominant_river_search_radius_m: Radius in meters within which to search for the dominant river (defaults to 2000m).
 
         Raises:
             ValueError: If a retention basin cannot be snapped to the river network.
@@ -2411,6 +2414,20 @@ class Hydrography(BuildModelBase):
 
             rivers = self.geom["routing/rivers"]
 
+            has_waterbodies = "waterbodies/waterbody_id" in self.grid
+            if has_waterbodies:
+                waterbody_id_grid = self.grid["waterbodies/waterbody_id"].compute()
+                wb_values = waterbody_id_grid.values
+            else:
+                waterbody_id_grid = None
+                wb_values = None
+
+            has_river_ids = "routing/river_ids" in self.grid
+            if has_river_ids:
+                river_ids_grid = self.grid["routing/river_ids"].compute().values
+            else:
+                river_ids_grid = None
+
             retention_basin_data = []
 
             upstream_area_grid = self.grid["routing/upstream_area_m2"].compute()
@@ -2437,7 +2454,7 @@ class Hydrography(BuildModelBase):
                     retention_basin["retention_max_storage_m3"] = 0.0
 
                 # the centroid of the retention basin may not fall exactly on the river network,
-                # so we snap it to the nearest river pixel using the snap_point_to_river_network function
+                # so we snap it to the river network, prioritizing the dominant river within 2 km
                 if max_storage_m3_to_min_shreve_stream_order_function is not None:
                     rivers_with_min_shreve_order = rivers[
                         rivers["shreve_stream_order"]
@@ -2455,6 +2472,8 @@ class Hydrography(BuildModelBase):
                     upstream_area_grid=upstream_area_grid,
                     upstream_area_subgrid=upstream_area_subgrid,
                     max_spatial_difference_degrees=180,
+                    dominant_river_buffer_m=dominant_river_search_radius_m,
+                    waterbody_id_grid=waterbody_id_grid,
                 )
                 if snapped_data is None:
                     raise ValueError(
@@ -2462,13 +2481,22 @@ class Hydrography(BuildModelBase):
                     )
                 snapped_grid_pixel_xy = snapped_data.snapped_grid_pixel_xy
 
+                def is_invalid_cell(col: int, row: int) -> bool:
+                    if retention_basin_ids.values[row, col] != -1:
+                        return True
+                    if wb_values is not None:
+                        wb_val = wb_values[row, col]
+                        if wb_val != -1 and not np.isnan(wb_val):
+                            return True
+                    if river_ids_grid is not None:
+                        if river_ids_grid[row, col] == -1:
+                            return True
+                    return False
+
                 # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
                 search_steps = 0
-                while (
-                    retention_basin_ids.values[
-                        snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
-                    ]
-                    != -1
+                while is_invalid_cell(
+                    snapped_grid_pixel_xy[0], snapped_grid_pixel_xy[1]
                 ):
                     assigned_retention_basin_id = retention_basin_ids.values[
                         snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
@@ -2478,7 +2506,7 @@ class Hydrography(BuildModelBase):
                     ]
                     if downstream_index == -1:
                         raise ValueError(
-                            f"Retention basin ID {retention_basin['ID']} at location {centroid} snaps to a river pixel that is already assigned to retention basin ID {assigned_retention_basin_id}. No unassigned downstream river pixel was found because the downstream index is -1."
+                            f"Retention basin ID {retention_basin['ID']} at location {centroid} snaps to an occupied or invalid (waterbody/non-river) pixel. No valid unassigned downstream river pixel was found because downstream index is -1."
                         )
 
                     # Follow the downstream river path until we find an unassigned pixel.
@@ -2486,7 +2514,7 @@ class Hydrography(BuildModelBase):
                         downstream_index, retention_basin_ids.shape
                     )
                     self.logger.warning(
-                        f"Retention basin ID {retention_basin['ID']} snapped to an occupied river pixel assigned to retention basin ID {assigned_retention_basin_id}; searching downstream at step {search_steps + 1} from ({snapped_grid_pixel_xy[0]}, {snapped_grid_pixel_xy[1]}) to ({downstream_col}, {downstream_row})."
+                        f"Retention basin ID {retention_basin['ID']} snapped to an occupied or waterbody pixel (assigned RB: {assigned_retention_basin_id}); searching downstream at step {search_steps + 1} from ({snapped_grid_pixel_xy[0]}, {snapped_grid_pixel_xy[1]}) to ({downstream_col}, {downstream_row})."
                     )
                     snapped_grid_pixel_xy = np.array([downstream_col, downstream_row])
                     search_steps += 1
