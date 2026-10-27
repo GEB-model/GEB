@@ -193,7 +193,10 @@ class CMIP6(Adapter):
 
         available_start = merged.indexes["time"][0].year
         available_end = merged.indexes["time"][-1].year
-        if reference_start < available_start or future_end > available_end:
+        if not (
+            available_start <= reference_start <= reference_end <= available_end
+            and available_start <= future_start <= future_end <= available_end
+        ):
             raise ValueError(
                 f"Reference period ({reference_start}-{reference_end}) and future period "
                 f"({future_start}-{future_end}) must lie within the available CMIP6 data "
