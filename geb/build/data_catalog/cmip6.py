@@ -116,7 +116,7 @@ class CMIP6(Adapter):
             )
             shutil.move(temporary_file.name, output_path)
 
-     def calculate_deltas(
+    def calculate_deltas(
         self,
         variable: str,
         historical_data_path: Path,
