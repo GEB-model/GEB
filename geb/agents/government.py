@@ -913,20 +913,21 @@ class Government(AgentBaseClass):
     def calculate_risk_reduction_indicator(self) -> tuple[float, float, np.ndarray]:
         """Calculate the expected annual damage (EAD) for the current year.
 
-        EAD is computed by integrating total flood damage over the exceedance
-        probability curve (trapezoid rule across return periods). Uses the same
-        method as the flood risk module, but with the reforestation-aware per-household damages, to account
-        for reforestation effects on flood depths and damages, as it is impleemented.
+        EAD is computed by integrating total flood damage over all assets (all
+        buildings incl. non-residential, roads, rail, agriculture, forest) over the
+        exceedance probability curve (trapezoid rule across return periods),
+        excluding return periods below the flood protection standard. Uses the
+        reforestation-aware flood maps, to account for reforestation effects on
+        flood depths and damages, as it is implemented.
 
         Returns:
            The normalised EAD, the raw EAD in EUR/year, and the per-household EAD array.
         """
         fr = self.agents.households.flood_risk_module
 
-        ead_per_household = self.calculate_reforestation_aware_ead_per_household()
+        raw_EAD, ead_per_household = self.calculate_reforestation_aware_ead()
         fr.load_return_period_flood_maps()  # restore the static baseline maps for other code
 
-        raw_EAD = float(ead_per_household.sum())
         normalised_EAD = self.normalise_indicator("ead", raw_EAD)
 
         return normalised_EAD, raw_EAD, ead_per_household
@@ -942,7 +943,7 @@ class Government(AgentBaseClass):
         compute_reforestation_ead.py); this identifies the two scenarios that
         bracket the current reforested area, and a weight between them, so
         the per-household damages under each can be interpolated (see
-        :meth:`calculate_reforestation_aware_ead_per_household`).
+        :meth:`calculate_reforestation_aware_ead`).
 
         Returns:
             (lower_folder, upper_folder, weight): output subfolder names
@@ -1009,53 +1010,101 @@ class Government(AgentBaseClass):
             flood_maps[return_period] = read_zarr(file_path)
         households.flood_maps = flood_maps
 
-    def calculate_reforestation_aware_ead_per_household(self) -> np.ndarray:
-        """Per-household EAD, interpolated between the bracketing reforestation scenarios.
+    def calculate_total_ead_for_loaded_flood_maps(self) -> float:
+        """Catchment-wide EAD over all assets for the currently loaded flood maps.
 
-        This computes the real per-household EAD under each bracketing scenario's own flood maps, then linearly
-        interpolates those two already-resolved damage vectors.
+        Applies ``FloodRiskModule.flood()`` (all buildings incl. non-residential,
+        roads, rail, agriculture, forest) to each return-period map in
+        ``households.flood_maps`` and integrates over the exceedance-probability
+        curve. Damages for return periods below the flood protection standard are
+        set to 0, consistent with the per-household damages. ``flood()`` returns
+        a catchment total, so a single standard is used; if subbasins differ, the
+        lowest one is used.
 
         Returns:
-            1-D array of expected annual damage per household, reflecting the
-            current cumulative reforested area.
+            Expected annual damage over all assets.
         """
         households = self.agents.households
         fr = households.flood_risk_module
+
+        standards = set(self.flood_protection_standard_subbasins.values())
+        flood_protection_standard = min(standards) if standards else 0
+        if len(standards) > 1:
+            self.model.logger.warning(
+                "Subbasins have different flood protection standards %s; using the lowest (%s) for the catchment-wide EAD.",
+                sorted(standards),
+                flood_protection_standard,
+            )
+
+        damages = np.array(
+            [
+                fr.flood(households.flood_maps[return_period])
+                if return_period >= flood_protection_standard
+                else 0.0
+                for return_period in households.return_periods
+            ]
+        )
+
+        probabilities = 1.0 / households.return_periods
+        sort_idx = np.argsort(probabilities)
+        return float(np.trapezoid(y=damages[sort_idx], x=probabilities[sort_idx]))
+
+    def calculate_ead_for_loaded_flood_maps(self) -> tuple[float, np.ndarray]:
+        """Total (all assets) and per-household EAD for the currently loaded flood maps.
+
+        Returns:
+            The catchment-wide EAD over all assets, and the 1-D per-household EAD array.
+        """
+        households = self.agents.households
+        fr = households.flood_risk_module
+
+        damages_do_not_adapt, damages_adapt = fr.calculate_building_flood_damages(
+            dynamic=True
+        )
+        ead_per_household = fr.calculate_ead(
+            damages_do_not_adapt, damages_adapt, households.var.adapted.data
+        )
+        return self.calculate_total_ead_for_loaded_flood_maps(), ead_per_household
+
+    def calculate_reforestation_aware_ead(self) -> tuple[float, np.ndarray]:
+        """Total and per-household EAD, interpolated between the bracketing reforestation scenarios.
+
+        This computes the real EAD under each bracketing scenario's own flood maps, then linearly
+        interpolates the two already-resolved results.
+
+        Returns:
+            The catchment-wide EAD over all assets, and the 1-D per-household EAD
+            array, both reflecting the current cumulative reforested area.
+        """
+        households = self.agents.households
 
         if "flooded" not in households.buildings.columns:
             households.update_building_attributes()
 
         bracket = self.reforestation_scenario_bracket()
         if bracket is None:
-            damages_do_not_adapt, damages_adapt = fr.calculate_building_flood_damages(
-                dynamic=True
-            )
-            return fr.calculate_ead(
-                damages_do_not_adapt, damages_adapt, households.var.adapted.data
-            )
+            return self.calculate_ead_for_loaded_flood_maps()
 
         lower_folder, upper_folder, weight = bracket
 
         self.load_household_flood_maps_for_scenario(lower_folder)
-        damages_do_not_adapt, damages_adapt = fr.calculate_building_flood_damages(
-            dynamic=True
-        )
-        ead_lower = fr.calculate_ead(
-            damages_do_not_adapt, damages_adapt, households.var.adapted.data
+        total_ead_lower, ead_per_household_lower = (
+            self.calculate_ead_for_loaded_flood_maps()
         )
 
         if weight == 0.0 or upper_folder == lower_folder:
-            return ead_lower
+            return total_ead_lower, ead_per_household_lower
 
         self.load_household_flood_maps_for_scenario(upper_folder)
-        damages_do_not_adapt, damages_adapt = fr.calculate_building_flood_damages(
-            dynamic=True
-        )
-        ead_upper = fr.calculate_ead(
-            damages_do_not_adapt, damages_adapt, households.var.adapted.data
+        total_ead_upper, ead_per_household_upper = (
+            self.calculate_ead_for_loaded_flood_maps()
         )
 
-        return ead_lower + weight * (ead_upper - ead_lower)
+        return (
+            total_ead_lower + weight * (total_ead_upper - total_ead_lower),
+            ead_per_household_lower
+            + weight * (ead_per_household_upper - ead_per_household_lower),
+        )
 
     def calculate_equity_indicator(
         self, ead_per_household: np.ndarray

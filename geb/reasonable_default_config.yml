@@ -95,7 +95,7 @@ agent_settings:
   government:
     plant_forest:
       forest_restoration_potential_threshold: 0.5
-    reforestation_ead_lookup_table: output/reforestation_ead_summary.csv # optional path to a CSV with columns reforested_area_m2 and ead_eur_per_year(_corrected), used to scale the risk-reduction indicator's EAD by the discharge-driven effect of the cumulative reforested area. If null, no such scaling is applied.
+    reforestation_ead_lookup_table: output/reforestation_ead_summary.csv # optional path to a CSV with columns reforested_area_m2 and ead_eur_per_year, used to scale the risk-reduction indicator's EAD by the discharge-driven effect of the cumulative reforested area. If null, no such scaling is applied.
     adaptation:
       enabled: false # default false. Enable (true) for government adaptation policy. 
       mode: "pathway"  # "cba" for cost-benefit analysis, "pathway" for adaptation pathway
