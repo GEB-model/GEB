@@ -23,6 +23,7 @@ setup_hydrography:
 
 setup_retention_basins:
   max_storage_m3_to_min_shreve_stream_order_function: "(x**0.5) / 100"
+  dominant_river_search_radius_m: 2000.0
 
 setup_elevation:
 
