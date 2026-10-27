@@ -81,6 +81,7 @@ class HouseholdVariables(Bucket):
     buildings: gpd.GeoDataFrame
     adaptation_cost_scaler: float
 
+
 class Households(AgentBaseClass):
     """This class implements the household agents."""
 
@@ -401,7 +402,9 @@ class Households(AgentBaseClass):
         self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
 
         # Load adaptation and relocation cost scaler
-        self.var.adaptation_cost_scaler = self.model.config["agent_settings"]["households"]["adaptation_cost_scaler"]
+        self.var.adaptation_cost_scaler = self.model.config["agent_settings"][
+            "households"
+        ]["adaptation_cost_scaler"]
 
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
@@ -512,7 +515,7 @@ class Households(AgentBaseClass):
         adaptation_costs = np.full(
             self.n,
             10_800  # adaptation costs Europe
-            * self.var.adaptation_cost_scaler, # Scaling to local costs
+            * self.var.adaptation_cost_scaler,  # Scaling to local costs
             np.float32,
         )  # cost scaled to mexico
         r_loan = 0.03  # interest rate
@@ -795,7 +798,9 @@ class Households(AgentBaseClass):
             / "critical_facilities.geoparquet"
         )
         all_critical_facilities.to_parquet(save_path)
-        self.model.logger.info(f"Loaded {len(all_critical_facilities)} critical facilities.")
+        self.model.logger.info(
+            f"Loaded {len(all_critical_facilities)} critical facilities."
+        )
 
         # Update buildings with critical infrastructure attributes
         buildings = self.update_buildings_w_critical_infrastructure(
@@ -1108,10 +1113,12 @@ class Households(AgentBaseClass):
         # calculate damages for adapting and not adapting households based on building footprints
         # calculate expected utilities
         damages_do_not_adapt, damages_adapt = (
-            self.flood_risk_module.calculate_building_flood_damages(dynamic=False, export_building_damages=True)
+            self.flood_risk_module.calculate_building_flood_damages(
+                dynamic=False, export_building_damages=True
+            )
         )
         if (
-            hasattr(self, "factor_change") 
+            hasattr(self, "factor_change")
             and self.model.config["agent_settings"]["climrisk"]["project_costs"]
         ):
             GDP_i_t = self.var.factor_change
@@ -1178,9 +1185,9 @@ class Households(AgentBaseClass):
                 distance_to_coastline_m=sampled_distance_to_coastline,
                 distance_to_river_m=sampled_distance_to_river,
                 distance_to_building_m=sampled_distances,
-                max_migration_costs= 500_000 # European relocation costs
+                max_migration_costs=500_000  # European relocation costs
                 * GDP_i_t  # max migration costs scaled to GDP change
-                * self.var.adaptation_cost_scaler, # Scaling to local costs
+                * self.var.adaptation_cost_scaler,  # Scaling to local costs
                 T=15,
                 r=0.03,
                 sigma=1,
@@ -1329,7 +1336,9 @@ class Households(AgentBaseClass):
                 self._cached_mapped_comids = self._cached_mapped_comids[:-1]
             setattr(self, "_comid_map", comid_map)
         # Print the number of households that are removed
-        self.model.logger.info(f"N households that relocated: {len(household_relocating)}")
+        self.model.logger.info(
+            f"N households that relocated: {len(household_relocating)}"
+        )
 
     def spinup(self) -> None:
         """This function runs the spin-up process for the household agents."""
@@ -1550,47 +1559,63 @@ class Households(AgentBaseClass):
                 invalid, or if the requested scenario map has not been built.
         """
         # We consider 2020 to be the base year
-        base_year=2020
+        base_year = 2020
         if not hasattr(self, "factor_change"):
-            self.country_wide: bool = self.model.config["agent_settings"]["climrisk"]["country_wide"]
+            self.country_wide: bool = self.model.config["agent_settings"]["climrisk"][
+                "country_wide"
+            ]
             ssp: str = self.model.config["agent_settings"]["climrisk"]["ssp"]
-            damage_function: str = self.model.config["agent_settings"]["climrisk"]["damage_function"]
+            damage_function: str = self.model.config["agent_settings"]["climrisk"][
+                "damage_function"
+            ]
             if ssp not in ["1", "2", "3", "4", "5"]:
                 raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
             if damage_function not in ["GDP", "K", "KU", "KPU", "RU", "RPU"]:
-                raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}.")
+                raise ValueError(
+                    f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}."
+                )
             if damage_function != "GDP":
                 rcp: str = self.model.config["agent_settings"]["climrisk"]["rcp"]
-                warming_percentile: str = self.model.config["agent_settings"]["climrisk"]["warming_percentile"]
+                warming_percentile: str = self.model.config["agent_settings"][
+                    "climrisk"
+                ]["warming_percentile"]
                 if warming_percentile not in ["10", "50", "90"]:
-                    raise ValueError(f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}.")
+                    raise ValueError(
+                        f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}."
+                    )
                 if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
-                    raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
+                    raise ValueError(
+                        f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}."
+                    )
 
-            if damage_function=="GDP":
-                ssp_map_name:str = f"SSP{ssp}_{damage_function}.zarr"
+            if damage_function == "GDP":
+                ssp_map_name: str = f"SSP{ssp}_{damage_function}.zarr"
             else:
-                ssp_map_name:str = f"SSP{ssp}{rcp}_{damage_function}_p{warming_percentile}.zarr"
+                ssp_map_name: str = (
+                    f"SSP{ssp}{rcp}_{damage_function}_p{warming_percentile}.zarr"
+                )
             ssp_map_path: Path = (
                 self.model.input_folder / "other" / "ssp_maps" / ssp_map_name
             )
-            population_map_name:str = f"SSP{ssp}_POP.zarr"
+            population_map_name: str = f"SSP{ssp}_POP.zarr"
             population_map_path: Path = (
                 self.model.input_folder / "other" / "ssp_maps" / population_map_name
             )
 
             # Pending: Load as DynamicArray into the var Bucket
-            # flood_map in line 635 is also an xarray and it 
-            # is currently not loaded into the var bucket, an 
+            # flood_map in line 635 is also an xarray and it
+            # is currently not loaded into the var bucket, an
             # implementation should probably be set for both maps
-            try: ssp_map: xr.DataArray= xr.open_dataarray(ssp_map_path)
+            try:
+                ssp_map: xr.DataArray = xr.open_dataarray(ssp_map_path)
             except FileNotFoundError as e:
                 raise ValueError(
                     f"Requested file {ssp_map_name} has not been built. "
                     + f"Please build the model again passing the "
                     + f"requested data to 'setup_climrisk'."
                 ) from e
-            try: population_map: xr.Dataset = xr.open_dataarray(population_map_path)
+            try:
+                population_map: xr.Dataset = xr.open_dataarray(population_map_path)
             except FileNotFoundError as e:
                 raise ValueError(
                     f"Requested file {population_map_name} has not been built. "
@@ -1602,45 +1627,43 @@ class Households(AgentBaseClass):
             # For the growth rate of income we use GDP per capita
             if not self.country_wide:
                 gdp_pcap = ssp_map / population_map
-            else: 
-                gdp_pcap = (
-                    ssp_map.sum(["lon", "lat"]) 
-                    / population_map.sum(["lon", "lat"])
+            else:
+                gdp_pcap = ssp_map.sum(["lon", "lat"]) / population_map.sum(
+                    ["lon", "lat"]
                 )
-            self.growth_rate = (
-                gdp_pcap.diff(dim="year")
-                / gdp_pcap.shift({"year":1}))
+            self.growth_rate = gdp_pcap.diff(dim="year") / gdp_pcap.shift({"year": 1})
             # For damages and costs, we use a country-level GDP-based factor change.
-            self.factor_change = (ssp_map.sum(["lon", "lat"])
-                / ssp_map.sel(
-                    {"year": base_year}).sum(["lon", "lat"]))
+            self.factor_change = ssp_map.sum(["lon", "lat"]) / ssp_map.sel(
+                {"year": base_year}
+            ).sum(["lon", "lat"])
 
         current_year: int = self.model.current_time.year
         # Contry-wide or cell-level growth rate
         if not self.country_wide:
             # Sample household data from map
             # sample_from_map takes a map with y, x coordinates
-            growth_rate_map: np.ndarray = self.growth_rate.sel(
-                {"year":current_year}).to_numpy().swapaxes(-2, -1)
-            growth_rate = sample_from_map(
-                array=growth_rate_map, 
-                coords=self.var.locations.data, 
-                gt=(
-                    self.growth_rate.attrs["lon_origin"],     # x_offset = gt[0]
-                    self.growth_rate.attrs["lon_resolution"], # x_step = gt[1]
-                    0,                                        # row rotation
-                    self.growth_rate.attrs["lat_origin"],     # y_offset = gt[3]
-                    0,                                        # column rotation
-                    self.growth_rate.attrs["lat_resolution"]  # y_step = gt[5]
-                ), 
-                out_of_bounds_value=None,
-                sample_closest_valid_value=True
+            growth_rate_map: np.ndarray = (
+                self.growth_rate.sel({"year": current_year}).to_numpy().swapaxes(-2, -1)
             )
-        else: 
-            growth_rate = float(self.growth_rate.sel({
-                "year": current_year}).item())
-        self.var.factor_change = float(self.factor_change.sel({
-            "year": current_year}).item())
+            growth_rate = sample_from_map(
+                array=growth_rate_map,
+                coords=self.var.locations.data,
+                gt=(
+                    self.growth_rate.attrs["lon_origin"],  # x_offset = gt[0]
+                    self.growth_rate.attrs["lon_resolution"],  # x_step = gt[1]
+                    0,  # row rotation
+                    self.growth_rate.attrs["lat_origin"],  # y_offset = gt[3]
+                    0,  # column rotation
+                    self.growth_rate.attrs["lat_resolution"],  # y_step = gt[5]
+                ),
+                out_of_bounds_value=None,
+                sample_closest_valid_value=True,
+            )
+        else:
+            growth_rate = float(self.growth_rate.sel({"year": current_year}).item())
+        self.var.factor_change = float(
+            self.factor_change.sel({"year": current_year}).item()
+        )
 
         self.var.wealth *= 1 + growth_rate
         self.var.income *= 1 + growth_rate
@@ -1728,7 +1751,9 @@ class Households(AgentBaseClass):
                         Path(self.model.output_folder) / "risk_perception_stats.csv"
                     )
                     df_stats.to_csv(out_path, index=False)
-                    self.model.logger.info(f"Saved risk perception statistics to {out_path}")
+                    self.model.logger.info(
+                        f"Saved risk perception statistics to {out_path}"
+                    )
 
             else:  # Household don't respond to actual floods, but make decision on the first day of the year. Decisions are based on random floods
                 if (
@@ -1736,10 +1761,9 @@ class Households(AgentBaseClass):
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
                 ):
-                    if (
-                        (self.model.current_time.year >= 2021)
-                        and self.model.config["agent_settings"]["climrisk"]["project_income"]
-                    ):
+                    if (self.model.current_time.year >= 2021) and self.model.config[
+                        "agent_settings"
+                    ]["climrisk"]["project_income"]:
                         self.update_monetary_variables_to_ssp()
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()

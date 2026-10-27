@@ -641,7 +641,6 @@ class Government(AgentBaseClass):
                 np.sum(riverine_height_difference * 100 * cost_per_meter) * 2
             )  # investment cost in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
 
-
             total_cost_coastal = np.sum(
                 coastal_height_difference * 100 * cost_per_meter
             )  # investment cost in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike

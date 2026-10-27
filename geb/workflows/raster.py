@@ -191,7 +191,7 @@ def sample_from_map(
     coords: np.ndarray,
     gt: tuple[float, float, float, float, float, float],
     out_of_bounds_value: float | int | bool | None = None,
-    sample_closest_valid_value: bool = False
+    sample_closest_valid_value: bool = False,
 ) -> np.ndarray:
     """Sample coordinates from a map. Can handle multiple dimensions.
 
@@ -257,8 +257,7 @@ def sample_from_map(
                             candidate_y = y_idx + row_offset
                             candidate_x = x_idx + column_offset
                             if not (
-                                0 <= candidate_y < rows
-                                and 0 <= candidate_x < columns
+                                0 <= candidate_y < rows and 0 <= candidate_x < columns
                             ):
                                 continue
 
@@ -267,8 +266,7 @@ def sample_from_map(
                                 continue
 
                             distance = (
-                                row_offset * row_offset
-                                + column_offset * column_offset
+                                row_offset * row_offset + column_offset * column_offset
                             )
                             if distance < closest_distance:
                                 closest_distance = distance

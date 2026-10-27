@@ -29,7 +29,6 @@ class CLIMRISK(Adapter):
         "refs/heads/main/src/pycountry/databases/iso3166-1.json"
     )
 
-
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the adapter.
 
@@ -112,8 +111,7 @@ class CLIMRISK(Adapter):
             raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
         if not 2010 <= reference_year <= 2100:
             raise ValueError(
-                "reference_year must be between 2010 and 2100; "
-                f"got {reference_year}."
+                f"reference_year must be between 2010 and 2100; got {reference_year}."
             )
 
         country_file = self.path / "KompasCountry.mat"
@@ -127,10 +125,9 @@ class CLIMRISK(Adapter):
             )
         # The MATLAB map's latitude order is opposite to the ascending
         # latitude coordinate used to label the xarray data.
-        country_grid: np.ndarray = (
-            np.flip(country_data["CountryMap"], axis=0)
-            .transpose(1, 0)
-        )
+        country_grid: np.ndarray = np.flip(
+            country_data["CountryMap"], axis=0
+        ).transpose(1, 0)
 
         # These coordinates describe the grid represented by the source arrays.
         dimensions: tuple[str, str, str] = ("year", "lon", "lat")
@@ -141,7 +138,9 @@ class CLIMRISK(Adapter):
         if obtain_population:
             population_file = self.path / "OECD_POP_SSP2_SPATIAL13R.mat"
             if not population_file.exists():
-                raise FileNotFoundError(f"Population map file not found: {population_file}")
+                raise FileNotFoundError(
+                    f"Population map file not found: {population_file}"
+                )
             population_data: dict[str, Any] = loadmat(population_file)
             if "POP_MAP" not in population_data:
                 raise ValueError(
@@ -149,10 +148,9 @@ class CLIMRISK(Adapter):
                 )
             # The MATLAB map's latitude order is opposite to the ascending
             # latitude coordinate used to label the xarray data.
-            population_grid: np.ndarray = (
-                np.flip(population_data["POP_MAP"], axis=0)
-                .transpose(2, 1, 0)
-            )
+            population_grid: np.ndarray = np.flip(
+                population_data["POP_MAP"], axis=0
+            ).transpose(2, 1, 0)
             climrisk_data: xr.DataArray = xr.DataArray(
                 data=population_grid,
                 dims=dimensions,
@@ -162,20 +160,27 @@ class CLIMRISK(Adapter):
                     "lat": latitudes,
                     "country": (("lon", "lat"), country_grid),
                 },
-                name="population"
+                name="population",
             )
         else:
-            if warming_percentile is None: warming_percentile = "90"
-            if rcp is None: rcp = "70"
-            if damage_function is None: damage_function = "K"
+            if warming_percentile is None:
+                warming_percentile = "90"
+            if rcp is None:
+                rcp = "70"
+            if damage_function is None:
+                damage_function = "K"
             if warming_percentile not in ["10", "50", "90"]:
-                raise ValueError(f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}.")
+                raise ValueError(
+                    f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}."
+                )
             if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
-                raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
-    
+                raise ValueError(
+                    f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}."
+                )
+
             # Multiple function identifiers share the same CLIMRISK output file.
             file_groups: dict[str, tuple[str, str]] = {
-                "GDP": ("Kompas_", "K_KU"), 
+                "GDP": ("Kompas_", "K_KU"),
                 "K": ("Kompas_", "K_KU"),
                 "KU": ("Kompas_", "K_KU"),
                 "KPU": ("Kompas_", "K_KU"),
@@ -183,13 +188,15 @@ class CLIMRISK(Adapter):
                 "RPU": ("", "RU_RPU"),
             }
             if damage_function not in file_groups:
-                raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}.")
-    
+                raise ValueError(
+                    f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}."
+                )
+
             file_prefix: str
             damage_function_abbreviation: str
             file_prefix, damage_function_abbreviation = file_groups[damage_function]
-    
-            if damage_function=="GDP":
+
+            if damage_function == "GDP":
                 damage_file = (
                     self.path
                     / f"SSP{ssp}26_Kompas_results_p10"
@@ -202,21 +209,23 @@ class CLIMRISK(Adapter):
                     / f"SSP{scenario}_{file_prefix}results_p{warming_percentile}"
                     / f"SSP{scenario}_{damage_function_abbreviation}_results{warming_percentile}.mat"
                 )
-    
+
             with h5py.File(damage_file, "r") as file:
-                if damage_function=="GDP":
+                if damage_function == "GDP":
                     damage_key: str = f"CLIMRISK_DOLLARS_K_GRID_WORLD_S"
                     proportion_key: str = f"CLIMRISK_PROP_K_GRID_WORLD_S"
                 else:
                     damage_key: str = f"CLIMRISK_DOLLARS_{damage_function}_GRID_WORLD_S"
-                    proportion_key: str = f"CLIMRISK_PROP_{damage_function}_GRID_WORLD_S"
-    
+                    proportion_key: str = (
+                        f"CLIMRISK_PROP_{damage_function}_GRID_WORLD_S"
+                    )
+
                 if damage_key not in file or proportion_key not in file:
                     raise ValueError(
                         f"Expected variables {damage_key!r} and {proportion_key!r} "
                         f"were not found in {damage_file}."
                     )
-    
+
                 with warnings.catch_warnings():
                     # Zero proportions can cause divide-by-zero values in the
                     # source formula; suppress the warning while retaining results.
@@ -226,10 +235,9 @@ class CLIMRISK(Adapter):
                         max=100
                     )
                     with np.errstate(divide="ignore", invalid="ignore"):
-                        if damage_function=="GDP":
+                        if damage_function == "GDP":
                             gdp_damage: np.ndarray = (
-                                damage_dollars
-                                *100/damage_proportion
+                                damage_dollars * 100 / damage_proportion
                             )
                         else:
                             gdp_damage: np.ndarray = (
@@ -237,7 +245,7 @@ class CLIMRISK(Adapter):
                                 * (100 - damage_proportion)
                                 / damage_proportion
                             )
-    
+
                 climrisk_data: xr.DataArray = xr.DataArray(
                     data=gdp_damage,
                     dims=dimensions,
@@ -259,23 +267,29 @@ class CLIMRISK(Adapter):
         country_code_numbers = np.unique(codes).astype(int).tolist()
 
         # Find the smallest rectangular crop containing all requested countries.
-        country_mask: xr.DataArray = climrisk_data["country"].isin(
-            country_code_numbers
-        )
+        country_mask: xr.DataArray = climrisk_data["country"].isin(country_code_numbers)
         matching_longitudes: np.ndarray = np.flatnonzero(
             country_mask.any(dim="lat").to_numpy()
         )
         matching_latitudes: np.ndarray = np.flatnonzero(
             country_mask.any(dim="lon").to_numpy()
         )
-        if not country_code_numbers or not matching_longitudes.size or not matching_latitudes.size:
+        if (
+            not country_code_numbers
+            or not matching_longitudes.size
+            or not matching_latitudes.size
+        ):
             raise ValueError("No country-grid cells were found within the region.")
 
         # Pad values by one cell to avoid out of boundary errors in basins located at the extremes of our regions
-        first_longitude_index: int = int( max(matching_longitudes[0]-1, 0))
-        last_longitude_index: int = int( min(matching_longitudes[-1]+1, longitudes.shape[0]-1))
-        first_latitude_index: int = int( max(matching_latitudes[0]-1, 0))
-        last_latitude_index: int = int( min(matching_latitudes[-1]+1, latitudes.shape[0]-1))
+        first_longitude_index: int = int(max(matching_longitudes[0] - 1, 0))
+        last_longitude_index: int = int(
+            min(matching_longitudes[-1] + 1, longitudes.shape[0] - 1)
+        )
+        first_latitude_index: int = int(max(matching_latitudes[0] - 1, 0))
+        last_latitude_index: int = int(
+            min(matching_latitudes[-1] + 1, latitudes.shape[0] - 1)
+        )
 
         longitude_bounds: tuple[float, float] = (
             float(longitudes[first_longitude_index]),
@@ -289,9 +303,9 @@ class CLIMRISK(Adapter):
         # Crop inclusively, then mask other countries inside the bounding box.
         climrisk_data = climrisk_data.sel(
             {
-                "lon":slice(*longitude_bounds),
-                "lat":slice(*latitude_bounds),
-                "year":slice(reference_year, 2100),
+                "lon": slice(*longitude_bounds),
+                "lat": slice(*latitude_bounds),
+                "year": slice(reference_year, 2100),
             }
         )
         climrisk_data = climrisk_data.where(
@@ -303,7 +317,7 @@ class CLIMRISK(Adapter):
                 "lon_resolution": 0.5,
                 "lat_origin": latitude_bounds[0],
                 "lat_resolution": 0.5,
-                "_FillValue": np.nan
+                "_FillValue": np.nan,
             }
         )
         climrisk_data = xr.apply_ufunc(
