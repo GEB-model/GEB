@@ -564,14 +564,14 @@ class DecisionModule:
         amenity_value = self.calculate_riverine_amenity(
             household_distance_to_river_m,
             GDP_i_t=GDP_i_t,
-            phi=self.model.config["agent_settings"]["households"][
+            phi_i=self.model.config["agent_settings"]["households"][
                 "ammenity_value_scaling_factor"
             ],
         )
         amenity_value += self.calculate_coastal_amenity(
             x_j=household_distance_to_coastline_m,
             GDP_i_t=GDP_i_t,
-            phi=self.model.config["agent_settings"]["households"][
+            phi_i=self.model.config["agent_settings"]["households"][
                 "ammenity_value_scaling_factor"
             ],
         )
@@ -693,14 +693,14 @@ class DecisionModule:
         amenity_value = self.calculate_riverine_amenity(
             household_distance_to_river_m,
             GDP_i_t=GDP_i_t,
-            phi=self.model.config["agent_settings"]["households"][
+            phi_i=self.model.config["agent_settings"]["households"][
                 "ammenity_value_scaling_factor"
             ],
         )
         amenity_value += self.calculate_coastal_amenity(
             x_j=household_distance_to_coastline_m,
             GDP_i_t=GDP_i_t,
-            phi=self.model.config["agent_settings"]["households"][
+            phi_i=self.model.config["agent_settings"]["households"][
                 "ammenity_value_scaling_factor"
             ],
         )
@@ -839,14 +839,14 @@ class DecisionModule:
         amenity_value = self.calculate_riverine_amenity(
             distance_to_river_m,
             GDP_i_t=GDP_i_t,
-            phi=self.model.config["agent_settings"]["households"][
+            phi_i=self.model.config["agent_settings"]["households"][
                 "ammenity_value_scaling_factor"
             ],
         )
         amenity_value += self.calculate_coastal_amenity(
             x_j=distance_to_coastline_m,
             GDP_i_t=GDP_i_t,
-            phi=self.model.config["agent_settings"]["households"][
+            phi_i=self.model.config["agent_settings"]["households"][
                 "ammenity_value_scaling_factor"
             ],
         )
