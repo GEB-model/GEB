@@ -18,6 +18,8 @@ mapping_variables_to_cdf = {
     "precipitation": "pr",
 }
 
+available_scenarios = ["ssp1_1_9", "ssp1_2_6", "ssp2_4_5", "ssp3_7_0", "ssp5_8_5"]
+
 from ...workflows.io import (
     read_zarr,
     write_zarr,
@@ -125,10 +127,10 @@ class CMIP6(Adapter):
     ) -> xr.Dataset:
         """Calculate the {variable} deltas from the historical and future CMIP6 data.
 
-        Temperature deltas are computed as absolute monthly differences, while precipitation deltas are
-        computed as monthly future-to-historical ratios.
-        To ensure temporal alignment, the future period is shifted onto the historical reference timeline
-        before the delta calculation for the selected representative year.
+        for each month, the 30-year mean of a future period centred on the representative year is compared with the 30-year mean of a
+        reference period (the first 30 years from start_year). Temperature deltas are absolute
+        differences, precipitation deltas are ratios. The resulting 12 monthly deltas are repeated
+        for every year of the forcing period (start_year to end_year + 1).
 
         Args:
             variable: The variable to compute deltas for (e.g., "tas" for near-surface air temperature, "pr" for precipitation).
@@ -183,50 +185,54 @@ class CMIP6(Adapter):
                 "Delete the cached CMIP6 ZIP files and download them again."
             )
 
-        # Define periods and compute representative year shift
-        shift = representative_forcing_year - end_year  # years
-        initial_start, initial_end = start_year, end_year
-        new_start, new_end = initial_start + shift, initial_end + shift
+        # define periods and compute the representative year shift
+        window_years = 30
+        reference_start = start_year + 1
+        reference_end = reference_start + window_years - 1
+        future_start = representative_forcing_year - window_years // 2 + 1
+        future_end = future_start + window_years - 1
 
-        # confirm that the length of the historical and future periods are equal
-        if (initial_end - initial_start) != (new_end - new_start):
+        available_start = merged.indexes["time"][0].year
+        available_end = merged.indexes["time"][-1].year
+        if not (
+            available_start <= reference_start <= reference_end <= available_end
+            and available_start <= future_start <= future_end <= available_end
+        ):
             raise ValueError(
-                f"Historical period ({initial_start}-{initial_end}) and future period ({new_start}-{new_end}) must be of equal length."
+                f"Reference period ({reference_start}-{reference_end}) and future period "
+                f"({future_start}-{future_end}) must lie within the available CMIP6 data "
+                f"({available_start}-{available_end})."
             )
 
-        # Select subsets for historical and future periods
-        historical_subset = merged.sel(
-            time=slice(f"{initial_start}-01-01", f"{initial_end + 1}-12-31")
+        reference = merged[variable_in_netcdf].sel(
+            time=slice(f"{reference_start}-01-01", f"{reference_end}-12-31")
         )
-
-        future_subset = merged.sel(
-            time=slice(f"{new_start}-01-01", f"{new_end + 1}-12-31")
+        future = merged[variable_in_netcdf].sel(
+            time=slice(f"{future_start}-01-01", f"{future_end}-12-31")
         )
-
-        # confirm that the historical and future subsets have the same number of time steps
-        if historical_subset.sizes["time"] != future_subset.sizes["time"]:
-            raise ValueError(
-                f"Historical subset ({historical_subset.sizes['time']} time steps) and future subset ({future_subset.sizes['time']} time steps) must have the same number of time steps."
-            )
-
-        # Align time axes by shifting future back
-        future_subset = future_subset.assign_coords(time=historical_subset.time)
-        # Force exact alignment to ensure no numpy datetime64 issues in delta calculation
-        historical_subset, future_subset = xr.align(
-            historical_subset, future_subset, join="exact"
-        )
+        reference_climatology = reference.groupby("time.month").mean("time")
+        future_climatology = future.groupby("time.month").mean("time")
 
         # Compute delta as either absolute difference (for temperature) or relative change (for precipitation)
         if variable_in_netcdf == "tas":
-            delta = (
-                future_subset[variable_in_netcdf]
-                - historical_subset[variable_in_netcdf]
-            )
+            monthly_delta = future_climatology - reference_climatology
         else:
-            delta = (
-                future_subset[variable_in_netcdf]
-                / historical_subset[variable_in_netcdf]
-            )
+            monthly_delta = future_climatology / reference_climatology
+
+        # expand the 12 monthly deltas to every month of the forcing period, so the
+        # output keeps the monthly time axis that the forcing adjustment expects
+        forcing_time: xr.DataArray = xr.Dataset(
+            coords={
+                "time": xr.date_range(
+                    start=f"{start_year}-01-01",
+                    end=f"{end_year + 1}-12-01",
+                    freq="MS",
+                    calendar=merged.time.dt.calendar,
+                    use_cftime=True,
+                )
+            }
+        ).time
+        delta = monthly_delta.sel(month=forcing_time.dt.month).drop_vars("month")
 
         return delta.rio.write_crs("EPSG:4326")  # ensure the deltas have a CRS
 
@@ -291,7 +297,8 @@ class CMIP6(Adapter):
         bounds: tuple[float, float, float, float],
         start_year: int,
         end_year: int,
-        representative_forcing_year: int = 2050,
+        ssp_rcp: int,
+        representative_forcing_year: int,
         url: str | None = None,
     ) -> CMIP6:
         """Fetch CMIP6 data and save it to the cache directory.
@@ -302,12 +309,22 @@ class CMIP6(Adapter):
             start_year: The start year for calculating deltas.
             end_year: The end year for the data range.
             representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
+            ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
             url: Not used for CMIP6, included for compatibility with base class.
+        Raises:
+            ValueError: If the SSP-RCP is invalid or if the historical and future periods are not of equal length.
         Returns:
             The current instance of the CMIP6 adapter.
         """
         if self.path.exists():
             return self
+
+        # translate the scenario string to the full SSP name
+        ssp_scenario = f"ssp{str(ssp_rcp).replace('', '_')[1:6]}"
+        if ssp_scenario not in available_scenarios:
+            raise ValueError(
+                f"Invalid SSP-RCP '{ssp_rcp}'. Available scenarios are: {available_scenarios}"
+            )
 
         # CMIP6 "historical" experiments end in 2014 and the SSP scenarios start in 2015.
         # Requesting other years silently returns no data, which would leave a gap.
@@ -329,13 +346,16 @@ class CMIP6(Adapter):
                 self._retrieve(request, str(historical_data_path))
 
             # future data
-            future_data_path = self.root / f"cmip6_future_{variable}.zip"
+            future_data_path = (
+                self.root
+                / f"cmip6_{ssp_scenario}_{variable}_{representative_forcing_year}.zip"
+            )
             if not future_data_path.exists():
                 request = self.construct_request(
                     years=years_future,
                     variable=variable,
                     bounds=bounds,
-                    experiment="ssp5_8_5",
+                    experiment=ssp_scenario,
                     model="gfdl_esm4",
                 )
 

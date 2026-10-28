@@ -708,7 +708,7 @@ class Floods(Module):
 
             # load location and offset for coastal water level forcing
             coastal_forcing_locations: gpd.GeoDataFrame = read_geom(
-                self.model.files["geom"]["gtsm/stations_coast_rp"]
+                self.model.files["geom"]["water_levels/stations_coast_rp"]
             )
 
             coastal_offset = xr.open_dataarray(

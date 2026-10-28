@@ -15,9 +15,8 @@ setup_assets:
   - roads
   - rails
 
-setup_gtsm_station_data:
-  scenario: 245
-  percentile: 0.9
+setup_coastal_water_levels:
+  projection_quantile: 0.5
 
 setup_cell_area:
 

@@ -214,8 +214,7 @@ def run_setup_sea_level_projections_ar6(
     station_ids: list[int],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    scenario: int = 245,
-    percentile: float = 0.5,
+    projection_quantile: float = 0.5,
 ) -> tuple[MagicMock, pd.DataFrame]:
     """Run setup_sea_level_projections on a mocked Hydrography object.
 
@@ -226,8 +225,7 @@ def run_setup_sea_level_projections_ar6(
         station_ids: Station index values.
         tmp_path: Temporary directory used as working directory.
         monkeypatch: Pytest monkeypatch fixture.
-        scenario: SSP scenario passed to the method.
-        percentile: Quantile passed to the method.
+        projection_quantile: Quantile passed to the method.
 
     Returns:
         The mocked Hydrography object and the table passed to ``set_table``,
@@ -244,11 +242,12 @@ def run_setup_sea_level_projections_ar6(
 
     mock_hydrography: MagicMock = MagicMock()
     mock_hydrography.logger = logging.getLogger("test")
-    mock_hydrography.files = {"geom": {"gtsm/stations": STATIONS_FILE}}
+    mock_hydrography.files = {"geom": {"water_levels/stations": STATIONS_FILE}}
+    mock_hydrography.ssp_rcp = 370
     mock_hydrography.data_catalog.fetch.return_value.read.return_value = ar6
 
     Hydrography.setup_sea_level_projections(
-        mock_hydrography, scenario=scenario, percentile=percentile
+        mock_hydrography, projection_quantile=projection_quantile
     )
 
     mock_hydrography.set_table.assert_called_once()
@@ -285,8 +284,7 @@ def test_setup_sea_level_projections_ar6_nearest_location_relative_to_2020(
         station_ids=[7, 3, 11],
         tmp_path=tmp_path,
         monkeypatch=monkeypatch,
-        scenario=370,
-        percentile=0.83,
+        projection_quantile=0.83,
     )
 
     mock_hydrography.data_catalog.fetch.assert_called_once_with("ar6")

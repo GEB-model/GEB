@@ -1,7 +1,6 @@
 """Utility functions for flood hazard workflows."""
 
 import os
-import platform
 import shutil
 import subprocess
 from datetime import datetime
@@ -563,12 +562,55 @@ def check_docker_running() -> bool | None:
         return False
 
 
+DEFAULT_SFINCS_BINARY: Path = Path("/scistor/ivm/GEB/sfincs/bin/sfincs")
+DEFAULT_SFINCS_BINARY_GPU: Path = Path("/scistor/ivm/GEB/sfincs/bin/sfincs-gpu")
+SFINCS_RUNTIMES: tuple[str, ...] = ("native", "apptainer", "docker")
+
+
+def detect_gpu() -> bool:
+    """Detect whether an NVIDIA GPU is available to the current process.
+
+    The presence of a GPU is checked using `nvidia-smi`. Inside a SLURM job, the GPU
+    must additionally be allocated to the job (CUDA_VISIBLE_DEVICES is set), because on
+    clusters a GPU may be physically present but not available for use.
+
+    Returns:
+        True if a usable GPU was detected, False otherwise.
+    """
+    if shutil.which(cmd="nvidia-smi") is None:
+        return False
+
+    result: subprocess.CompletedProcess[bytes] = subprocess.run(
+        args=["nvidia-smi"], capture_output=True
+    )
+    if result.returncode != 0:
+        return False
+
+    if "SLURM_JOB_ID" in os.environ:
+        gpu_ids: str | None = os.getenv(key="CUDA_VISIBLE_DEVICES")
+        return gpu_ids is not None and len(gpu_ids) > 0
+    return True
+
+
 def run_sfincs_simulation(
     model_root: Path,
     simulation_root: Path,
     gpu: bool | str = "auto",
+    runtime: str | None = None,
 ) -> int:
-    """Run SFINCS simulation using either Apptainer or Docker.
+    """Run SFINCS simulation using a native binary (default), Apptainer or Docker.
+
+    Notes:
+        The runtime can be set with the `runtime` argument or, if that is None, with
+        the `SFINCS_RUNTIME` environment variable. It defaults to `native`.
+
+        For the native runtime, the binaries are located at
+        `/scistor/ivm/GEB/sfincs/bin/sfincs` (CPU) and
+        `/scistor/ivm/GEB/sfincs/bin/sfincs-gpu` (GPU). These can be overridden with
+        the `SFINCS_BINARY` and `SFINCS_BINARY_GPU` environment variables.
+
+        For the apptainer and docker runtimes, the container images are taken from the
+        `SFINCS_CONTAINER` and `SFINCS_CONTAINER_GPU` environment variables.
 
     Args:
         model_root: Path to the model root directory.
@@ -577,10 +619,14 @@ def run_sfincs_simulation(
             The simulation directory must be a subdirectory of the model root directory.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
+        runtime: How to run SFINCS: 'native', 'apptainer' or 'docker'. If None, the
+            `SFINCS_RUNTIME` environment variable is used, falling back to 'native'.
 
     Raises:
-        ValueError: If gpu is not True, False, or 'auto'.
-        RuntimeError: If there is an error running the SFINCS simulation.
+        ValueError: If gpu is not True, False, or 'auto', or if runtime is not valid.
+        FileNotFoundError: If the native SFINCS binary does not exist.
+        RuntimeError: If there is an error running the SFINCS simulation, or if a
+            required environment variable is not set.
 
     Returns:
         The return code of the SFINCS simulation subprocess.
@@ -588,80 +634,71 @@ def run_sfincs_simulation(
     if gpu not in [True, False, "auto"]:
         raise ValueError("gpu must be True, False, or 'auto'")
 
+    if runtime is None:
+        runtime = os.getenv(key="SFINCS_RUNTIME", default="native")
+    runtime = runtime.lower()
+    if runtime not in SFINCS_RUNTIMES:
+        raise ValueError(f"runtime must be one of {SFINCS_RUNTIMES}, got '{runtime}'")
+
     if gpu == "auto":
-        # check if nvidia-smi is available, if so, check if a GPU is present
-        if shutil.which(cmd="nvidia-smi") is not None:
-            result: subprocess.CompletedProcess[bytes] = subprocess.run(
-                args=["nvidia-smi"], capture_output=True
-            )
-            maybe_gpu: bool = result.returncode == 0
-
-            # if no GPU is found, there is no need to check further, set gpu to False
-            if not maybe_gpu:
-                gpu: bool = False
-            else:
-                # otherwise, check if we are in a SLURM job. We may be on a cluster
-                # where a GPU is physically present, but not allocated to the job
-                # and therefore not available for use.
-                in_SLURM_job: bool = "SLURM_JOB_ID" in os.environ
-                if in_SLURM_job:
-                    # in a SLURM job, if the job has access to the GPU
-                    gpu_ids: str | None = os.getenv(key="CUDA_VISIBLE_DEVICES")
-                    if gpu_ids is not None and len(gpu_ids) > 0:
-                        gpu: bool = True
-                    else:
-                        gpu: bool = False
-                else:
-                    gpu: bool = True
-        else:
-            gpu: bool = False
-
+        gpu = detect_gpu()
         if gpu:
             print("GPU detected, running SFINCS with GPU support.")
         else:
             print("No GPU detected, running SFINCS without GPU support.")
 
-    if gpu:
-        version: str | None = os.getenv(key="SFINCS_CONTAINER_GPU")
-        assert version is not None, (
-            "SFINCS_CONTAINER_GPU environment variable is not set"
-        )
+    cmd: list[str]
+    if runtime == "native":
+        binary: Path
+        if gpu:
+            binary = Path(
+                os.getenv("SFINCS_BINARY_GPU", str(DEFAULT_SFINCS_BINARY_GPU))
+            )
+        else:
+            binary = Path(os.getenv("SFINCS_BINARY", str(DEFAULT_SFINCS_BINARY)))
+        if not binary.exists():
+            raise FileNotFoundError(f"SFINCS binary not found at {binary}")
+        cmd = [str(binary.resolve())]
     else:
-        version: str | None = os.getenv(key="SFINCS_CONTAINER")
-        assert version is not None, "SFINCS_CONTAINER environment variable is not set"
+        container_variable: str = "SFINCS_CONTAINER_GPU" if gpu else "SFINCS_CONTAINER"
+        version: str | None = os.getenv(key=container_variable)
+        if version is None:
+            raise RuntimeError(
+                f"{container_variable} environment variable is not set, which is required "
+                f"for running SFINCS with runtime '{runtime}'"
+            )
 
-    if platform.system() == "Linux":
-        # If not a apptainer image, add docker:// prefix
-        # to the version string
-        if not version.endswith(".sif"):
-            version: str = "docker://" + version
+        if runtime == "apptainer":
+            # If not a apptainer image, add docker:// prefix
+            # to the version string
+            if not version.endswith(".sif"):
+                version = "docker://" + version
 
-        cmd: list[str] = [
-            "apptainer",
-            "run",
-            "-B",  ## Bind mount
-            f"{model_root.resolve()}:/data",
-            "--pwd",  ## Set working directory inside container
-            f"/data/{simulation_root.relative_to(model_root)}",
-            "--nv",
-            version,
-        ]
-
-    else:
-        assert check_docker_running(), "Docker is not running"
-        # in the docker image of SFINCS thet working directory is /data
-        # but since we also want to load files that are from the model
-        # root, we mount the model root to /data and then change the
-        # working directory within the Docker image to the simulation root
-        cmd: list[str] = [
-            "docker",
-            "run",
-            "-v",
-            f"{model_root.resolve()}:/data",
-            "-w",
-            f"/data/{simulation_root.relative_to(model_root).as_posix()}",
-            version,
-        ]
+            cmd = [
+                "apptainer",
+                "run",
+                "-B",  ## Bind mount
+                f"{model_root.resolve()}:/data",
+                "--pwd",  ## Set working directory inside container
+                f"/data/{simulation_root.relative_to(model_root).as_posix()}",
+                "--nv",
+                version,
+            ]
+        else:
+            assert check_docker_running(), "Docker is not running"
+            # in the docker image of SFINCS thet working directory is /data
+            # but since we also want to load files that are from the model
+            # root, we mount the model root to /data and then change the
+            # working directory within the Docker image to the simulation root
+            cmd = [
+                "docker",
+                "run",
+                "-v",
+                f"{model_root.resolve()}:/data",
+                "-w",
+                f"/data/{simulation_root.relative_to(model_root).as_posix()}",
+                version,
+            ]
 
     log_file: Path = simulation_root / "sfincs.log"
     return_code: int = run_sfincs_subprocess(simulation_root, cmd, log_file=log_file)
