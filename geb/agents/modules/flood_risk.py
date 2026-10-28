@@ -758,6 +758,7 @@ class FloodRiskModule:
             adapted: Boolean array indicating which households have adapted.
             altered_flood_protection_standard: If provided, set damages to 0 for return periods
                 below this threshold (damages protected against by higher standard).
+            update_gdl_ead: Whether to update the accumulated EAD by GDL region.
 
         Returns:
             1D array of annual expected damages (USD) for each household.
@@ -1238,7 +1239,7 @@ class FloodRiskModule:
         return self._adjust_damages_for_flood_protection(self._damages_adapt)
 
     def _calculate_dike_heights(
-        self, dikes, floodmap_template
+        self, dikes: gpd.GeoDataFrame, floodmap_template: xr.DataArray
     ) -> dict[int, dict[int, np.ndarray]]:
         """Calculate dike heights for each river and return period.
 

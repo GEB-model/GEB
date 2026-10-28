@@ -1850,7 +1850,6 @@ class Households(AgentBaseClass):
         Returns:
             Number of households exposed to flooding.
         """
-
         return np.int32(self.households_exposed_to_flooding.size)
 
     @property

@@ -781,17 +781,17 @@ class DecisionModule:
         cost_shape: float = 0.05,
         phi_i: float = 0.254820579,
     ) -> np.ndarray:
-        """This function calculates the migration costs for each agent based on their distance to each sampled building.
+        """Calculate migration costs for each agent and sampled building.
 
         Args:
-            distance_to_building_m: array containing the distance to each sampled building for each agent
-            max_migration_cost: maximum migration cost for each agent
-            cost_shape: shape parameter for the logistic function (default: 0.05)
-            phi_i: Deviation of average national housing prices from the European average
-        Returns:
-            migration_costs: array containing the migration costs for each agent based on their distance to each sampled building
-        """
+            distance_to_building_m: Distances to sampled buildings for each agent.
+            max_migration_cost: Maximum migration cost for each agent.
+            cost_shape: Shape parameter for the logistic function.
+            phi_i: Deviation of average national housing prices from the European average.
 
+        Returns:
+            An array of migration costs for each agent and sampled building.
+        """
         distance_to_building_m = np.minimum(distance_to_building_m, 5e6)
         migration_costs = max_migration_cost / (
             1 + np.exp(-cost_shape * distance_to_building_m * 1e-3)
@@ -814,22 +814,26 @@ class DecisionModule:
         GDP_i_t: float,
         **kwargs: dict,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """This function calculates the time discounted subjective utility of relocating for each agent.
+        """Calculate the time-discounted subjective utility of relocating.
 
         Args:
-            geom_id: ID of the current admin unit
-            n_agents: number of agents present in the current floodplain
-            wealth: array containing the wealth of each agent
-            income: array containing the income of each agent
-            distance_to_coastline_m: array containing the distance to the coastline for each agent
-            distance_to_river_m: array containing the distance to the river for each agent
-            max_migration_costs: array containing the maximum migration costs for each agent
-            T: array containing the decision horizon of each agent
-            r: time discounting factor for each agent
-            sigma: risk aversion setting for each agent
+            geom_id: ID of the current administrative unit.
+            n_agents: Number of agents in the current floodplain.
+            wealth: Wealth of each agent.
+            income: Income of each agent.
+            distance_to_coastline_m: Distance to the coastline for each agent.
+            distance_to_river_m: Distance to the river for each agent.
+            distance_to_building_m: Distances to sampled buildings for each agent.
+            max_migration_costs: Maximum migration costs for each agent.
+            T: Decision horizon for each agent.
+            r: Time discounting factor for each agent.
+            sigma: Risk aversion setting for each agent.
+            GDP_i_t: GDP of the household at time t.
+            **kwargs: Additional keyword arguments.
 
         Returns:
-            tuple: A tuple containing the index of the best building for each agent and the time discounted subjective utility of relocating for each agent.
+            A tuple containing the best building index and relocation utility
+            for each agent.
         """
         # First calculate the coastal and riverine amenity values for each sampled building
         amenity_value = self.calculate_riverine_amenity(

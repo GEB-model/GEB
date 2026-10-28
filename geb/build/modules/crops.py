@@ -1799,9 +1799,6 @@ class Crops(BuildModelBase):
             replace_base: If True, replace base crop definitions with alternatives.
             minimum_area_ratio: Threshold for considering a crop present in a unit.
             replace_crop_calendar_unit_code: Optional mapping to replace MIRCA unit codes.
-
-        Raises:
-            ValueError: If no rotations are found for a crop in a unit or no valid neighbor data is found.
         """
         n_farmers = self.array["agents/farmers/region_id"].size
 
