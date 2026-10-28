@@ -11,7 +11,6 @@ import geopandas as gpd
 import numba
 import numpy as np
 import numpy.typing as npt
-import xarray
 import xarray as xr
 import xarray_regrid
 from affine import Affine
@@ -999,8 +998,8 @@ def pad_xy(
 
     left, bottom, right, top = array_rio._internal_bounds()
     resolution_x, resolution_y = array_rio.resolution()
-    y_coord: xarray.DataArray | np.ndarray = da[array_rio.y_dim].values
-    x_coord: xarray.DataArray | np.ndarray = da[array_rio.x_dim].values
+    y_coord: xr.DataArray | np.ndarray = da[array_rio.y_dim].values
+    x_coord: xr.DataArray | np.ndarray = da[array_rio.x_dim].values
 
     y_before = y_after = 0
     x_before = x_after = 0
