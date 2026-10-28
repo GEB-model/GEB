@@ -98,54 +98,6 @@ def burned_river_cells(
     return pd.DataFrame({key: np.concatenate(value) for key, value in rec.items()})
 
 
-def subgrid_volume_m3(
-    sfincs_model: SfincsModel,
-    zs: np.ndarray,
-    n: np.ndarray,
-    m: np.ndarray,
-) -> np.ndarray:
-    """Water volume per cell at a given level, from the subgrid tables as SFINCS computes it at t0.
-
-    Args:
-        sfincs_model: Read-only model with its subgrid component loaded.
-        zs: Water level per cell.
-        n: Row index per cell.
-        m: Column index per cell.
-
-    Returns:
-        Water volume (m3) per cell.
-
-    """
-    subgrid_data: xr.Dataset = sfincs_model.subgrid.data
-    zmin: np.ndarray = subgrid_data["z_zmin"].values[n, m].astype(np.float64)
-    zmax: np.ndarray = subgrid_data["z_zmax"].values[n, m].astype(np.float64)
-    volmax: np.ndarray = subgrid_data["z_volmax"].values[n, m].astype(np.float64)
-    zlevel: np.ndarray = subgrid_data["z_level"].values[:, n, m].T.astype(np.float64)
-    nlev: int = zlevel.shape[1]
-    dx: float = float(sfincs_model.grid.dx)
-    is_geographic: bool = sfincs_model.grid.crs.is_geographic
-    area: np.ndarray
-    if is_geographic:
-        lat: np.ndarray = sfincs_model.grid.mask.y.values[n]
-        area = (dx * 111320.0 * np.cos(np.deg2rad(lat))) * (dx * 110574.0)
-    else:
-        area = np.full(zs.shape, dx * dx)
-    vol = np.zeros(zs.shape)
-    full = zs >= zmax
-    vol[full] = volmax[full] + area[full] * (zs[full] - np.maximum(zmax[full], -20.0))
-    part = (~full) & (zs > zmin)
-    if part.any():
-        levels, z = zlevel[part], zs[part]
-        ivol = np.clip((levels <= z[:, None]).sum(axis=1), 1, nlev - 1)
-        z_lo = levels[np.arange(z.size), ivol - 1]
-        z_hi = levels[np.arange(z.size), ivol]
-        dzvol = volmax[part] / (nlev - 1)
-        vol[part] = (ivol - 1) * dzvol + np.clip(
-            (z - z_lo) / np.maximum(z_hi - z_lo, 0.001), 0, 1
-        ) * dzvol
-    return vol
-
-
 def channel_depth_level(
     cells: pd.DataFrame,
     burn: gpd.GeoDataFrame,
@@ -282,12 +234,6 @@ def set_q2_initial_water_level(
     sfincs_reader: SfincsModel = read_sfincs_model(root)
     try:
         level, cells = q2_initial_water_level(sfincs_reader, dem)
-        volume: np.ndarray = subgrid_volume_m3(
-            sfincs_reader,
-            cells.zs.values.astype(np.float64),
-            cells.n.values,
-            cells.m.values,
-        )
 
         write_binary_map(
             simulation.path / "sfincs.ini",
@@ -301,7 +247,7 @@ def set_q2_initial_water_level(
         filled = cells.zs.values > -9999.0
         return (
             f"Channel-depth initial water level: {int(filled.sum())} of {len(cells)} burned river cells filled, "
-            f"{int(cells.capped.sum())} capped at the river surface, {volume.sum() / 1e6:.0f} Mm3 at t0"
+            f"{int(cells.capped.sum())} capped at the river surface"
         )
     finally:
         sfincs_reader.close()
