@@ -87,9 +87,10 @@ def burned_river_cells(
             bed = src.read(1, window=win).astype(np.float32)
             ys = src.transform.f + (k * n0 + np.arange(bed.shape[0]) + 0.5) * px
             xs = src.transform.c + (np.arange(bed.shape[1]) + 0.5) * px
-            fd = dem.sel(y=ys, x=xs, method="nearest", tolerance=px / 4).values.astype(
-                np.float32
-            )
+            # Subgrid padding can extend beyond the DEM; reindex leaves those pixels missing.
+            fd = dem.reindex(
+                y=ys, x=xs, method="nearest", tolerance=px / 4
+            ).values.astype(np.float32)
             burned = (fd - bed) > BURN_MIN_M
             shape4 = (n1 - n0, k, mmax, k)
             npx = burned.reshape(shape4).sum(axis=(1, 3))
