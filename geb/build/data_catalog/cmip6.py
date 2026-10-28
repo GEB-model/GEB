@@ -128,7 +128,7 @@ class CMIP6(Adapter):
         """Calculate the {variable} deltas from the historical and future CMIP6 data.
 
         for each month, the 30-year mean of a future period centred on the representative year is compared with the 30-year mean of a
-        reference period (the last 30 years up to end_year). Temperature deltas are absolute
+        reference period (the first 30 years from start_year). Temperature deltas are absolute
         differences, precipitation deltas are ratios. The resulting 12 monthly deltas are repeated
         for every year of the forcing period (start_year to end_year + 1).
 
@@ -187,7 +187,8 @@ class CMIP6(Adapter):
 
         # define periods and compute the representative year shift
         window_years = 30
-        reference_start, reference_end = end_year - window_years + 1, end_year
+        reference_start = start_year + 1
+        reference_end = reference_start + window_years - 1
         future_start = representative_forcing_year - window_years // 2 + 1
         future_end = future_start + window_years - 1
 
