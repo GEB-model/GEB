@@ -717,17 +717,17 @@ class Routing(Module):
         # initialize static retention arrays
         self.retention_max_storage_m3 = self.retention_basin_data[
             "retention_max_storage_m3"
-        ].to_numpy(dtype=np.float32)
+        ].to_numpy(dtype=np.float32, copy=True)
         if np.isnan(self.retention_max_storage_m3).any():
             self.model.logger.warning(
                 "Retention basin data contains NaN values in 'retention_max_storage_m3'. "
                 "These will be treated as 0.0 m3. Please check your input data."
             )
-        self.retention_max_storage_m3[np.isnan(self.retention_max_storage_m3)] = 0.0
+            self.retention_max_storage_m3[np.isnan(self.retention_max_storage_m3)] = 0.0
 
         self.controlled_retention = self.retention_basin_data[
             "controlled_retention"
-        ].to_numpy(dtype=bool)
+        ].to_numpy(dtype=bool, copy=True)
 
         self.retention_activation_threshold_m3_s = np.full(
             len(self.retention_basin_data), np.inf, dtype=np.float32
