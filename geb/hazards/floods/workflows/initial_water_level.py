@@ -1,252 +1,137 @@
-"""Workflow to fill the burned river channels of a SFINCS model with water before the run."""
+"""Set initial SFINCS water levels from the DEM elevations in burned river cells."""
 
 from pathlib import Path
 from typing import Any
 
-import geopandas as gpd
 import numpy as np
-import pandas as pd
 import rasterio
 import xarray as xr
-from hydromt_sfincs import SfincsModel
-from hydromt_sfincs.utils import write_binary_map
-from pyproj import Transformer
-from shapely import STRtree, line_locate_point, points
-
-from geb.workflows.methods import get_utm_zone
-
-# A subgrid pixel is burned river when the burn lowered the DEM by more than this (m)
-BURN_MIN_M: float = 0.1
 
 
-def read_sfincs_model(root: Path) -> SfincsModel:
-    """Open a SFINCS model and read its grid through HydroMT-SFINCS.
-
-    Args:
-        root: Path of the SFINCS model directory.
-
-    Returns:
-        The read-only HydroMT-SFINCS model. The caller is responsible for closing it.
-
-    """
-    sfincs_model: SfincsModel = SfincsModel(root=str(root), mode="r")
-    sfincs_model.config.read()
-    sfincs_model.grid.read()
-    return sfincs_model
-
-
-def burned_river_cells(
+def river_initial_water_level(
     root: Path,
     dem: xr.DataArray,
     grid_mask: xr.DataArray,
-) -> pd.DataFrame:
-    """Find the active SFINCS cells that hold burned river pixels.
+) -> xr.DataArray:
+    """Create an initial water-level map from the unburned DEM in river cells.
+
+    The burned subgrid DEM is compared with the original DEM. River burning only
+    lowers the DEM, so every lowered subgrid pixel is a river pixel. For each SFINCS
+    cell containing river pixels, the minimum original DEM elevation at those pixels
+    becomes the initial water level.
 
     Args:
-        root: Path of the SFINCS root model (holds subgrid/dep_subgrid.tif).
-        dem: The DEM the rivers were burned into.
-        grid_mask: Active-cell mask read by the HydroMT-SFINCS grid accessor.
+        root: SFINCS model directory containing ``subgrid/dep_subgrid.tif``.
+        dem: Original DEM used to build the SFINCS subgrid (m).
+        grid_mask: SFINCS active-cell mask, used as the output grid template.
 
     Returns:
-        Table with per cell: n, m (indices), bed (lowest burned pixel), bank (lowest DEM value over the burned
-        pixels), npx (number of burned pixels), lon and lat (centroid of the burned pixels).
+        Initial water levels (m), with NaN in cells without burned river pixels.
+
+    Raises:
+        ValueError: If the subgrid raster dimensions do not match the SFINCS grid.
     """
-    rec: dict[str, list[np.ndarray]] = {
-        k: [] for k in ("n", "m", "bed", "bank", "npx", "lon", "lat")
-    }
-    nmax: int
-    mmax: int
     nmax, mmax = grid_mask.shape
-    with rasterio.open(root / "subgrid" / "dep_subgrid.tif") as src:
-        assert src.transform.e > 0, "expected a south-up subgrid tif"
-        assert src.width % mmax == 0 and src.width // mmax == src.height // nmax
-        k: int = src.width // mmax  # subgrid pixels per cell side
-        px: float = src.transform.a
-        for n0 in range(0, nmax, 1000):
-            n1: int = min(n0 + 1000, nmax)
-            win = rasterio.windows.Window(0, k * n0, src.width, k * (n1 - n0))
-            bed = src.read(1, window=win).astype(np.float32)
-            ys = src.transform.f + (k * n0 + np.arange(bed.shape[0]) + 0.5) * px
-            xs = src.transform.c + (np.arange(bed.shape[1]) + 0.5) * px
-            # Subgrid padding can extend beyond the DEM; reindex leaves those pixels missing.
-            fd = dem.reindex(
-                y=ys, x=xs, method="nearest", tolerance=px / 4
+    initial_level: xr.DataArray = xr.full_like(grid_mask, np.nan, dtype=np.float32)
+
+    with rasterio.open(root / "subgrid" / "dep_subgrid.tif") as burned_dem_file:
+        if burned_dem_file.transform.e <= 0:
+            raise ValueError("Expected the subgrid DEM to have south-up rows.")
+        if (
+            burned_dem_file.width % mmax != 0
+            or burned_dem_file.height % nmax != 0
+            or burned_dem_file.width // mmax != burned_dem_file.height // nmax
+        ):
+            raise ValueError("Subgrid DEM dimensions do not match the SFINCS grid.")
+
+        pixels_per_cell: int = burned_dem_file.width // mmax
+        # Pixel size in the units of the grid CRS (degrees for geographic grids).
+        pixel_width: float = burned_dem_file.transform.a
+        pixel_height: float = burned_dem_file.transform.e
+        for row_start in range(0, nmax, 1000):
+            row_end: int = min(row_start + 1000, nmax)
+            window: rasterio.windows.Window = rasterio.windows.Window(
+                0,
+                pixels_per_cell * row_start,
+                burned_dem_file.width,
+                pixels_per_cell * (row_end - row_start),
+            )
+            burned_dem: np.ndarray = burned_dem_file.read(1, window=window).astype(
+                np.float32
+            )
+            ys: np.ndarray = (
+                burned_dem_file.transform.f
+                + (pixels_per_cell * row_start + np.arange(burned_dem.shape[0]) + 0.5)
+                * pixel_height
+            )
+            xs: np.ndarray = (
+                burned_dem_file.transform.c
+                + (np.arange(burned_dem.shape[1]) + 0.5) * pixel_width
+            )
+
+            # Padded subgrid pixels outside DEM coverage stay NaN and cannot be rivers.
+            original_dem: np.ndarray = dem.reindex(
+                y=ys, x=xs, method="nearest", tolerance=pixel_width / 4
             ).values.astype(np.float32)
-            burned = (fd - bed) > BURN_MIN_M
-            shape4 = (n1 - n0, k, mmax, k)
-            npx = burned.reshape(shape4).sum(axis=(1, 3))
-            cell_bed = np.where(burned, bed, np.inf).reshape(shape4).min(axis=(1, 3))
-            cell_bank = np.where(burned, fd, np.inf).reshape(shape4).min(axis=(1, 3))
-            lon = np.where(burned, xs[None, :], 0.0).reshape(shape4).sum(
+            river_pixels: np.ndarray = burned_dem < original_dem
+            cell_shape: tuple[int, int, int, int] = (
+                row_end - row_start,
+                pixels_per_cell,
+                mmax,
+                pixels_per_cell,
+            )
+            river_pixel_count: np.ndarray = river_pixels.reshape(cell_shape).sum(
                 axis=(1, 3)
-            ) / np.maximum(npx, 1)
-            lat = np.where(burned, ys[:, None], 0.0).reshape(shape4).sum(
-                axis=(1, 3)
-            ) / np.maximum(npx, 1)
-            nn, mm = np.where((npx > 0) & (grid_mask.values[n0:n1] > 0))
-            for key, value in (
-                ("n", nn + n0),
-                ("m", mm),
-                ("bed", cell_bed[nn, mm]),
-                ("bank", cell_bank[nn, mm]),
-                ("npx", npx[nn, mm]),
-                ("lon", lon[nn, mm]),
-                ("lat", lat[nn, mm]),
-            ):
-                rec[key].append(value)
-    return pd.DataFrame({key: np.concatenate(value) for key, value in rec.items()})
+            )
+            cell_river_surface: np.ndarray = (
+                np.where(river_pixels, original_dem, np.inf)
+                .reshape(cell_shape)
+                .min(axis=(1, 3))
+            )
+            local_rows, cols = np.where(
+                (river_pixel_count > 0) & (grid_mask.values[row_start:row_end] > 0)
+            )
+            initial_level.values[row_start + local_rows, cols] = cell_river_surface[
+                local_rows, cols
+            ]
+
+    initial_level.attrs["_FillValue"] = np.nan
+    return initial_level
 
 
-def channel_depth_level(
-    cells: pd.DataFrame,
-    burn: gpd.GeoDataFrame,
-    rivers_utm: gpd.GeoDataFrame,
-    ux: np.ndarray,
-    uy: np.ndarray,
-) -> np.ndarray:
-    """Initial level from stored channel depth, with downstream backwater and a bank cap.
-
-    The stored depth is the channel geometry used when burning the river and already reflects the routing
-    model's bankfull discharge calculation. Reusing it keeps the initial fill consistent with that geometry.
-
-    1. Set each target level to the burned bed plus the depth of its nearest burned river segment.
-    2. Backwater: segments from the outlets upwards, cells from the downstream end upwards. A level is at least
-       the level just downstream (for the last cell of a segment: the nearest filled cell of its downstream
-       segment).
-    3. Cap at the DEM river surface.
-
-    Adds the columns depth and zs_normal to cells.
-
-    Args:
-        cells: Burned river cells with bed, bank, depth and segment.
-        burn: Rivers that were burned (rivers_to_burn), in UTM.
-        rivers_utm: Full, unclipped river geometries, in UTM.
-        ux: Cell x coordinate (UTM).
-        uy: Cell y coordinate (UTM).
-
-    Returns:
-        Initial water level per cell (-9999 where the cell stays dry).
-    """
-    groups = cells.groupby("segment").indices
-    normal = cells.bed.values + cells.depth.values
-    cells["zs_normal"] = normal
-
-    segments = set(groups)
-    downstream: dict[int, int | None] = {}
-    for segment in segments:
-        ds = int(burn.loc[segment, "downstream_ID"])
-        downstream[segment] = ds if ds in segments else None
-    upstream: dict[int | None, list[int]] = {}
-    for segment, ds in downstream.items():
-        upstream.setdefault(ds, []).append(segment)
-    order: list[int] = []
-    todo: list[int] = list(upstream.get(None, []))
-    while todo:
-        segment = todo.pop()
-        order.append(segment)
-        todo.extend(upstream.get(segment, []))
-    assert len(order) == len(segments), (
-        "river network of the burned segments is not a tree"
-    )
-
-    bank = cells.bank.values
-    zs = np.full(len(cells), -9999.0)
-    for segment in order:
-        # Use the full reach geometry: clipping can turn a reach into a MultiLineString.
-        line = rivers_utm.loc[segment].geometry  # digitised upstream -> downstream
-        distance_m = line_locate_point(
-            line, points(ux[groups[segment]], uy[groups[segment]])
-        )
-        ii = groups[segment][np.argsort(-distance_m)]  # downstream end first
-        running = -np.inf
-        if downstream[segment] is not None:
-            x_end, y_end = line.coords[-1][:2]
-            jj = groups[downstream[segment]]
-            jj = jj[zs[jj] > -9999.0]
-            if jj.size:
-                running = zs[jj[np.argmin(np.hypot(ux[jj] - x_end, uy[jj] - y_end))]]
-        for i in ii:
-            if np.isfinite(normal[i]):
-                zs[i] = min(max(normal[i], running), bank[i])
-                running = zs[i]
-    return zs
-
-
-def q2_initial_water_level(
-    sfincs_model: SfincsModel,
-    dem: xr.DataArray,
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Initial water level per SFINCS cell from the burned rivers' stored channel depth.
-
-    Args:
-        sfincs_model: Read-only HydroMT-SFINCS model with its grid loaded.
-        dem: The DEM the rivers were burned into.
-
-    Returns:
-        The level per cell (rows south to north, -9999 = dry) and the per-cell table.
-
-    """
-    root: Path = Path(sfincs_model.root.path)
-    grid_mask: xr.DataArray = sfincs_model.grid.mask
-    cells = burned_river_cells(root, dem, grid_mask)
-
-    burn = gpd.read_parquet(root / "rivers_to_burn.geoparquet")
-    rivers = gpd.read_parquet(root / "rivers.geoparquet")
-    centre = burn.to_crs(4326).union_all().centroid
-    utm = get_utm_zone(centre.y, centre.x)
-    burn = burn.to_crs(utm)
-    to_utm = Transformer.from_crs(dem.rio.crs, utm, always_xy=True)
-    ux, uy = to_utm.transform(cells.lon.values, cells.lat.values)
-
-    # each burned cell belongs to the nearest burned river segment
-    pos = STRtree(burn.geometry.values).query_nearest(points(ux, uy), all_matches=False)
-    pos = np.asarray(pos)[1]
-    cells["segment"] = burn.index.values[pos]
-    cells["depth"] = burn["depth"].values[pos]
-
-    zs = channel_depth_level(cells, burn, rivers.to_crs(utm), ux, uy)
-    cells["capped"] = (
-        cells.zs_normal.values > cells.bank.values
-    )  # Stored channel depth reaches above the DEM river surface.
-    cells["zs"] = zs
-
-    level = np.full(grid_mask.shape, -9999.0, dtype=np.float32)
-    level[cells.n.values, cells.m.values] = zs
-    return level, cells
-
-
-def set_q2_initial_water_level(
+def set_river_initial_water_level(
     simulation: Any,
     dem: xr.DataArray,
 ) -> str:
-    """Write the Q2 initial water level of a SFINCS simulation and tell SFINCS to start from it.
+    """Set SFINCS initial water levels from the unburned DEM in river cells.
 
     Args:
-        simulation: The SFINCSSimulation whose forcing has been set.
-        dem: The DEM the rivers were burned into.
+        simulation: SFINCS simulation with its HydroMT-SFINCS model initialized.
+        dem: Original DEM used to build the SFINCS subgrid (m).
 
     Returns:
-        A one-line summary for the log.
-
+        A short summary for the SFINCS log.
     """
-    root: Path = simulation.root_path
-    sfincs_reader: SfincsModel = read_sfincs_model(root)
-    try:
-        level, cells = q2_initial_water_level(sfincs_reader, dem)
+    sfincs_model = simulation.sfincs_model
+    initial_level: xr.DataArray = river_initial_water_level(
+        root=simulation.root_path,
+        dem=dem,
+        grid_mask=sfincs_model.grid.mask,
+    )
+    filled_cells: int = int(initial_level.notnull().sum().item())
+    if filled_cells == 0:
+        return "No burned river cells found; initial water levels were not changed."
 
-        write_binary_map(
-            simulation.path / "sfincs.ini",
-            level,
-            sfincs_reader.grid.mask.values,
-            dtype="f4",
-        )
-        simulation.sfincs_model.config.update(inifile="sfincs.ini")
-        simulation.sfincs_model.config.write()
-
-        filled = cells.zs.values > -9999.0
-        return (
-            f"Channel-depth initial water level: {int(filled.sum())} of {len(cells)} burned river cells filled, "
-            f"{int(cells.capped.sum())} capped at the river surface"
-        )
-    finally:
-        sfincs_reader.close()
+    sfincs_model.initial_conditions.create(
+        ini=initial_level,
+        reproj_method="nearest",
+    )
+    # initial_conditions.create only sets the map in memory; the simulation does not
+    # write the grid, so write the initial water level file here.
+    sfincs_model.grid.write_map(
+        map_fn=simulation.path / "sfincs.ini",
+        data=sfincs_model.grid.data["ini"].values,
+        mask=sfincs_model.grid.mask.values,
+    )
+    sfincs_model.config.write()
+    return f"DEM-based initial water level set in {filled_cells} burned river cells"

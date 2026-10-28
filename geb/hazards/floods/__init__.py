@@ -20,7 +20,7 @@ from geb.geb_types import (
 )
 from geb.hazards.event import Event
 from geb.hazards.floods.workflows.initial_water_level import (
-    set_q2_initial_water_level,
+    set_river_initial_water_level,
 )
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.routing import (
@@ -326,20 +326,9 @@ class Floods(Module):
 
         Raises:
             ValueError: If the forcing method is unknown.
-            ValueError: If custom rivers are used, which do not provide the river-network topology
-                needed to fill the rivers at the start of the simulation.
             ValueError: If subgrid is off or more than one DEM is configured, as the burned rivers
                 are detected in the subgrid of a single DEM.
         """
-        custom_rivers_path: str | Path | None = self.model.files["geom"].get(
-            "routing/custom_rivers"
-        )
-        if custom_rivers_path is not None and not read_geom(custom_rivers_path).empty:
-            raise ValueError(
-                "Filling the rivers at the start of SFINCS does not support custom river "
-                "layers; it requires the downstream_ID river network for the backwater check."
-            )
-
         # Save the flood depth to a zarr file
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
             event=event,
@@ -450,7 +439,7 @@ class Floods(Module):
                 f"single DEM, but {len(self.DEM_config)} DEMs are configured."
             )
         self.model.logger.info(
-            set_q2_initial_water_level(
+            set_river_initial_water_level(
                 simulation,
                 dem=self.DEM_config[0]["elevation"]["elevation"],
             )
