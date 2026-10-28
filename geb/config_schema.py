@@ -213,29 +213,21 @@ class RiverWidthConfig(BaseModel):
 class RiverDepthParameters(BaseModel):
     """Parameters for river depth calculation."""
 
-    c: float = Field(
-        description="Power law coefficient c for mean channel depth = c * Q^d * S^e."
-    )
-    d: float = Field(
-        description="Power law discharge exponent d for mean channel depth = c * Q^d * S^e."
-    )
-    e: float = Field(
-        description="Power law slope exponent e for mean channel depth = c * Q^d * S^e."
-    )
     min_depth_m: float = Field(
+        0.1,
         ge=0.0,
         description="Minimum allowable bankfull depth (m).",
     )
     shape_exponent: float = Field(
+        0.5,
         gt=0.0,
         description="Power-law cross-sectional shape exponent r (0.5 for parabolic channel).",
     )
     use_observed_width_as_bankfull: bool = Field(
         True,
         description=(
-            "Whether to use observed channel width directly as bankfull width and scale depth "
-            "accordingly using baseline expected channel width. If False, reverts to previous "
-            "machinery using reach-specific alpha for expected width."
+            "Whether to use observed channel width directly as bankfull width. If False, "
+            "reverts to using reach-specific alpha for expected width."
         ),
     )
 
@@ -840,6 +832,11 @@ class ParametersConfig(BaseModel):
     interflow_multiplier: float = Field(description="Interflow multiplier.")
     variable_runoff_shape_beta_multiplier: float = Field(
         description="Scale factor for the variable runoff shape parameter beta."
+    )
+    runoff_concentration_factor: float = Field(
+        1.0,
+        gt=0.0,
+        description="Multiplier for slope-dependent overland runoff concentration time.",
     )
 
 

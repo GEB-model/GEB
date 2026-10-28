@@ -7,7 +7,13 @@ acceleration term (Bates et al. 2010).
 import numpy as np
 from numba import njit
 
-from geb.geb_types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat32
+from geb.geb_types import (
+    ArrayBool,
+    ArrayFloat32,
+    ArrayFloat64,
+    ArrayInt32,
+    TwoDArrayFloat32,
+)
 from geb.hydrology.routing.geometry import (
     GEOM_IN_BANKFULL_AREA,
     GEOM_IN_BANKFULL_DEPTH,
@@ -24,6 +30,7 @@ __all__ = [
     "evaluate_discharge_pow_0_6",
     "evaluate_hydraulic_radius_pow_4_3",
     "solve_inertial_momentum",
+    "solve_steady_backwater_network",
 ]
 
 R_LUT_SIZE: int = 1024
@@ -207,3 +214,167 @@ def solve_inertial_momentum(
 
         # otherwise limit by critical discharge, which is now negative (as flow is upward)
         return max(computed_discharge, -critical_discharge)
+
+
+@njit(fastmath=True)
+def solve_steady_backwater_network(
+    compressed_seq: ArrayInt32,
+    compressed_ds: ArrayInt32,
+    discharge: ArrayFloat32,
+    width: ArrayFloat32,
+    bed_elevation: ArrayFloat32,
+    reach_length: ArrayFloat32,
+    manning_n: ArrayFloat32,
+    shape_exponent: np.float32,
+    min_depth_m: np.float32,
+    is_kinematic: ArrayBool,
+    min_kinematic_slope_m_per_m: np.float32,
+) -> ArrayFloat32:
+    """Calculates bankfull channel depths using the 1D Standard Step backwater method.
+
+    Traverses the river network from downstream boundary controls (ocean or terminal sinks)
+    upstream to headwaters in reverse topological sequence, integrating the steady local
+    inertial momentum equation to determine water surface stage and channel depth. For reaches
+    where downstream water levels submerge the channel bed, backwater profiles (M1 curves)
+    are calculated by integrating friction slope losses upstream. For steep reaches and kinematic
+    wave reaches, flow depth reverts to Manning normal depth:
+        h_norm = (r + 1) * (n * Q / (W * sqrt(S)))^0.6
+
+    Args:
+        compressed_seq: 1D array of active cell indices ordered from downstream (pits)
+            to upstream (headwaters).
+        compressed_ds: 1D array of downstream active cell indices (-1 or self-reference if pit).
+        discharge: Bankfull discharge per cell (m³/s).
+        width: Channel top width per cell (meters).
+        bed_elevation: Riverbed elevation above datum per cell (meters).
+        reach_length: Longitudinal reach length per cell (meters).
+        manning_n: Manning roughness coefficient per cell (s / m^(1/3)). Must be >= 0.01.
+        shape_exponent: Cross-sectional power-law shape exponent (dimensionless, 0.5 for parabolic).
+        min_depth_m: Minimum allowable bankfull depth floor (meters).
+        is_kinematic: Boolean mask identifying kinematic wave reaches (True)
+            that do not transmit or receive backwater effects.
+        min_kinematic_slope_m_per_m: Minimum bed slope floor applied to kinematic wave reaches
+            and boundary sinks to prevent division by zero (m/m).
+
+    Returns:
+        1D array of bankfull centerline channel depths per cell (meters).
+
+    Raises:
+        ValueError: If discharge contains negative values.
+        ValueError: If width or reach_length are not strictly positive.
+        ValueError: If manning_n has values smaller than 0.01.
+        ValueError: If shape_exponent is negative.
+        ValueError: If min_depth_m or min_kinematic_slope_m_per_m are not strictly positive.
+    """
+    if not np.all(discharge >= np.float32(0.0)):
+        raise ValueError("discharge must be non-negative.")
+    if not np.all(width > np.float32(0.0)):
+        raise ValueError("width must be strictly positive.")
+    if not np.all(reach_length > np.float32(0.0)):
+        raise ValueError("reach_length must be strictly positive.")
+    if not np.all(manning_n >= np.float32(0.01)):
+        raise ValueError("manning_n must be at least 0.01 s / m^(1/3).")
+    if shape_exponent < np.float32(0.0):
+        raise ValueError("shape_exponent must be non-negative.")
+    if min_depth_m <= np.float32(0.0):
+        raise ValueError("min_depth_m must be strictly positive.")
+    if min_kinematic_slope_m_per_m <= np.float32(0.0):
+        raise ValueError("min_kinematic_slope_m_per_m must be strictly positive.")
+
+    total_cells: int = compressed_ds.shape[0]
+    n_seq_cells: int = compressed_seq.shape[0]
+    bankfull_depth_m: ArrayFloat32 = np.empty(total_cells, dtype=np.float32)
+    water_stage_m: ArrayFloat32 = np.empty(total_cells, dtype=np.float32)
+    shape_factor: np.float32 = shape_exponent + np.float32(1.0)
+    ten_thirds: np.float32 = np.float32(10.0 / 3.0)
+
+    for seq_idx in range(n_seq_cells):
+        reach_idx: int = int(compressed_seq[seq_idx])
+        discharge_m3_s: np.float32 = discharge[reach_idx]
+        bed_elevation_m: np.float32 = bed_elevation[reach_idx]
+
+        if discharge_m3_s == np.float32(0.0):
+            bankfull_depth_m[reach_idx] = min_depth_m
+            water_stage_m[reach_idx] = bed_elevation_m + min_depth_m
+            continue
+
+        river_width_m: np.float32 = width[reach_idx]
+        reach_length_m: np.float32 = reach_length[reach_idx]
+        manning_roughness: np.float32 = manning_n[reach_idx]
+        downstream_reach_idx: int = int(compressed_ds[reach_idx])
+        has_downstream_reach: bool = (
+            downstream_reach_idx != -1 and downstream_reach_idx != reach_idx
+        )
+
+        # Evaluate bed slope for normal depth
+        bed_slope_m_per_m: np.float32 = min_kinematic_slope_m_per_m
+        if has_downstream_reach:
+            elevation_drop_m: np.float32 = (
+                bed_elevation_m - bed_elevation[downstream_reach_idx]
+            )
+            bed_slope_m_per_m = max(
+                elevation_drop_m / reach_length_m, min_kinematic_slope_m_per_m
+            )
+
+        # Normal depth from Manning uniform flow:
+        # Q = (1/n) * (W * h_mean) * h_mean^(2/3) * sqrt(S0)
+        # h_mean_norm = (n * Q / (W * sqrt(S0)))^0.6
+        # Centerline bankfull depth: h_norm = shape_factor * h_mean_norm
+        mean_normal_depth_m: np.float32 = (
+            (manning_roughness * discharge_m3_s)
+            / (river_width_m * np.sqrt(bed_slope_m_per_m))
+        ) ** np.float32(0.6)
+        normal_depth_m: np.float32 = max(
+            shape_factor * mean_normal_depth_m, min_depth_m
+        )
+
+        final_reach_depth_m: np.float32 = normal_depth_m
+        if not is_kinematic[reach_idx]:
+            if not has_downstream_reach:
+                # Terminal boundary for local inertial routing (ocean or inland sink)
+                ocean_depth_m: np.float32 = max(-bed_elevation_m, np.float32(0.0))
+                final_reach_depth_m = max(normal_depth_m, ocean_depth_m)
+            else:
+                # Use Heun's method to estimate backwater profile from downstream stage and friction slope
+                downstream_stage_m: np.float32 = water_stage_m[downstream_reach_idx]
+                downstream_mean_depth_m: np.float32 = max(
+                    bankfull_depth_m[downstream_reach_idx] / shape_factor,
+                    mean_normal_depth_m,
+                )
+
+                friction_factor: np.float32 = (
+                    (manning_roughness * discharge_m3_s) / river_width_m
+                ) ** np.float32(2.0)
+
+                downstream_friction_slope: np.float32 = friction_factor / (
+                    downstream_mean_depth_m**ten_thirds
+                )
+
+                # Predictor step: estimate upstream stage from downstream friction slope
+                predicted_stage_m: np.float32 = max(
+                    downstream_stage_m + downstream_friction_slope * reach_length_m,
+                    bed_elevation_m + normal_depth_m,
+                )
+                predicted_mean_depth_m: np.float32 = (
+                    predicted_stage_m - bed_elevation_m
+                ) / shape_factor
+
+                # Corrector step (see Heun's method)
+                predicted_friction_slope: np.float32 = friction_factor / (
+                    predicted_mean_depth_m**ten_thirds
+                )
+                average_friction_slope: np.float32 = np.float32(0.5) * (
+                    downstream_friction_slope + predicted_friction_slope
+                )
+                final_stage_m: np.float32 = max(
+                    downstream_stage_m + average_friction_slope * reach_length_m,
+                    bed_elevation_m + normal_depth_m,
+                )
+                final_reach_depth_m = max(
+                    normal_depth_m, final_stage_m - bed_elevation_m
+                )
+
+        bankfull_depth_m[reach_idx] = final_reach_depth_m
+        water_stage_m[reach_idx] = bed_elevation_m + final_reach_depth_m
+
+    return bankfull_depth_m
