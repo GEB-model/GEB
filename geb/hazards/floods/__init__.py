@@ -425,7 +425,7 @@ class Floods(Module):
         if simulation.sfincs_root_model.has_inflow:
             simulation.set_river_inflow(discharge_by_river=discharge_by_river)
 
-        if self.config["fill_rivers_q2"]:
+        if self.config.get("fill_rivers_q2", False):
             if not self.config["subgrid"]:
                 raise ValueError(
                     "fill_rivers_q2 requires hazards.floods.subgrid: true."
