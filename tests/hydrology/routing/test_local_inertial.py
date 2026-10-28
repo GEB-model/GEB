@@ -4921,8 +4921,11 @@ def test_determine_optimal_inertial_threads_auto() -> None:
     assert 1 <= threads_large <= 16
 
 
-def test_determine_optimal_inertial_threads_user_cap() -> None:
+def test_determine_optimal_inertial_threads_user_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Tests user max_threads constraints and input validation."""
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "8")
     threads_capped: int = determine_optimal_inertial_threads(
         n_inertial=35000, max_threads=4
     )

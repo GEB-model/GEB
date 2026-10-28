@@ -661,6 +661,9 @@ class Routing(Module):
         super().__init__(model)
 
         self.config = model.config["hydrology"]["routing"]
+        self.fix_river_geometry_after_spinup: bool = bool(
+            self.config["fix_river_geometry_after_spinup"]
+        )
 
         self.default_missing_channel_width: float = 0.5  # 0.5 is based on assumption here, but could be improved: https://pubs.usgs.gov/publication/wri854004
         self.default_minimum_discharge_m3_per_s: float = 0.01
@@ -945,6 +948,11 @@ class Routing(Module):
         Aggregates bankfull width (meters), depth (meters), Manning roughness, and 10-point floodplain profile
         widths across all grid cells belonging to each river reach, assigning reach-average values directly
         to self.var.rivers.
+
+        Notes:
+            During model execution, channel geometry is updated dynamically during the spinup period.
+            When fix_river_geometry_after_spinup is True (the default), river geometry is kept
+            fixed after spinup and this method is not called during the run period.
 
         Args:
             width_grid: Bankfull channel width per routing grid cell (meters).
@@ -2064,8 +2072,8 @@ class Routing(Module):
             np.float32
         )
 
-        # update alpha and beta once per day
-        if self.model.in_spinup:
+        # update alpha and beta once per day during spinup or if river geometry is not fixed
+        if self.model.in_spinup or not self.fix_river_geometry_after_spinup:
             (
                 self.var.river_width_alpha,
                 self.var.river_width_beta,
@@ -2465,7 +2473,8 @@ class Routing(Module):
 
         Estimates the 2-year flood return period discharge (and retention basin
         activation threshold discharge) for each active river segment using extreme
-        value analysis on daily simulated river outflow. Dynamically updates bankfull
+        value analysis on daily simulated river outflow. If the model is in spinup or
+        if fix_river_geometry_after_spinup is False, dynamically updates bankfull
         channel width, bankfull depth, and the local inertial router geometry.
 
         Raises:
@@ -2525,6 +2534,13 @@ class Routing(Module):
         discharge_by_river_daily.index.freq = pd.infer_freq(  # ty:ignore[unresolved-attribute]
             discharge_by_river_daily.index  # ty:ignore[invalid-argument-type]
         )
+        return_periods_to_fit: list[int | float] = list(
+            set(
+                [2, activation_threshold_return_period_years]
+                if (self.model.in_spinup or not self.fix_river_geometry_after_spinup)
+                else [activation_threshold_return_period_years]
+            )
+        )
         for idx in tqdm(
             active_rivers.index,
             total=len(active_rivers),
@@ -2541,7 +2557,7 @@ class Routing(Module):
             # there should be more exceedances and a reliable fit for the low RPs used here.
             model: ReturnPeriodModel = ReturnPeriodModel(
                 series=discharge_by_river_daily[idx],
-                return_periods=list(set([2, activation_threshold_return_period_years])),
+                return_periods=return_periods_to_fit,
                 fixed_quantile=0.95,  # use a fixed quantile
                 min_exceed=1,
                 fixed_shape=0.0,
@@ -2558,29 +2574,31 @@ class Routing(Module):
                     self.default_minimum_discharge_m3_per_s,
                 )
 
-        # For channels without observed width, estimate bankfull width from the newly fitted 2-year return period discharge
-        # using downstream hydraulic geometry W = alpha * Q2^beta:
-        self.var.river_width = self.calculate_bankfull_width(
-            use_simulated_bankfull_q=True
-        )
+        # Update river geometry only during spinup or if fix_river_geometry_after_spinup is False
+        if self.model.in_spinup or not self.fix_river_geometry_after_spinup:
+            # For channels without observed width, estimate bankfull width from the newly fitted 2-year return period discharge
+            # using downstream hydraulic geometry W = alpha * Q2^beta:
+            self.var.river_width = self.calculate_bankfull_width(
+                use_simulated_bankfull_q=True
+            )
 
-        # Dynamically update the local inertial router's bankfull depth in place
-        # using the newly fitted 2-year flood return periods:
-        updated_bankfull_depth: ArrayFloat32 = self.calculate_bankfull_depth(
-            bankfull_top_width_m=self.var.river_width,
-            use_simulated_bankfull_q=True,
-        )
-        self.router.update_channel_geometry(
-            river_width=self.var.river_width,
-            bankfull_depth_m=updated_bankfull_depth,
-        )
-        self._update_rivers_geometry(
-            width_grid=self.var.river_width,
-            depth_grid=updated_bankfull_depth,
-            manning_grid=self.grid.var.river_mannings,
-            floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
-            floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
-        )
+            # Dynamically update the local inertial router's bankfull depth in place
+            # using the newly fitted 2-year flood return periods:
+            updated_bankfull_depth: ArrayFloat32 = self.calculate_bankfull_depth(
+                bankfull_top_width_m=self.var.river_width,
+                use_simulated_bankfull_q=True,
+            )
+            self.router.update_channel_geometry(
+                river_width=self.var.river_width,
+                bankfull_depth_m=updated_bankfull_depth,
+            )
+            self._update_rivers_geometry(
+                width_grid=self.var.river_width,
+                depth_grid=updated_bankfull_depth,
+                manning_grid=self.grid.var.river_mannings,
+                floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
+                floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
+            )
 
         for basin_id in range(len(self.retention_basin_data)):
             basin_cells = np.where(self.retention_basin_ids == basin_id)[0]

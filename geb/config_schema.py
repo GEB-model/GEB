@@ -269,6 +269,13 @@ class RoutingConfig(BaseModel):
             "available physical cores, and Slurm allocation."
         ),
     )
+    fix_river_geometry_after_spinup: bool = Field(
+        True,
+        description=(
+            "Whether to keep river geometry (channel width and depth) fixed after spinup. "
+            "If True, river geometry is only updated during the spinup period and remains fixed during the run."
+        ),
+    )
     retention_basin_release_threshold_factor: float = Field(
         0.9,
         description="Factor to multiply the activation threshold by to get the release threshold.",

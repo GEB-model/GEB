@@ -73,6 +73,7 @@ hydrology:
     vertical_conductivity_multiplier: 10.0 # Multiplier for vertical hydraulic conductivity in karst soils.
   routing:
     max_threads: null
+    fix_river_geometry_after_spinup: true
     retention_basins:
       release_threshold_factor: 0.85
       activation_threshold_return_period_years: 2

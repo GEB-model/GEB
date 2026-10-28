@@ -178,7 +178,10 @@ def determine_optimal_inertial_threads(
             raise ValueError(f"max_threads must be at least 1, got {max_threads}")
         return min(max_threads, allocated_cpus)
 
-    if physical_cpus is not None and physical_cpus > 0:
+    if slurm_cpus is not None and slurm_cpus > 0:
+        # In a Slurm environment, respect the task allocation quota explicitly assigned by the scheduler
+        available_cpus: int = slurm_cpus
+    elif physical_cpus is not None and physical_cpus > 0:
         available_cpus: int = min(allocated_cpus, physical_cpus)
     else:
         available_cpus = allocated_cpus
