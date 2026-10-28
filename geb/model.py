@@ -684,6 +684,7 @@ class GEBModel(Module):
             self.forcing: Forcing = Forcing(self)
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
+            self.hydrology.runoff_concentrator.set_weights()
 
         self.report_folder = self.model.output_folder / "report"
 
