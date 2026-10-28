@@ -137,7 +137,9 @@ class SubstepBuffers(NamedTuple):
     terminal_wb_outflow_accum_m3: ArrayFloat32
     substep_discharge_inertial: ArrayFloat32 = np.empty(0, dtype=np.float32)
     kinematic_inflow_rate_inertial: ArrayFloat32 = np.empty(0, dtype=np.float32)
-    block_min_buf: ArrayFloat32 = np.empty(0, dtype=np.float32)
+    block_min_buf: ArrayFloat32 = np.empty(
+        REDUCTION_NUM_BLOCKS * REDUCTION_BLOCK_STRIDE, dtype=np.float32
+    )
 
 
 @njit(fastmath=True, parallel=True)
@@ -1207,6 +1209,7 @@ def _apply_confluence_inflow_limits(
 @njit(inline="always")
 def _route_inertial_retention(
     substep_discharge_m3_s: ArrayFloat32,
+    previous_discharge_m3_s_inertial: ArrayFloat32,
     sideflow_m3_inertial: ArrayFloat32,
     river_storage_m3_inertial: ArrayFloat64,
     ret: RetentionCoupling,
@@ -1219,6 +1222,7 @@ def _route_inertial_retention(
 
     Args:
         substep_discharge_m3_s: Primary reach discharge array (m³/s).
+        previous_discharge_m3_s_inertial: Reach discharge from previous macro timestep (m³/s).
         sideflow_m3_inertial: Macro-timestep lateral sideflow volume (m³).
         river_storage_m3_inertial: Reach water storage volume array (m³).
         ret: Flood retention basin state arrays and parameters.
@@ -1246,7 +1250,10 @@ def _route_inertial_retention(
                 retention_id
             ]
             river_volume_substep: np.float32 = avail_flow_rate * dt_substep
-            is_rising_limb: bool = bool(avail_flow_rate > discharge_positive)
+            previous_discharge: np.float32 = max(
+                previous_discharge_m3_s_inertial[reach_idx], np.float32(0.0)
+            )
+            is_rising_limb: bool = bool(avail_flow_rate > previous_discharge)
 
             (
                 diverted_vol,
@@ -1520,6 +1527,7 @@ def _run_inertial_substeps(
     dt_f32: np.float32,
     n_inertial: int,
     substep_discharge_m3_s: ArrayFloat32,
+    previous_discharge_m3_s_inertial: ArrayFloat32,
     river_storage_m3_inertial: ArrayFloat64,
     sideflow_m3_inertial: ArrayFloat32,
     evaporation_m3_inertial: ArrayFloat32,
@@ -1552,6 +1560,7 @@ def _run_inertial_substeps(
         dt_f32: Macro routing timestep duration (seconds).
         n_inertial: Number of reaches routed with local inertial equations.
         substep_discharge_m3_s: Primary discharge array (m³/s).
+        previous_discharge_m3_s_inertial: Reach discharge from previous macro timestep (m³/s).
         river_storage_m3_inertial: Primary reach water storage volume array (m³).
         sideflow_m3_inertial: Macro-timestep lateral sideflow volume (m³).
         evaporation_m3_inertial: Macro-timestep potential channel evaporation volume (m³).
@@ -1593,10 +1602,6 @@ def _run_inertial_substeps(
 
     dt_substep: np.float32 = dt_f32 / np.float32(num_inertial_substeps)
     block_min_buf: ArrayFloat32 = buffers.block_min_buf
-    if block_min_buf.size < REDUCTION_NUM_BLOCKS * REDUCTION_BLOCK_STRIDE:
-        block_min_buf = np.empty(
-            REDUCTION_NUM_BLOCKS * REDUCTION_BLOCK_STRIDE, dtype=np.float32
-        )
 
     t_elapsed: np.float32 = np.float32(0.0)
     substep_count: int = 0
@@ -1679,6 +1684,7 @@ def _run_inertial_substeps(
         # 4. Route diversions and releases for retention basins
         _route_inertial_retention(
             substep_discharge_m3_s=substep_discharge_m3_s,
+            previous_discharge_m3_s_inertial=previous_discharge_m3_s_inertial,
             sideflow_m3_inertial=sideflow_m3_inertial,
             river_storage_m3_inertial=river_storage_m3_inertial,
             ret=ret,

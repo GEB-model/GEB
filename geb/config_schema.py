@@ -276,10 +276,6 @@ class RoutingConfig(BaseModel):
             "If True, river geometry is only updated during the spinup period and remains fixed during the run."
         ),
     )
-    retention_basin_release_threshold_factor: float = Field(
-        0.9,
-        description="Factor to multiply the activation threshold by to get the release threshold.",
-    )
     riverbed_hydraulic_conductivity_multiplier: float = Field(
         0.1,
         ge=0.0,

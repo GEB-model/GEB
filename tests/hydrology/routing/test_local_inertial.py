@@ -2854,6 +2854,7 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
 
     def build_test_state() -> list[Any]:
         substep_q = np.full(n_reaches, 10.0, dtype=np.float32)
+        prev_q = np.full(n_reaches, 10.0, dtype=np.float32)
         storage = np.full(n_reaches, 5000.0, dtype=np.float64)
         sideflow = np.full(n_reaches, 50.0, dtype=np.float32)
         evap = np.full(n_reaches, 1.0, dtype=np.float32)
@@ -2914,6 +2915,7 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
             np.float32(router.dt),
             n_reaches,
             substep_q,
+            prev_q,
             storage,
             sideflow,
             evap,
@@ -2945,24 +2947,24 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
     np.testing.assert_allclose(
         state_serial[3], state_dispatched[3], rtol=1e-5, atol=1e-5
     )
-    # Storage volume (index 4)
-    np.testing.assert_allclose(state_serial[4], state_parallel[4], rtol=1e-5, atol=1e-5)
+    # Storage volume (index 5)
+    np.testing.assert_allclose(state_serial[5], state_parallel[5], rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(
-        state_serial[4], state_dispatched[4], rtol=1e-5, atol=1e-5
+        state_serial[5], state_dispatched[5], rtol=1e-5, atol=1e-5
     )
-    # Time-averaged discharge output (index 9)
+    # Time-averaged discharge output (index 12)
     np.testing.assert_allclose(
-        state_serial[11], state_parallel[11], rtol=1e-5, atol=1e-5
-    )
-    np.testing.assert_allclose(
-        state_serial[11], state_dispatched[11], rtol=1e-5, atol=1e-5
-    )
-    # Stage buffer (inside SubstepBuffers at index 15)
-    np.testing.assert_allclose(
-        state_serial[17].stage_buf, state_parallel[17].stage_buf, rtol=1e-5, atol=1e-5
+        state_serial[12], state_parallel[12], rtol=1e-5, atol=1e-5
     )
     np.testing.assert_allclose(
-        state_serial[17].stage_buf, state_dispatched[17].stage_buf, rtol=1e-5, atol=1e-5
+        state_serial[12], state_dispatched[12], rtol=1e-5, atol=1e-5
+    )
+    # Stage buffer (inside SubstepBuffers at index 18)
+    np.testing.assert_allclose(
+        state_serial[18].stage_buf, state_parallel[18].stage_buf, rtol=1e-5, atol=1e-5
+    )
+    np.testing.assert_allclose(
+        state_serial[18].stage_buf, state_dispatched[18].stage_buf, rtol=1e-5, atol=1e-5
     )
 
 

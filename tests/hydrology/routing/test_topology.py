@@ -256,3 +256,53 @@ def test_compute_retention_routing_invariants() -> None:
     assert out == 0.0
     assert ret_s == 0.0
     assert riv_v == 0.0
+
+
+def test_compute_retention_routing_falling_vs_rising_limb() -> None:
+    """Tests that retention release only occurs on the falling limb of the hydrograph."""
+    dt: np.float32 = np.float32(1.0)
+    activation_threshold: np.float32 = np.float32(10.0)
+    release_threshold_factor: np.float32 = np.float32(0.8)
+    initial_retention_storage: np.float32 = np.float32(500.0)
+    max_retention_storage: np.float32 = np.float32(1000.0)
+    low_discharge: np.float32 = np.float32(4.0)
+    river_volume: np.float32 = np.float32(4.0)
+
+    # 1. Low flow on falling limb (is_rising_limb = False) -> water should be released
+    div_fall, out_fall, ret_s_fall, riv_v_fall = compute_retention_routing(
+        dt=dt,
+        river_volume_m3=river_volume,
+        discharge_before_diversion_m3_s=low_discharge,
+        is_rising_limb=False,
+        retention_storage_m3=initial_retention_storage,
+        retention_max_storage_m3=max_retention_storage,
+        controlled_retention=True,
+        activation_threshold_m3_s=activation_threshold,
+        release_threshold_factor=release_threshold_factor,
+        inflow_limit_m3=np.float32(200.0),
+        max_outflow_limit_m3=np.float32(50.0),
+    )
+    # release threshold = 10.0 * 0.8 = 8.0 m³/s; extra outflow allowed = (8.0 - 4.0) * 1.0 = 4.0 m³
+    assert div_fall == pytest.approx(0.0)
+    assert out_fall == pytest.approx(4.0)
+    assert ret_s_fall == pytest.approx(496.0)
+    assert riv_v_fall == pytest.approx(8.0)
+
+    # 2. Low flow on rising limb (is_rising_limb = True) -> NO water should be released
+    div_rise, out_rise, ret_s_rise, riv_v_rise = compute_retention_routing(
+        dt=dt,
+        river_volume_m3=river_volume,
+        discharge_before_diversion_m3_s=low_discharge,
+        is_rising_limb=True,
+        retention_storage_m3=initial_retention_storage,
+        retention_max_storage_m3=max_retention_storage,
+        controlled_retention=True,
+        activation_threshold_m3_s=activation_threshold,
+        release_threshold_factor=release_threshold_factor,
+        inflow_limit_m3=np.float32(200.0),
+        max_outflow_limit_m3=np.float32(50.0),
+    )
+    assert div_rise == pytest.approx(0.0)
+    assert out_rise == pytest.approx(0.0)
+    assert ret_s_rise == pytest.approx(initial_retention_storage)
+    assert riv_v_rise == pytest.approx(river_volume)

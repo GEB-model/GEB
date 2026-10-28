@@ -1145,6 +1145,7 @@ class LocalInertial:
                     dt_f32=dt_f32,
                     n_inertial=self.n_inertial,
                     substep_discharge_m3_s=substep_discharge_inertial,
+                    previous_discharge_m3_s_inertial=previous_discharge_m3_s_inertial,
                     river_storage_m3_inertial=river_storage_m3_inertial,
                     sideflow_m3_inertial=sideflow_m3_inertial,
                     evaporation_m3_inertial=evaporation_m3_inertial,
