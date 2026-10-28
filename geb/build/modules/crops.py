@@ -2468,6 +2468,50 @@ class Crops(BuildModelBase):
             available_crops_mask_irrigated[available_crops_irrigated] = True
             farmer_crop_irrigated_fractions[~available_crops_mask_irrigated] = 0
 
+            if (
+                farmer_crop_rainfed_fractions.sum() == 0
+                and farmer_crop_irrigated_fractions.sum() == 0
+            ):
+                # All crops that have a non-zero area fraction in this cell are missing from the
+                # crop calendar, so after masking, no fractions are left to assign crops from.
+                # The fractions come from the cell itself or, if it has no data, from its nearest
+                # cells in the same MIRCA unit. The crop calendar is the one of the cell's MIRCA
+                # unit, or of the unit that replaces it through replace_crop_calendar_unit_code.
+                # Fall back to the growing areas of the crop calendar as fractions instead.
+                self.logger.warning(
+                    f"No crop in the area fractions of cell {linear_index} is in the crop "
+                    f"calendar of MIRCA unit {MIRCA_unit_cell}; using the crop calendar areas instead."
+                )
+                for rotation_area, rotation_matrix in crop_calendar[MIRCA_unit_cell]:
+                    for crop_id, rotation_is_irrigated in rotation_matrix[:, :2]:
+                        if crop_id == -1:
+                            continue
+                        if rotation_is_irrigated:
+                            farmer_crop_irrigated_fractions[crop_id] += rotation_area
+                        else:
+                            farmer_crop_rainfed_fractions[crop_id] += rotation_area
+
+            # The split into rainfed and irrigated farmers is rounded (e.g. 1 farmer with
+            # 40% irrigated area becomes rainfed), and crops are masked by the crop calendar.
+            # Either can leave a group of farmers without any crop to choose from, so
+            # these farmers are moved to the other group instead.
+            has_rainfed_options: bool = bool(farmer_crop_rainfed_fractions.sum() > 0)
+            has_irrigated_options: bool = bool(
+                farmer_crop_irrigated_fractions.sum() > 0
+            )
+            if n_rainfed_farmers > 0 and not has_rainfed_options:
+                assert has_irrigated_options, (
+                    f"Error: All rainfed and irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+                )
+                n_irrigating_farmers += n_rainfed_farmers
+                n_rainfed_farmers = 0
+            elif n_irrigating_farmers > 0 and not has_irrigated_options:
+                assert has_rainfed_options, (
+                    f"Error: All rainfed and irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+                )
+                n_rainfed_farmers += n_irrigating_farmers
+                n_irrigating_farmers = 0
+
             if n_rainfed_farmers > 0:
                 assert not farmer_crop_rainfed_fractions.sum() == 0, (
                     f"Error: All rainfed crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
