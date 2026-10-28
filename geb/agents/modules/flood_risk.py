@@ -41,8 +41,8 @@ class FloodRiskModule:
             or self.model.config["agent_settings"]["households"]["adapt"]
         ):
             self.load_return_period_flood_maps()
-        self.load_flood_protection_standard()
-        self.flood_in_last_year = False
+            self.load_flood_protection_standard()
+            self.flood_in_last_year = False
         # Seed chosen (out of 1M tested) so historical flood-triggering draws top out near return period 25.
         self.random_number_generator = np.random.default_rng(787136)
 
@@ -119,8 +119,6 @@ class FloodRiskModule:
                 )
         else:
             raise ValueError(f"Invalid flood protection standard mode: {mode}")
-        if self.model.config["hazards"]["floods"]["flood_risk"]:
-            self.load_return_period_flood_maps()
 
     def load_return_period_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
@@ -528,8 +526,10 @@ class FloodRiskModule:
                     )
                 )
                 if export_building_damages and (
-                    self.model.current_time.year == 2020
-                    or self.model.current_time.year == 2080
+                    self.model.current_time.year
+                    == self.model.agents.households.start_adaptation_year
+                    or self.model.current_time.year
+                    == 2080  # This is hard-coded and should be changed to a parameter
                 ):
                     fn_for_export = (
                         self.households.model.output_folder / "building_damages"
@@ -758,7 +758,7 @@ class FloodRiskModule:
             adapted: Boolean array indicating which households have adapted.
             altered_flood_protection_standard: If provided, set damages to 0 for return periods
                 below this threshold (damages protected against by higher standard).
-            update_gdl_ead: Whether to update the accumulated EAD by GDL region.
+            update_gdl_ead: If True, also update the expected annual damages per GDL region.
 
         Returns:
             1D array of annual expected damages (USD) for each household.
@@ -1180,7 +1180,7 @@ class FloodRiskModule:
         u: float = (
             self.random_number_generator.random()
             if self.model.current_time.year
-            <= self.model.agents.households.factor_change
+            <= self.model.agents.households.start_adaptation_year
             else np.random.random()
         )
         return_period = 1 / u
@@ -1246,6 +1246,9 @@ class FloodRiskModule:
         This is done by sampling the flood maps along the river geometries and extracting the flood depths at those points.
         These dike heights are then stored in a dictionary for later use by the government agent to determine the required dike height for each river and return period.
 
+        Args:
+            dikes: A GeoDataFrame containing the geometries of the dikes (rivers or coastlines).
+            floodmap_template: A DataArray representing the flood map for a specific return period, used to determine the bounds for sampling the dike geometries.
         Returns:
             dict[int, dict[int, np.ndarray]]: A nested dictionary where the first key is the return period, the second key is the river ID, and the value is an array of dike heights (flood depths) along the river.
         """

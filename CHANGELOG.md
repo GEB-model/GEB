@@ -1,4 +1,8 @@
 # dev
+- Added household relocation intention–behavior adjustment using the configured `intention_behavior_gap`.
+- Applied projected GDP changes to government dike investment and maintenance costs when `agent_settings.climrisk.project_costs` is enabled.
+- Added household and Climrisk options to the configuration schema.
+- Avoided redundant flood-map loading during flood-risk initialization.
 - SFINCS is now run with a native binary by default (`/scistor/ivm/GEB/sfincs/bin/sfincs`, or `sfincs-gpu` when a GPU is detected). Apptainer and Docker remain available by setting the `SFINCS_RUNTIME` environment variable to `apptainer` or `docker`.
 - Now set ssp-rcp for climate change projection based on model ssp setting.
 - Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.

@@ -519,14 +519,14 @@ class Households(AgentBaseClass):
 
         # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
         self.var.property_value = DynamicArray(
-            (self.var.wealth.data * 0.8).astype(np.int64), max_n=self.max_n
+            (self.var.wealth.data * 0.8).astype(np.float32), max_n=self.max_n
         )
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
         adaptation_costs = np.full(
             self.n,
             10_800  # adaptation costs Europe
             * self.var.adaptation_cost_scaler,  # Scaling to local costs
-            np.int64,
+            np.float32,
         )
         r_loan = 0.03  # interest rate
         loan_duration = 20  # years
@@ -1230,8 +1230,21 @@ class Households(AgentBaseClass):
                 EU_relocate_full > EU_adapt, EU_relocate_full > EU_do_not_adapt
             )
         )[0]
+        # account for intention-behavior gap by randomly selecting a fraction of households that will not relocate even if they have the intention to do so
+        if len(households_relocating) > 0:
+            n_households_relocating = len(households_relocating)
+            n_households_not_relocating = int(
+                n_households_relocating * (1 - self.config["intention_behavior_gap"])
+            )
+            households_not_relocating = np.random.choice(
+                households_relocating, size=n_households_not_relocating, replace=False
+            )
+            households_relocating = np.setdiff1d(
+                households_relocating, households_not_relocating
+            )
+            EU_relocate_full[households_not_relocating] = -np.inf
         household_adapting = np.where(
-            np.logical_and(EU_adapt > EU_do_not_adapt, EU_adapt > EU_relocate)
+            np.logical_and(EU_adapt > EU_do_not_adapt, EU_adapt > EU_relocate_full)
         )[0]
         self.var.relocated[households_relocating] = 1
         self.var.adapted[household_adapting] = 1
@@ -1665,11 +1678,19 @@ class Households(AgentBaseClass):
             self.factor_change.sel({"year": current_year}).item()
         )
 
-        self.var.wealth *= 1 + growth_rate
-        self.var.income *= 1 + growth_rate
-        self.var.property_value *= 1 + growth_rate
-        self.var.adaptation_costs *= 1 + growth_rate
-        if hasattr(self, "flood_risk_module"):
+        climrisk_config: dict[str, Any] = self.model.config["agent_settings"][
+            "climrisk"
+        ]
+        project_income: bool = climrisk_config["project_income"]
+        project_costs: bool = climrisk_config["project_costs"]
+
+        if project_income:
+            self.var.wealth *= 1 + growth_rate
+            self.var.income *= 1 + growth_rate
+            self.var.property_value *= 1 + growth_rate
+            self.var.adaptation_costs *= 1 + growth_rate
+
+        if project_costs and hasattr(self, "flood_risk_module"):
             for (
                 return_period
             ) in self.flood_risk_module._building_damages_all_return_periods:
@@ -1761,11 +1782,14 @@ class Households(AgentBaseClass):
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
                 ):
-                    if (
-                        self.model.current_time.year > self.start_adaptation_year
-                    ) and self.model.config["agent_settings"]["climrisk"][
-                        "project_income"
-                    ]:
+                    if self.model.current_time.year > self.start_adaptation_year and (
+                        self.model.config["agent_settings"]["climrisk"][
+                            "project_income"
+                        ]
+                        or self.model.config["agent_settings"]["climrisk"][
+                            "project_costs"
+                        ]
+                    ):
                         self.update_monetary_variables_to_ssp()
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()

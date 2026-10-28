@@ -425,6 +425,27 @@ class HouseholdsConfig(BaseModel):
     """Configuration for households agent."""
 
     adapt: bool = Field(False, description="Whether households adapt.")
+    intention_behavior_gap: float = Field(
+        0.12,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of households intending to relocate that do not relocate (0–1).",
+    )
+    adaptation_cost_scaler: float = Field(
+        1.0,
+        ge=0.0,
+        description="Dimensionless multiplier for household adaptation and relocation costs.",
+    )
+    income_currency_conversion: float = Field(
+        1.11,
+        gt=0.0,
+        description="Positive currency-conversion divisor used to convert income to USD.",
+    )
+    ammenity_value_scaling_factor: float = Field(
+        0.254820579,
+        ge=0.0,
+        description="Dimensionless scaling factor for riverine and coastal amenity values.",
+    )
     warning_response: bool = Field(
         False, description="Whether households respond to warnings."
     )
@@ -438,6 +459,9 @@ class HouseholdsConfig(BaseModel):
         default_factory=ExpectedUtilityConfig,
         description="Expected utility configuration.",
     )
+    dry_floodproofing: bool = Field(True)
+    relocate: bool = Field(True)
+    adapt_to_actual_floods: bool = Field(False)
 
 
 class MicrocreditConfig(BaseModel):
@@ -678,6 +702,34 @@ class SensitivityAnalysisConfig(BaseModel):
     )
 
 
+class ClimRiskConfig(BaseModel):
+    """Configuration for ClimRisk socioeconomic projections."""
+
+    project_income: bool = Field(
+        False,
+        description="Whether to project household income using GDP-per-capita growth.",
+    )
+    project_costs: bool = Field(
+        False,
+        description="Whether to project costs and asset damages using GDP growth.",
+    )
+    ssp: Literal["1", "2", "3", "4", "5"] = Field(
+        "2", description="Shared Socioeconomic Pathway."
+    )
+    rcp: Literal["19", "26", "34", "45", "60", "70", "85"] = Field(
+        "70", description="Representative Concentration Pathway."
+    )
+    damage_function: Literal["K", "KU", "KPU", "RU", "RPU", "GDP"] = Field(
+        "K", description="Macroeconomic climate-damage function."
+    )
+    warming_percentile: Literal["10", "50", "90"] = Field(
+        "90", description="Global-warming percentile."
+    )
+    country_wide: bool = Field(
+        False, description="Whether to project GDP uniformly across the country."
+    )
+
+
 class AgentSettingsConfig(BaseModel):
     """Configuration for agents."""
 
@@ -704,6 +756,14 @@ class AgentSettingsConfig(BaseModel):
     sensitivity_analysis: SensitivityAnalysisConfig = Field(
         default_factory=SensitivityAnalysisConfig,
         description="Sensitivity analysis configuration.",
+    )
+    start_adaptation_year: int = Field(
+        2020,
+        description="Year when government and household adaptation behavior starts.",
+    )
+    climrisk: ClimRiskConfig = Field(
+        default_factory=ClimRiskConfig,
+        description="ClimRisk socioeconomic projection settings.",
     )
 
 

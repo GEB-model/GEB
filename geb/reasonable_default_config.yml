@@ -116,7 +116,7 @@ agent_settings:
     adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
     start_simulation_year: 2020 # year in which to start household adaption simulation
     adaptation_cost_scaler: 1 # Scale adaptation and relocation costs, usually by relative GDP per capita with respect to the EU
-    income_currency_conversion: 1.11  # Convert local currency to USD. Default value: 1.11 USD/EUR
+    income_currency_conversion: 1.11  # Convert local currency to USD. Default value: 1.11 EUR/USD
     ammenity_value_scaling_factor: 0.254820579 # scaling factor for riverine amenity based on Tesselaar et al. (2023).
     water_demand:
       method: default
