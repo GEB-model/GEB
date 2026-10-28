@@ -1274,8 +1274,11 @@ class CropFarmers(AgentBaseClass):
         activation_order = DynamicArray(activation_order, max_n=self.var.max_n)
         if self.model.config["agent_settings"]["fix_activation_order"]:
             self.var.activation_order_by_elevation_fixed = activation_order
-        # Check if the activation order is correct, by checking if elevation is decreasing
-        assert np.diff(elevation[activation_order]).max() <= 0
+        # Check if the activation order is correct, by checking if elevation is decreasing.
+        # With 0 or 1 farmers np.diff returns an empty array, which has no maximum.
+        _elev_diffs = np.diff(elevation[activation_order])
+        if len(_elev_diffs) > 0:
+            assert _elev_diffs.max() <= 0
         return activation_order
 
     def save_pr(self, pr_kg_per_m2_per_s: npt.NDArray[np.floating]) -> None:
@@ -1978,6 +1981,8 @@ class CropFarmers(AgentBaseClass):
         Returns:
             npt.NDArray: Values mapped to each field (same shape as ``land_owners``).
         """
+        if len(array) == 0:
+            return np.full(self.HRU.var.land_owners.shape, nodata, dtype=type(nodata))
         by_field = np.take(array, self.HRU.var.land_owners)
         by_field[self.HRU.var.land_owners == -1] = nodata
         return by_field
@@ -2452,6 +2457,8 @@ class CropFarmers(AgentBaseClass):
 
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU."""
+        if self.var.n == 0:
+            return
         if self.cultivation_costs[0] is None:
             cultivation_cost = self.cultivation_costs[1]
         else:
@@ -4884,6 +4891,8 @@ class CropFarmers(AgentBaseClass):
             ValueError: When farmers don't have a yield probability relation yet.
         """
         if not self.model.simulate_hydrology:
+            return
+        if self.var.n == 0:
             return
 
         timer = TimingModule("crop_farmers")
