@@ -80,8 +80,8 @@ hydrology:
     riverbed_hydraulic_conductivity_multiplier: 0.1
     river_width:
       parameters:
-        default_alpha: 3.91 # Bjerklie et al. (2003) doi:10.1016/S0022-1694(03)00129-X (Table 5, inverted Q = 0.11 * W^1.62)
-        beta: 0.62          # Bjerklie et al. (2003) Table 5 exponent (1 / 1.62 = 0.617)
+        default_alpha: 7.2 # Andreadis et al. (2013) doi:10.1002/wrcr.20440
+        beta: 0.5          # Andreadis et al. (2013) doi:10.1002/wrcr.20440
     river_depth:
       parameters:
         min_depth_m: 0.1

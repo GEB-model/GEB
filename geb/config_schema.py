@@ -193,11 +193,11 @@ class RiverWidthParameters(BaseModel):
     """Parameters for river width calculation."""
 
     default_alpha: float = Field(
-        3.91,
+        7.2,
         description="Default alpha parameter for bankfull width = alpha * Q^beta.",
     )
     beta: float = Field(
-        0.62,
+        0.5,
         description="Beta parameter for bankfull width = alpha * Q^beta.",
     )
 

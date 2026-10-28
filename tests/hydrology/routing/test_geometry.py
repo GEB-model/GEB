@@ -2629,14 +2629,14 @@ def test_routing_calculate_bankfull_depth_slope_scaling_swot() -> None:
     assert np.isclose(float(depths[3]), expected_narrow_depth, rtol=1e-3)
 
 
-def test_routing_calculate_bankfull_bjerklie_coupled_system() -> None:
+def test_routing_calculate_bankfull_width_depth_coupled_system() -> None:
     """Verify that calculate_bankfull_depth and width operate consistently under coupled width and backwater depth."""
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing: Routing = Routing.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
-    alpha_val: float = 3.91
-    beta_val: float = 0.62
+    alpha_val: float = 7.2
+    beta_val: float = 0.5
 
     routing.config = {
         "river_depth": {
