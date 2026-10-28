@@ -1,15 +1,20 @@
 """Test suite for household decision making module."""
 
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import pytest
+import xarray as xr
 from pytest import fixture
 
 from geb.agents.decision_module import (
     DecisionModule,
 )  # update to now decision model after merge
+from geb.agents.households import Households
 
 
 @fixture
@@ -391,4 +396,221 @@ def test_amenity_values(
     )
     assert np.allclose(EU_relocate, EU_do_not_adapt), (
         "Expected all EU_relocate values to be approximately equal to EU_do_not_adapt as there are no costs incurred and no damages expected"
+    )
+
+
+def test_update_monetary_variables_projects_income_and_damages(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Verify SSP growth projects household values and flood damages.
+
+    Args:
+        monkeypatch: Fixture for replacing scenario data loading.
+        tmp_path: Temporary directory used as the model input folder.
+    """
+    years: list[int] = [2020, 2021]
+    gdp_map: xr.DataArray = xr.DataArray(
+        np.array([100.0, 110.0]).reshape(2, 1, 1),
+        dims=("year", "lon", "lat"),
+        coords={"year": years, "lon": [0.0], "lat": [0.0]},
+    )
+    population_map: xr.DataArray = xr.DataArray(
+        np.array([10.0, 10.0]).reshape(2, 1, 1),
+        dims=("year", "lon", "lat"),
+        coords={"year": years, "lon": [0.0], "lat": [0.0]},
+    )
+
+    def fake_open_dataarray(path: Path) -> xr.DataArray:
+        """Return the matching mocked scenario map.
+
+        Args:
+            path: Path of the scenario map to load.
+
+        Returns:
+            The mocked population or GDP scenario map.
+        """
+        return population_map if path.name == "SSP2_POP.zarr" else gdp_map
+
+    monkeypatch.setattr(
+        "geb.agents.households.xr.open_dataarray",
+        fake_open_dataarray,
+    )
+
+    households: Households = Households.__new__(Households)
+    households.start_adaptation_year = 2020
+    households.model = SimpleNamespace(
+        input_folder=tmp_path,
+        current_time=datetime(2021, 1, 1),
+        config={
+            "agent_settings": {
+                "climrisk": {
+                    "country_wide": True,
+                    "ssp": "2",
+                    "damage_function": "GDP",
+                    "project_income": True,
+                    "project_costs": True,
+                }
+            }
+        },
+    )
+    households.var = SimpleNamespace(
+        income=np.array([100.0]),
+        wealth=np.array([200.0]),
+        property_value=np.array([160.0]),
+        adaptation_costs=np.array([20.0]),
+    )
+    households.flood_risk_module = SimpleNamespace(
+        _building_damages_all_return_periods={
+            10: {
+                "damages_t0": np.array([100.0]),
+                "damages_flood_proofed_t0": np.array([50.0]),
+                "damages": np.array([100.0]),
+                "damages_flood_proofed": np.array([50.0]),
+            }
+        }
+    )
+
+    households.update_monetary_variables_to_ssp()
+
+    np.testing.assert_allclose(households.var.income, [110.0])
+    np.testing.assert_allclose(households.var.wealth, [220.0])
+    np.testing.assert_allclose(households.var.property_value, [176.0])
+    np.testing.assert_allclose(households.var.adaptation_costs, [22.0])
+    assert households.var.factor_change == pytest.approx(1.1)
+    np.testing.assert_allclose(
+        households.flood_risk_module._building_damages_all_return_periods[10][
+            "damages"
+        ],
+        [110.0],
+    )
+    np.testing.assert_allclose(
+        households.flood_risk_module._building_damages_all_return_periods[10][
+            "damages_flood_proofed"
+        ],
+        [55.0],
+    )
+
+
+@pytest.mark.parametrize(
+    ("project_income", "project_costs"),
+    [
+        (True, False),
+        (False, True),
+        (False, False),
+    ],
+)
+def test_update_monetary_variables_respects_projection_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    project_income: bool,
+    project_costs: bool,
+) -> None:
+    """Verify income and damage projections follow their independent flags.
+
+    Args:
+        monkeypatch: Fixture for replacing scenario data loading.
+        tmp_path: Temporary directory used as the model input folder.
+        project_income: Whether household monetary values are projected.
+        project_costs: Whether flood damages are projected.
+    """
+    years: list[int] = [2020, 2021]
+    gdp_map: xr.DataArray = xr.DataArray(
+        np.array([100.0, 110.0]).reshape(2, 1, 1),
+        dims=("year", "lon", "lat"),
+        coords={"year": years, "lon": [0.0], "lat": [0.0]},
+    )
+    population_map: xr.DataArray = xr.DataArray(
+        np.full((2, 1, 1), 10.0),
+        dims=("year", "lon", "lat"),
+        coords={"year": years, "lon": [0.0], "lat": [0.0]},
+    )
+
+    def fake_open_dataarray(path: Path) -> xr.DataArray:
+        """Return the matching mocked scenario map.
+
+        Args:
+            path: Path of the scenario map to load.
+
+        Returns:
+            The mocked population or GDP scenario map.
+        """
+        if path.name == "SSP2_POP.zarr":
+            return population_map
+        return gdp_map
+
+    monkeypatch.setattr(
+        "geb.agents.households.xr.open_dataarray",
+        fake_open_dataarray,
+    )
+
+    base_damages: np.ndarray = np.array([100.0])
+    base_proofed_damages: np.ndarray = np.array([50.0])
+    damage_tables: dict[int, dict[str, np.ndarray]] = {
+        10: {
+            "damages_t0": base_damages.copy(),
+            "damages_flood_proofed_t0": base_proofed_damages.copy(),
+            "damages": base_damages.copy(),
+            "damages_flood_proofed": base_proofed_damages.copy(),
+        }
+    }
+
+    households: Households = Households.__new__(Households)
+    households.start_adaptation_year = 2020
+    households.model = SimpleNamespace(
+        input_folder=tmp_path,
+        current_time=datetime(2021, 1, 1),
+        config={
+            "agent_settings": {
+                "climrisk": {
+                    "country_wide": True,
+                    "ssp": "2",
+                    "damage_function": "GDP",
+                    "project_income": project_income,
+                    "project_costs": project_costs,
+                }
+            }
+        },
+    )
+    households.var = SimpleNamespace(
+        income=np.array([100.0]),
+        wealth=np.array([200.0]),
+        property_value=np.array([160.0]),
+        adaptation_costs=np.array([20.0]),
+    )
+    households.flood_risk_module = SimpleNamespace(
+        _building_damages_all_return_periods=damage_tables
+    )
+
+    households.update_monetary_variables_to_ssp()
+
+    income_multiplier: float = 1.1 if project_income else 1.0
+    damage_multiplier: float = 1.1 if project_costs else 1.0
+
+    np.testing.assert_allclose(
+        households.var.income,
+        [100.0 * income_multiplier],
+    )
+    np.testing.assert_allclose(
+        households.var.wealth,
+        [200.0 * income_multiplier],
+    )
+    np.testing.assert_allclose(
+        households.var.property_value,
+        [160.0 * income_multiplier],
+    )
+    np.testing.assert_allclose(
+        households.var.adaptation_costs,
+        [20.0 * income_multiplier],
+    )
+    if project_income or project_costs:
+        assert households.var.factor_change == pytest.approx(1.1)
+
+    np.testing.assert_allclose(
+        damage_tables[10]["damages"],
+        base_damages * damage_multiplier,
+    )
+    np.testing.assert_allclose(
+        damage_tables[10]["damages_flood_proofed"],
+        base_proofed_damages * damage_multiplier,
     )

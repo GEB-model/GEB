@@ -81,6 +81,7 @@ class HouseholdVariables(Bucket):
     action_lead_time: DynamicArray
     buildings: gpd.GeoDataFrame
     adaptation_cost_scaler: float
+    factor_change: float
 
 
 class Households(AgentBaseClass):
