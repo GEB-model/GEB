@@ -172,7 +172,11 @@ class CMIP6(Adapter):
         xr.testing.assert_allclose(historical.lon, future.lon)
 
         # Merge along time and sort by time to ensure proper alignment
-        merged = xr.concat([historical, future], dim="time").sortby("time")
+        merged = xr.concat(
+            [historical, future],
+            dim="time",
+            data_vars="all",
+        ).sortby("time")
 
         month_index: np.ndarray = merged.indexes["time"].year * 12 + (
             merged.indexes["time"].month - 1

@@ -806,7 +806,7 @@ class GEBModel(Module):
         self.config["report"] = {
             key: value
             for key, value in self.config["report"].items()
-            if key.startswith("agents.households") or key == "_config"
+            if key.startswith("agents.") or key == "_config"
         }
 
         self.config["general"]["name"] = model_name
@@ -1033,8 +1033,6 @@ class GEBModel(Module):
             simulate_hydrology=True,
             clean_report_folder=False,
         )
-
-        self.hydrology.routing.update_return_periods()
 
         # ugly switch to determine whether model has coastal basins
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])

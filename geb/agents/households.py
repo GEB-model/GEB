@@ -66,6 +66,7 @@ class HouseholdVariables(Bucket):
     agriculture_curve: pd.DataFrame
     road_curves: pd.DataFrame
     adapted: DynamicArray
+    relocated: DynamicArray
     max_dam_buildings_content: float
     max_dam_rail: float
     max_dam_forest_m2: float
@@ -79,6 +80,7 @@ class HouseholdVariables(Bucket):
     ead_usd_per_year: DynamicArray
     action_lead_time: DynamicArray
     buildings: gpd.GeoDataFrame
+    adaptation_cost_scaler: float
 
 
 class Households(AgentBaseClass):
@@ -128,6 +130,10 @@ class Households(AgentBaseClass):
             if "households" in self.model.config["agent_settings"]
             else {}
         )
+        # Year in which to start modeling adaptation behaviour
+        self.start_adaptation_year = self.model.config["agent_settings"][
+            "start_adaptation_year"
+        ]
         self.decision_module = DecisionModule()
         if (
             self.config["adapt"]
@@ -165,8 +171,15 @@ class Households(AgentBaseClass):
             "COST_STRUCTURAL_USD_SQM",
             "COST_CONTENTS_USD_SQM",
             "COMID",
+            "distance_to_river_m",
+            "distance_to_coastline_m",
+            "GDLcode",
         ]
-        self.buildings = read_geom(self.model.files["geom"]["assets/open_building_map"])
+
+        self.buildings = read_table(
+            self.model.files["geom"]["assets/open_building_map"],
+            columns=columns_to_load,
+        )
 
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
@@ -229,6 +242,13 @@ class Households(AgentBaseClass):
 
         # assign household disposable income based on income percentile households
         income = read_array(self.model.files["array"]["agents/households/disp_income"])
+        # convert income to USD
+        income = (
+            income
+            / self.model.config["agent_settings"]["households"][
+                "income_currency_conversion"
+            ]
+        )
         self.var.income = DynamicArray(income, max_n=self.max_n)
 
         # assign wealth based on income (dummy data, there are ratios available in literature)
@@ -281,13 +301,6 @@ class Households(AgentBaseClass):
         # drop buildings which are not flooded
         if drop_not_flooded:
             self.buildings = self.buildings[self.buildings["flooded"]]
-        # also set index to flooded households
-        flooded_building_ids = self.buildings.loc[
-            self.buildings["flooded"], "id"
-        ].to_numpy()
-        self.households_exposed_to_flooding = np.where(
-            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
-        )[0]
 
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
@@ -383,6 +396,7 @@ class Households(AgentBaseClass):
 
         # update building attributes based on household data
         if self.config["adapt"]:
+            self.load_objects()
             self.update_building_attributes()
 
         # load age household head
@@ -397,8 +411,16 @@ class Households(AgentBaseClass):
         )
         self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
 
+        # Load adaptation and relocation cost scaler
+        self.var.adaptation_cost_scaler = self.model.config["agent_settings"][
+            "households"
+        ]["adaptation_cost_scaler"]
+
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
+
+        # initiate array for adaptation status [0=not relocated, 1=relocated]
+        self.var.relocated = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
         # initiate array for warning state [0 = not warned, 1 = warned]
         self.var.warning_reached = DynamicArray(
@@ -500,15 +522,20 @@ class Households(AgentBaseClass):
             (self.var.wealth.data * 0.8).astype(np.int64), max_n=self.max_n
         )
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
-        adaptation_costs = (
-            np.maximum(self.var.property_value.data * 0.05, 10_800)
-        ).astype(np.int64)
-        self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
+        adaptation_costs = np.full(
+            self.n,
+            10_800  # adaptation costs Europe
+            * self.var.adaptation_cost_scaler,  # Scaling to local costs
+            np.int64,
+        )
+        r_loan = 0.03  # interest rate
+        loan_duration = 20  # years
+        annual_adaptation_costs = adaptation_costs * (
+            r_loan * (1 + r_loan) ** loan_duration / ((1 + r_loan) ** loan_duration - 1)
+        )
 
-        # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
-        amenity_premiums = np.random.uniform(0, 0.2, self.n)
-        self.var.amenity_value = DynamicArray(
-            amenity_premiums * self.var.wealth, max_n=self.max_n
+        self.var.adaptation_costs = DynamicArray(
+            annual_adaptation_costs, max_n=self.max_n
         )
 
         # load household points
@@ -599,7 +626,7 @@ class Households(AgentBaseClass):
 
         self.var.households_with_postal_codes = households_with_postal_codes
 
-        print(
+        self.model.logger.info(
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
         )
 
@@ -664,7 +691,7 @@ class Households(AgentBaseClass):
                     n_flooded_buildings = buildings_proj["flooded"].sum()
                     n_flooded_households = flooded_households.sum()
 
-                    print(
+                    self.model.logger.info(
                         f"Flooded buildings: {n_flooded_buildings}/{n_buildings}, "
                         f"Flooded households: {n_flooded_households}"
                     )
@@ -781,7 +808,9 @@ class Households(AgentBaseClass):
             / "critical_facilities.geoparquet"
         )
         all_critical_facilities.to_parquet(save_path)
-        print(f"Loaded {len(all_critical_facilities)} critical facilities.")
+        self.model.logger.info(
+            f"Loaded {len(all_critical_facilities)} critical facilities."
+        )
 
         # Update buildings with critical infrastructure attributes
         buildings = self.update_buildings_w_critical_infrastructure(
@@ -912,54 +941,299 @@ class Households(AgentBaseClass):
         )
         postal_codes_with_assets.to_parquet(path)
 
+    def calculate_distance_between_buildings(
+        self,
+        sampled_buildings_xy: np.ndarray,
+        households_exposed_to_flooding: np.ndarray,
+    ) -> np.ndarray:
+        """Calculate distances between exposed-household buildings and sampled buildings.
+
+        Args:
+            sampled_buildings_xy: Array of sampled building coordinates (WGS84
+                longitude/latitude in decimal degrees).
+                Expected shape is either
+                ``(n_households, n_buildings, 2)`` or ``(n_households, 2, n_buildings)``.
+            households_exposed_to_flooding: Indices of households exposed to flooding.
+
+        Returns:
+            A 2D array of distances (meters) with shape
+            ``(n_households, n_buildings)``.
+
+        Raises:
+            ValueError: If the sampled coordinate array has an invalid shape.
+            ValueError: If the number of sampled rows does not match the number of
+                exposed households.
+            ValueError: If an exposed household references a building ID that is not
+                present in the building table.
+        """
+        sampled_coords_m: np.ndarray = np.asarray(sampled_buildings_xy)
+        if sampled_coords_m.ndim != 3:
+            raise ValueError(
+                "sampled_buildings_xy must be a 3D array with sampled coordinates."
+            )
+
+        # Accept both historical and current layouts by normalizing to
+        # (n_households, n_buildings, 2).
+        if sampled_coords_m.shape[1] == 2:
+            sampled_coords_m = np.moveaxis(sampled_coords_m, 1, 2)
+        elif sampled_coords_m.shape[2] != 2:
+            raise ValueError(
+                "sampled_buildings_xy must have one axis of length 2 for x/y coordinates."
+            )
+
+        n_households: int = households_exposed_to_flooding.size
+        if sampled_coords_m.shape[0] != n_households:
+            raise ValueError(
+                "Number of sampled coordinate rows must match exposed households."
+            )
+
+        building_ids_of_households: np.ndarray = self.var.building_id_of_household.data[
+            households_exposed_to_flooding
+        ]
+
+        building_coords_by_id: pd.DataFrame = self.buildings.set_index("id")[["x", "y"]]
+        household_coords_df: pd.DataFrame = building_coords_by_id.reindex(
+            building_ids_of_households
+        )
+        if household_coords_df.isna().any(axis=None):
+            n_missing_ids: int = int(household_coords_df.isna().any(axis=1).sum())
+            raise ValueError(
+                f"Could not find coordinates for {n_missing_ids} exposed household building IDs."
+            )
+
+        household_coords_deg: np.ndarray = household_coords_df.to_numpy(
+            dtype=np.float64
+        )
+
+        # Use a vectorized equirectangular approximation on lon/lat to avoid costly
+        # reprojection while still returning distances in meters.
+        earth_radius_m: float = 6_371_008.8
+        household_lon_rad: np.ndarray = np.deg2rad(household_coords_deg[:, 0])[
+            :, np.newaxis
+        ]
+        household_lat_rad: np.ndarray = np.deg2rad(household_coords_deg[:, 1])[
+            :, np.newaxis
+        ]
+        sampled_lon_rad: np.ndarray = np.deg2rad(sampled_coords_m[:, :, 0])
+        sampled_lat_rad: np.ndarray = np.deg2rad(sampled_coords_m[:, :, 1])
+
+        delta_lon_rad: np.ndarray = sampled_lon_rad - household_lon_rad
+        delta_lat_rad: np.ndarray = sampled_lat_rad - household_lat_rad
+        mean_lat_rad: np.ndarray = (sampled_lat_rad + household_lat_rad) * 0.5
+
+        x_component: np.ndarray = delta_lon_rad * np.cos(mean_lat_rad)
+        distances_m: np.ndarray = earth_radius_m * np.sqrt(
+            x_component * x_component + delta_lat_rad * delta_lat_rad
+        )
+        return distances_m
+
+    def sample_buildings_for_relocation(
+        self, n_buildings: int = 10, outside_floodplain: bool = True
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Sample relocation candidates for flood-exposed households.
+
+        This implementation uses chunked vectorized sampling to keep memory usage
+        bounded while remaining much faster than per-household Python loops.
+
+        Args:
+            n_buildings: Number of buildings to sample for relocation.
+            outside_floodplain: If True, only sample buildings outside the floodplain.
+
+        Returns:
+            Tuple containing sampled building IDs, distances to coastline (m), and
+            distances to river (m). Each array has shape
+            (n_exposed_households, n_buildings).
+
+        Raises:
+            ValueError: If n_buildings is not a positive integer.
+            ValueError: If the number of buildings to sample exceeds the available buildings.
+        """
+        if n_buildings <= 0:
+            raise ValueError("n_buildings must be a positive integer.")
+
+        # copy the households_exposed_to_flooding array to avoid modifying the original
+        households_exposed_to_flooding = self.households_exposed_to_flooding.copy()
+
+        if outside_floodplain:
+            building_ids = self.buildings.loc[
+                ~self.buildings["flooded"], "id"
+            ].to_numpy()
+            distance_to_coastline = self.buildings.loc[
+                ~self.buildings["flooded"], "distance_to_coastline_m"
+            ].to_numpy()
+            distance_to_river = self.buildings.loc[
+                ~self.buildings["flooded"], "distance_to_river_m"
+            ].to_numpy()
+            buildings_x = self.buildings.loc[~self.buildings["flooded"], "x"].to_numpy()
+            buildings_y = self.buildings.loc[~self.buildings["flooded"], "y"].to_numpy()
+        else:
+            building_ids = self.buildings["id"].to_numpy()
+            distance_to_coastline = self.buildings["distance_to_coastline_m"].to_numpy()
+            distance_to_river = self.buildings["distance_to_river_m"].to_numpy()
+            buildings_x = self.buildings["x"].to_numpy()
+            buildings_y = self.buildings["y"].to_numpy()
+
+        n_samples = households_exposed_to_flooding.size
+        n_candidates: int = len(building_ids)
+
+        if n_buildings > n_candidates:
+            raise ValueError(
+                f"Cannot sample {n_buildings} buildings from "
+                f"{n_candidates} available buildings without replacement."
+            )
+
+        if n_samples == 0:
+            empty_shape: tuple[int, int] = (0, n_buildings)
+            return (
+                np.empty(empty_shape, dtype=building_ids.dtype),
+                np.empty(empty_shape, dtype=distance_to_coastline.dtype),
+                np.empty(empty_shape, dtype=distance_to_river.dtype),
+            )
+
+        # this approach could result in the same building being sampled multiple times for different households, but it is much faster than sampling without replacement for each household individually.
+        indices = np.random.randint(
+            low=0, high=n_candidates, size=(n_samples, n_buildings)
+        )
+        sampled_building_ids = building_ids[indices]
+        sampled_distance_to_coastline = distance_to_coastline[indices]
+        sampled_distance_to_river = distance_to_river[indices]
+        sampled_buildings_xy = np.stack(
+            (buildings_x[indices], buildings_y[indices]), axis=2
+        )
+        # calculate distances between sampled buildings and households
+        sampled_distances = self.calculate_distance_between_buildings(
+            sampled_buildings_xy, households_exposed_to_flooding
+        )
+
+        return (
+            sampled_building_ids,
+            sampled_distance_to_coastline,
+            sampled_distance_to_river,
+            sampled_distances,
+        )
+
     def decide_household_strategy(self) -> None:
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
         # update risk perceptions
         self.update_risk_perceptions()
+
+        # make a copy of households exposed to flooding to use for relocation decisions
+        households_exposed_to_flooding = self.households_exposed_to_flooding.copy()
 
         # calculate damages for adapting and not adapting households based on building footprints
         # calculate expected utilities
         damages_do_not_adapt, damages_adapt = (
             self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
         )
+        if (
+            hasattr(self, "factor_change")
+            and self.model.config["agent_settings"]["climrisk"]["project_costs"]
+        ):
+            GDP_i_t = self.var.factor_change
+        else:
+            GDP_i_t = 1
         # calculate expected utilities
-        EU_adapt = self.decision_module.calcEU_adapt_flood(
-            geom_id="NoID",
-            n_agents=self.n,
-            wealth=self.var.wealth.data,
-            income=self.var.income.data,
-            expendature_cap=1,
-            amenity_value=self.var.amenity_value.data,
-            amenity_weight=1,
-            risk_perception=self.var.risk_perception.data,
-            expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data,
-            time_adapted=self.var.time_adapted.data,
-            loan_duration=20,
-            p_floods=1 / self.return_periods,
-            T=35,
-            r=0.03,
-            sigma=1,
-        )
+        if (
+            self.config["dry_floodproofing"]
+            or self.model.current_time.year <= self.start_adaptation_year
+        ):
+            EU_adapt = self.decision_module.calcEU_adapt_flood(
+                geom_id="NoID",
+                n_agents=self.n,
+                wealth=self.var.wealth.data,
+                income=self.var.income.data,
+                expendature_cap=0.06,
+                household_distance_to_coastline_m=self.household_distance_to_coastline_m,
+                household_distance_to_river_m=self.household_distance_to_river_m,
+                risk_perception=self.var.risk_perception.data,
+                expected_damages_adapt=damages_adapt,
+                adaptation_costs=self.var.adaptation_costs.data,
+                time_adapted=self.var.time_adapted.data,
+                loan_duration=20,
+                p_floods=1 / self.return_periods,
+                T=15,
+                r=0.03,
+                sigma=1,
+                GDP_i_t=GDP_i_t,
+            )
+        else:
+            EU_adapt = np.full(self.n, -np.inf)
 
         EU_do_not_adapt = self.decision_module.calcEU_do_nothing_flood(
             geom_id="NoID",
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            amenity_value=self.var.amenity_value.data,
-            amenity_weight=1,
+            household_distance_to_coastline_m=self.household_distance_to_coastline_m,
+            household_distance_to_river_m=self.household_distance_to_river_m,
             risk_perception=self.var.risk_perception.data,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
-            T=35,
+            T=15,
             r=0.03,
             sigma=1,
+            GDP_i_t=GDP_i_t,
         )
 
+        # fist sample building IDs to be considere for relocation
+        if (
+            self.config["relocate"]
+            or self.model.current_time.year <= self.start_adaptation_year
+        ):
+            (
+                sampled_building_ids,
+                sampled_distance_to_coastline,
+                sampled_distance_to_river,
+                sampled_distances,
+            ) = self.sample_buildings_for_relocation(
+                n_buildings=10, outside_floodplain=True
+            )
+
+            building_idx, EU_relocate = self.decision_module.calcEU_relocate(
+                geom_id="NoID",
+                n_agents=households_exposed_to_flooding.size,
+                wealth=self.var.wealth.data[households_exposed_to_flooding],
+                income=self.var.income.data[households_exposed_to_flooding],
+                distance_to_coastline_m=sampled_distance_to_coastline,
+                distance_to_river_m=sampled_distance_to_river,
+                distance_to_building_m=sampled_distances,
+                max_migration_costs=500_000  # European relocation costs
+                * GDP_i_t  # max migration costs scaled to GDP change
+                * self.var.adaptation_cost_scaler,  # Scaling to local costs
+                T=15,
+                r=0.03,
+                sigma=1,
+                GDP_i_t=GDP_i_t,
+            )
+        else:
+            sampled_building_ids = np.full(
+                (households_exposed_to_flooding.size, 10), -1, dtype=np.int32
+            )
+            EU_relocate = np.full(households_exposed_to_flooding.size, -np.inf)
+            building_idx = 0
+
+        # fill array of all households with NaN values for relocation utility
+        EU_relocate_full = np.full(self.n, -np.inf, dtype=np.float32)
+        building_idx_full = np.full(self.n, -1, dtype=np.int32)
+        building_ids_full = np.full(self.n, -1, dtype=np.int32)
+
+        # fill the array with the calculated relocation utility for households exposed to flooding
+        EU_relocate_full[households_exposed_to_flooding] = EU_relocate
+        building_ids_full[households_exposed_to_flooding] = sampled_building_ids[
+            np.arange(len(building_idx)), building_idx
+        ]
+
         # execute strategy
-        household_adapting = np.where(EU_adapt > EU_do_not_adapt)[0]
+        households_relocating = np.where(
+            np.logical_and(
+                EU_relocate_full > EU_adapt, EU_relocate_full > EU_do_not_adapt
+            )
+        )[0]
+        household_adapting = np.where(
+            np.logical_and(EU_adapt > EU_do_not_adapt, EU_adapt > EU_relocate)
+        )[0]
+        self.var.relocated[households_relocating] = 1
         self.var.adapted[household_adapting] = 1
         self.var.time_adapted[household_adapting] += 1
 
@@ -967,10 +1241,104 @@ class Households(AgentBaseClass):
         self.update_building_adaptation_status(household_adapting)
 
         # print percentage of households that adapted
-        print(f"N households that adapted: {len(household_adapting)}")
+        # self.model.logger.info(f"N households that adapted: {len(household_adapting)}")
         self.var.ead_usd_per_year[:] = self.flood_risk_module.calculate_ead(
             damages_do_not_adapt, damages_adapt, self.var.adapted.data
         ).astype(np.float32)
+
+        # process relocation decisions
+        self.move_households_to_new_buildings(
+            building_ids=building_ids_full, household_relocating=households_relocating
+        )
+        # self.remove_households_from_model(households_relocating)
+
+    def move_households_to_new_buildings(
+        self, building_ids: np.ndarray, household_relocating: np.ndarray
+    ) -> None:
+        """This function moves households that are relocating to new buildings.
+
+        Args:
+            building_ids: An array of IDs for the new buildings.
+            household_relocating: A boolean array indicating which households are relocating.
+        """
+        # ensure array is in descending order
+        households_relocating = np.sort(household_relocating)[::-1]
+        buildings_to_locate_to = building_ids[households_relocating]
+
+        # for now we just update the building_id_of_household attribute for the relocating households
+        self.var.building_id_of_household[households_relocating] = (
+            buildings_to_locate_to
+        )
+        self.model.logger.info(
+            f"Moved {len(households_relocating)} households to new buildings."
+        )
+
+    def remove_households_from_model(self, household_relocating: np.ndarray) -> None:
+        """This function removes households from the model.
+
+        Args:
+            household_relocating: A boolean array indicating which households are relocating.
+        """
+        # ensure array is in descending order
+        households_relocating = np.sort(household_relocating)[::-1]
+
+        # attributes to remove for households that are relocating
+        attributes_to_remove = [
+            "locations",
+            "region_id",
+            "sizes",
+            "building_id_of_household",
+            "age_household_head",
+            "education_level",
+            "adapted",
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+            "warning_trigger",
+            "recommended_measures",
+            "actions_taken",
+            "risk_perception",
+            "risk_aversion",
+            "wealth",
+            "income",
+            "ead_usd_per_year",
+            "time_adapted",
+            "years_since_last_flood",
+            "property_value",
+            "adaptation_costs",
+        ]
+
+        attributes_movers_to_move = {}
+        # first remove households from the model
+        for attribute in attributes_to_remove:
+            attribute_to_process = getattr(self.var, attribute)
+            attribute_movers = np.empty_like(attribute_to_process)
+            for i, household in enumerate(households_relocating):
+                # read the attribute value of the relocating household and store it in the movers array
+                attribute_movers[i] = attribute_to_process[household]
+                # move last element to the position of the relocating household.
+                attribute_to_process._data[household] = attribute_to_process.data[-1]
+                # now remove the last element.
+                attribute_to_process.n -= 1
+            # store the movers array in a dictionary for later use if needed
+            attributes_movers_to_move[attribute] = attribute_movers
+        # process the cached comid map if it exists
+        if hasattr(self, "_comid_map"):
+            comid_map = getattr(self, "_comid_map")
+            for household in households_relocating:
+                comid_map[household] = comid_map[
+                    comid_map.size - 1
+                ]  # move last element to the position of the relocating household
+                comid_map = comid_map[:-1]  # now remove the last element
+                # also process the cached comid map for the movers
+                self._cached_mapped_comids[household] = self._cached_mapped_comids[-1]
+                self._cached_mapped_comids = self._cached_mapped_comids[:-1]
+            setattr(self, "_comid_map", comid_map)
+        # Print the number of households that are removed
+        self.model.logger.info(
+            f"N households that relocated: {len(household_relocating)}"
+        )
 
     def spinup(self) -> None:
         """This function runs the spin-up process for the household agents."""
@@ -1183,6 +1551,145 @@ class Households(AgentBaseClass):
             self.var.water_efficiency_per_household,
         )
 
+    def update_monetary_variables_to_ssp(self) -> None:
+        """Update monetary variables to match the specified SSP scenario.
+
+        Raises:
+            ValueError: If the SSP, damage function, RCP, or warming percentile is
+                invalid, or if the requested scenario map has not been built.
+        """
+        # We consider self.start_adaptation_year to be the base year
+        base_year = self.start_adaptation_year
+        if not hasattr(self, "factor_change"):
+            self.country_wide: bool = self.model.config["agent_settings"]["climrisk"][
+                "country_wide"
+            ]
+            ssp: str = self.model.config["agent_settings"]["climrisk"]["ssp"]
+            damage_function: str = self.model.config["agent_settings"]["climrisk"][
+                "damage_function"
+            ]
+            if ssp not in ["1", "2", "3", "4", "5"]:
+                raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
+            if damage_function not in ["GDP", "K", "KU", "KPU", "RU", "RPU"]:
+                raise ValueError(
+                    f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}."
+                )
+            if damage_function != "GDP":
+                rcp: str = self.model.config["agent_settings"]["climrisk"]["rcp"]
+                warming_percentile: str = self.model.config["agent_settings"][
+                    "climrisk"
+                ]["warming_percentile"]
+                if warming_percentile not in ["10", "50", "90"]:
+                    raise ValueError(
+                        f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}."
+                    )
+                if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
+                    raise ValueError(
+                        f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}."
+                    )
+
+            if damage_function == "GDP":
+                ssp_map_name: str = f"SSP{ssp}_{damage_function}.zarr"
+            else:
+                ssp_map_name: str = (
+                    f"SSP{ssp}{rcp}_{damage_function}_p{warming_percentile}.zarr"
+                )
+            ssp_map_path: Path = (
+                self.model.input_folder / "other" / "ssp_maps" / ssp_map_name
+            )
+            population_map_name: str = f"SSP{ssp}_POP.zarr"
+            population_map_path: Path = (
+                self.model.input_folder / "other" / "ssp_maps" / population_map_name
+            )
+
+            # Pending: Load as DynamicArray into the var Bucket
+            # flood_map in line 635 is also an xarray and it
+            # is currently not loaded into the var bucket, an
+            # implementation should probably be set for both maps
+            try:
+                ssp_map: xr.DataArray = xr.open_dataarray(ssp_map_path)
+            except FileNotFoundError as e:
+                raise ValueError(
+                    f"Requested file {ssp_map_name} has not been built. "
+                    + f"Please build the model again passing the "
+                    + f"requested data to 'setup_climrisk'."
+                ) from e
+            try:
+                population_map: xr.Dataset = xr.open_dataarray(population_map_path)
+            except FileNotFoundError as e:
+                raise ValueError(
+                    f"Requested file {population_map_name} has not been built. "
+                    + f"Please build the model again using 'setup_climrisk'."
+                ) from e
+
+            # Calculate factor change and growth rate
+            # Contry-wide or cell-level growth rate
+            # For the growth rate of income we use GDP per capita
+            if not self.country_wide:
+                gdp_pcap = ssp_map / population_map
+            else:
+                gdp_pcap = ssp_map.sum(["lon", "lat"]) / population_map.sum(
+                    ["lon", "lat"]
+                )
+            self.growth_rate = gdp_pcap.diff(dim="year") / gdp_pcap.shift({"year": 1})
+            # For damages and costs, we use a country-level GDP-based factor change.
+            self.factor_change = ssp_map.sum(["lon", "lat"]) / ssp_map.sel(
+                {"year": base_year}
+            ).sum(["lon", "lat"])
+
+        current_year: int = self.model.current_time.year
+        # Contry-wide or cell-level growth rate
+        if not self.country_wide:
+            # Sample household data from map
+            # sample_from_map takes a map with y, x coordinates
+            growth_rate_map: np.ndarray = (
+                self.growth_rate.sel({"year": current_year}).to_numpy().swapaxes(-2, -1)
+            )
+            growth_rate = sample_from_map(
+                array=growth_rate_map,
+                coords=self.var.locations.data,
+                gt=(
+                    self.growth_rate.attrs["lon_origin"],  # x_offset = gt[0]
+                    self.growth_rate.attrs["lon_resolution"],  # x_step = gt[1]
+                    0,  # row rotation
+                    self.growth_rate.attrs["lat_origin"],  # y_offset = gt[3]
+                    0,  # column rotation
+                    self.growth_rate.attrs["lat_resolution"],  # y_step = gt[5]
+                ),
+                out_of_bounds_value=None,
+                sample_closest_valid_value=True,
+            )
+        else:
+            growth_rate = float(self.growth_rate.sel({"year": current_year}).item())
+        self.var.factor_change = float(
+            self.factor_change.sel({"year": current_year}).item()
+        )
+
+        self.var.wealth *= 1 + growth_rate
+        self.var.income *= 1 + growth_rate
+        self.var.property_value *= 1 + growth_rate
+        self.var.adaptation_costs *= 1 + growth_rate
+        if hasattr(self, "flood_risk_module"):
+            for (
+                return_period
+            ) in self.flood_risk_module._building_damages_all_return_periods:
+                self.flood_risk_module._building_damages_all_return_periods[
+                    return_period
+                ]["damages"] = (
+                    self.flood_risk_module._building_damages_all_return_periods[
+                        return_period
+                    ]["damages_t0"]
+                    * self.var.factor_change
+                )
+                self.flood_risk_module._building_damages_all_return_periods[
+                    return_period
+                ]["damages_flood_proofed"] = (
+                    self.flood_risk_module._building_damages_all_return_periods[
+                        return_period
+                    ]["damages_flood_proofed_t0"]
+                    * self.var.factor_change
+                )
+
     def step(self) -> None:
         """Advance the households by one time step."""
         if self.config["adapt"]:
@@ -1212,7 +1719,7 @@ class Households(AgentBaseClass):
                 ) or is_flood_triggered:
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
-                    print(f"Thinking about adapting at {current_time}...")
+                    # self.model.logger.info(f"Thinking about adapting at {current_time}...")
                     self.decide_household_strategy()
 
                 end_time: datetime = datetime.combine(
@@ -1220,7 +1727,7 @@ class Households(AgentBaseClass):
                 )
 
                 if self.model.current_time == end_time:
-                    print("end of sim reached")
+                    self.model.logger.info("end of sim reached")
                     df_all: pd.DataFrame = pd.concat(
                         self.flood_risk_perceptions, ignore_index=True
                     )
@@ -1234,7 +1741,7 @@ class Households(AgentBaseClass):
                     out_path: Path = (
                         Path(self.model.output_folder) / "risk_perceptions.gpkg"
                     )
-                    print(f"saved risk perception here: {out_path}")
+                    self.model.logger.info(f"saved risk perception here: {out_path}")
                     gdf.to_file(out_path, layer="perceptions", driver="GPKG")
 
                     df_stats: pd.DataFrame = pd.DataFrame(
@@ -1244,7 +1751,9 @@ class Households(AgentBaseClass):
                         Path(self.model.output_folder) / "risk_perception_stats.csv"
                     )
                     df_stats.to_csv(out_path, index=False)
-                    print(f"Saved risk perception statistics to {out_path}")
+                    self.model.logger.info(
+                        f"Saved risk perception statistics to {out_path}"
+                    )
 
             else:  # Household don't respond to actual floods, but make decision on the first day of the year. Decisions are based on random floods
                 if (
@@ -1252,9 +1761,15 @@ class Households(AgentBaseClass):
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
                 ):
+                    if (
+                        self.model.current_time.year > self.start_adaptation_year
+                    ) and self.model.config["agent_settings"]["climrisk"][
+                        "project_income"
+                    ]:
+                        self.update_monetary_variables_to_ssp()
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
-                    print("Thinking about adapting...")
+                    # self.model.logger.info("Thinking about adapting...")
                     self.decide_household_strategy()
 
         self.report(locals())
@@ -1315,3 +1830,71 @@ class Households(AgentBaseClass):
         )
         self._cached_mapped_comids = mapped_comids
         return mapped_comids
+
+    @property
+    def household_distance_to_river_m(self) -> np.ndarray:
+        """Get the distance to the nearest river for each household.
+
+        Returns:
+            np.ndarray: Array of distances to the nearest river for each household.
+        """
+        return np.take(
+            np.array(self.buildings["distance_to_river_m"]),
+            self.var.building_id_of_household,
+        )
+
+    @property
+    def n_households_exposed_to_flooding(self) -> int:
+        """Return the number of households exposed to flooding.
+
+        Returns:
+            Number of households exposed to flooding.
+        """
+
+        return np.int32(self.households_exposed_to_flooding.size)
+
+    @property
+    def household_distance_to_coastline_m(self) -> np.ndarray:
+        """Get the distance to the nearest coastline for each household.
+
+        Returns:
+            np.ndarray: Array of distances to the nearest coastline for each household.
+        """
+        return np.take(
+            np.array(self.buildings["distance_to_coastline_m"]),
+            self.var.building_id_of_household,
+        )
+
+    @property
+    def households_exposed_to_flooding(self) -> np.ndarray:
+        """Get household indices that are located in flooded buildings.
+
+        Returns:
+            Array of household indices exposed to flooding.
+        """
+        # also set index to flooded households
+        flooded_building_ids = self.buildings.loc[
+            self.buildings["flooded"], "id"
+        ].to_numpy()
+        households_exposed_to_flooding = np.where(
+            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
+        )[0]
+        return households_exposed_to_flooding
+
+    @property
+    def total_investment_costs(self) -> np.ndarray:
+        """Get the investment costs for each household.
+
+        Returns:
+            Array of investment costs for each household.
+        """
+        if not hasattr(self, "_total_investment_costs"):
+            self._total_investment_costs = 0
+        investment_costs = self.var.adaptation_costs[self.var.time_adapted == 1].sum()
+        # calculate the investment costs plus interest over the loan duration (20 years)
+        loan_duration = 20
+        interest_rate = 0.03
+        self._total_investment_costs += (
+            investment_costs * (1 + interest_rate) ** loan_duration
+        )
+        return self._total_investment_costs

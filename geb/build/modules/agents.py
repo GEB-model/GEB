@@ -18,6 +18,7 @@ from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
 from geb.geb_types import TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
+from geb.workflows.methods import get_utm_zone
 from geb.workflows.raster import (
     clip_with_grid,
     pixels_to_coords,
@@ -1524,6 +1525,133 @@ class Agents(BuildModelBase):
         )
         return buildings_with_subbasin
 
+    def assign_subbasins_to_buildings(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns sub-basin IDs to buildings based on their spatial location.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with sub-basin IDs assigned to each building.
+        """
+        subbasins = self.geom["routing/subbasins"].reset_index()
+
+        buildings_with_subbasin = gpd.sjoin(
+            buildings,
+            subbasins[["COMID", "geometry"]],
+            how="left",
+            predicate="within",
+        ).drop(columns="index_right")
+        buildings_with_subbasin["COMID"] = (
+            buildings_with_subbasin["COMID"].fillna(-1).astype(int)
+        )
+        return buildings_with_subbasin
+
+    def calculate_distance_parameters(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Calculate distances from buildings to rivers and coastlines.
+
+        Args:
+            buildings: Building geometries used to compute distances.
+        Raises:
+            ValueError: If the specified maximum distances exceed the limits of uint16.
+        Returns:
+            Buildings with distance columns appended (meters).
+        """
+        rivers: gpd.GeoDataFrame = gpd.read_parquet(
+            "input" / self.files["geom"]["routing/rivers"]
+        )[["geometry"]]
+
+        coastline: gpd.GeoDataFrame = gpd.read_parquet(
+            "input" / self.files["geom"]["coastal/coastlines"]
+        )[["geometry"]]
+
+        region_centroid = self.region.union_all().centroid
+        utm_zone: str = get_utm_zone(region_centroid.x, region_centroid.y)
+
+        buildings_crs = buildings.crs
+
+        river_max_distance_m: int = 50_000
+        coastline_max_distance_m: int = 10_000
+
+        if (
+            river_max_distance_m >= np.iinfo(np.uint16).max
+            or coastline_max_distance_m >= np.iinfo(np.uint16).max
+        ):
+            raise ValueError(
+                "Max distances must be less than or equal to 65535 meters to fit in uint16."
+            )
+
+        # Project to metric CRS
+        buildings = buildings.to_crs(utm_zone)
+        rivers = rivers.to_crs(utm_zone)
+        coastline = coastline.to_crs(utm_zone)
+
+        # Distance to rivers
+        river_join = buildings.sjoin_nearest(
+            rivers,
+            how="left",
+            max_distance=river_max_distance_m,
+            distance_col="distance_to_river_m",
+        )
+
+        # Handle duplicate nearest matches
+        river_distances = river_join.groupby(level=0)["distance_to_river_m"].min()
+
+        buildings["distance_to_river_m"] = (
+            river_distances.reindex(buildings.index)
+            .fillna(river_max_distance_m)
+            .astype(np.uint16)
+        )
+
+        # Distance to coastline
+        coastline_join = buildings.sjoin_nearest(
+            coastline,
+            how="left",
+            max_distance=coastline_max_distance_m,
+            distance_col="distance_to_coastline_m",
+        )
+
+        coastline_distances = coastline_join.groupby(level=0)[
+            "distance_to_coastline_m"
+        ].min()
+
+        buildings["distance_to_coastline_m"] = (
+            coastline_distances.reindex(buildings.index)
+            .fillna(coastline_max_distance_m)
+            .astype(np.uint16)
+        )
+
+        # Reproject back to original CRS
+        buildings = buildings.to_crs(buildings_crs)
+
+        return buildings
+
+    def assign_GDL_region_to_buildings(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns GDL region IDs to buildings based on their spatial location.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with GDL region IDs assigned to each building.
+        """
+        # load GDL region within model domain
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
+        buildings_with_GDL = gpd.sjoin(
+            buildings,
+            GDL_regions[["GDLcode", "geometry"]],
+            how="left",
+            predicate="within",
+        ).drop(columns="index_right")
+        buildings_with_GDL["GDLcode"] = buildings_with_GDL["GDLcode"].fillna("missing")
+        return buildings_with_GDL
+
     @build_method(required=True)
     def setup_buildings(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
@@ -1532,8 +1660,10 @@ class Agents(BuildModelBase):
         buildings = self.data_catalog.fetch("open_building_map").read(
             geom=mask,
         )
+        buildings = self.assign_GDL_region_to_buildings(buildings)
         buildings = self.setup_building_reconstruction_costs(buildings)
         buildings = self.assign_subbasins_to_buildings(buildings)
+        buildings = self.calculate_distance_parameters(buildings)
 
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
@@ -1664,6 +1794,102 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
+    @build_method(required=True)
+    def setup_climrisk(
+        self,
+        ssp: list[str] | None = None,
+        rcp: list[str] | None = None,
+        damage_function: list[str] | None = None,
+        warming_percentile: list[str] | None = None,
+        reference_year: int = 2020,
+    ) -> None:
+        """Load CLIMRISK population and damage maps into the model.
+
+        For each SSP, stores a population map. It also stores maps for GDP with
+        damages for each RCP, damage function, and warming percentile combination.
+        ``"GDP"`` is a special damage function option that selects the GDP data
+        without damages.
+
+        Args:
+            ssp: SSP scenario identifiers, from ``"1"`` through ``"5``.
+                Defaults to ``["2"]``.
+            rcp: RCP identifiers. Defaults to ``["70"]``.
+            damage_function: Damage functions (``"K"``, ``"KU"``, ``"KPU"``,
+                ``"RU"``, ``"RPU"``) or ``"GDP"``. Defaults to ``["K"]``.
+            warming_percentile: Global warming percentiles: ``"10"``, ``"50"``, or ``"90"``.
+                Defaults to ``["90"]``.
+            reference_year: First year to include in damage data, from 2010
+                through 2100. Defaults to 2020.
+
+        Raises:
+            TypeError: If a scenario argument is not a list of strings.
+        """
+        if ssp is None:
+            ssp = ["2"]
+        if rcp is None:
+            rcp = ["70"]
+        if damage_function is None:
+            damage_function = ["K"]
+        if warming_percentile is None:
+            warming_percentile = ["90"]
+
+        for name, value in {
+            "ssp": ssp,
+            "rcp": rcp,
+            "damage_function": damage_function,
+            "warming_percentile": warming_percentile,
+        }.items():
+            if not isinstance(value, list):
+                raise TypeError(f"{name} must be a list, got {type(value).__name__}")
+            if not all(isinstance(v, str) for v in value):
+                raise TypeError(f"All items in {name} must be strings.")
+
+        self.logger.info("Processing climrisk data")
+        for i in range(len(ssp)):
+            self.logger.info(f"Processing population: SSP{ssp[i]}")
+            climrisk = self.data_catalog.fetch("climrisk").read(
+                region=self.region,
+                ssp=ssp[i],
+                rcp=None,
+                damage_function=None,
+                warming_percentile=None,
+                obtain_population=True,
+            )
+            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}_POP")
+            for l in range(len(damage_function)):
+                if damage_function[l] == "GDP":
+                    self.logger.info(f"Processing GDP for combination: SSP{ssp[i]}")
+                    climrisk = self.data_catalog.fetch("climrisk").read(
+                        region=self.region,
+                        ssp=ssp[i],
+                        rcp=None,
+                        damage_function=damage_function[l],
+                        warming_percentile=None,
+                        reference_year=reference_year,
+                    )
+                    self.set_other(
+                        climrisk, name=f"ssp_maps/SSP{ssp[i]}_{damage_function[l]}"
+                    )
+                else:
+                    for j in range(len(rcp)):
+                        for k in range(len(warming_percentile)):
+                            self.logger.info(
+                                f"Processing GDP for combination: SSP{ssp[i]}-{rcp[j]}, Damage function {damage_function[l]}"
+                            )
+                            climrisk = self.data_catalog.fetch("climrisk").read(
+                                region=self.region,
+                                ssp=ssp[i],
+                                rcp=rcp[j],
+                                damage_function=damage_function[l],
+                                warming_percentile=warming_percentile[k],
+                                reference_year=reference_year,
+                            )
+                            self.set_other(
+                                climrisk,
+                                name=f"ssp_maps/SSP{ssp[i]}{rcp[j]}_{damage_function[l]}_p{warming_percentile[k]}",
+                            )
+        self.logger.info("All climrisk data processed.")
+
     @build_method(
         depends_on=[
             "setup_assets",
@@ -1676,7 +1902,7 @@ class Agents(BuildModelBase):
         self,
         maximum_age: int = 85,
         skip_countries_ISO3: list[str] = [],
-        single_household_per_building: bool = False,
+        single_household_per_building: bool = True,
         redundancy_array_size: int = 20_000_000,
     ) -> None:
         """New method to set up household characteristics for agents using GLOPOP-S data. This method is still under development and may not be fully functional.

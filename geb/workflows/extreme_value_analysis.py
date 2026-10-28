@@ -549,6 +549,7 @@ class ReturnPeriodModel:
 
         # Check return levels for each return period, with error handling for non-finite or extreme values
         MAX_Q = 400_000
+
         for _, row in self.rl_table.iterrows():
             T = row["T_years"]
             RL = row["GPD_POT_RL"]

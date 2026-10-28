@@ -171,7 +171,7 @@ class Market(AgentBaseClass):
                 prod[zero_mask] = 1
             # Defining the independent variables (add a constant term for the intercept)
             X = sm.add_constant(np.log(prod))
-
+            price = np.maximum(price, 1e-6)  # Avoid log(0) by setting a minimum price
             # Defining the dependent variable
             price = total_farmer_income[crop] / prod
 

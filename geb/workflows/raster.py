@@ -166,14 +166,19 @@ def sample_from_map(
     coords: np.ndarray,
     gt: tuple[float, float, float, float, float, float],
     out_of_bounds_value: float | int | bool | None = None,
+    sample_closest_valid_value: bool = False,
 ) -> np.ndarray:
     """Sample coordinates from a map. Can handle multiple dimensions.
+
+    For the ssp_map, if the sampled value is nan, it will look for the closest valid value.
 
     Args:
         array: The map to sample from (2+n dimensions).
         coords: The coordinates used to sample (shape: m, 2).
         gt: The geotransformation. Must be unrotated.
         out_of_bounds_value: The value to return for coordinates that are out of bounds. If None, an error will be raised.
+        sample_closest_valid_value: If True, fill missing values by searching for the nearest valid
+            nearby cell.
 
     Returns:
         The values at each coordinate.
@@ -186,29 +191,66 @@ def sample_from_map(
         raise ValueError("Cannot sample from rotated maps")
 
     size = coords.shape[0]
+    rows = array.shape[-2]
+    columns = array.shape[-1]
     x_offset = gt[0]
     y_offset = gt[3]
     x_step = gt[1]
     y_step = gt[5]
     values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
 
-    if out_of_bounds_value is None:
-        for i in prange(size):
-            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
-            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
-            if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
-                values[i] = array[..., y_idx, x_idx]
-            else:
-                raise IndexError("Coordinate is out of bounds for array")
+    for i in prange(size):  # ty: ignore[not-iterable]
+        y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
+        x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
 
-    else:
-        for i in prange(size):
-            y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
-            x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
-            if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
-                values[i] = array[..., y_idx, x_idx]
-            else:
-                values[i] = out_of_bounds_value
+        if not (0 <= y_idx < rows and 0 <= x_idx < columns):
+            if out_of_bounds_value is None:
+                raise IndexError("Coordinate is out of bounds for array")
+            values[i] = out_of_bounds_value
+            continue
+
+        # Keep all layers aligned by sampling them from the same cell.
+        sampled_values = array[..., y_idx, x_idx]
+        values[i] = sampled_values
+
+        if sample_closest_valid_value:
+            if np.any(np.isnan(sampled_values)):
+                closest_distance = rows * rows + columns * columns + 1
+
+                # Expanding perimeter searches find nearby candidates without scanning
+                # the whole raster when a valid cell is close.
+                for radius in range(1, max(rows, columns)):
+                    for row_offset in range(-radius, radius + 1):
+                        for column_offset in range(-radius, radius + 1):
+                            # Skip interior cells; they were checked on earlier rings.
+                            if (
+                                abs(row_offset) != radius
+                                and abs(column_offset) != radius
+                            ):
+                                continue
+
+                            candidate_y = y_idx + row_offset
+                            candidate_x = x_idx + column_offset
+                            if not (
+                                0 <= candidate_y < rows and 0 <= candidate_x < columns
+                            ):
+                                continue
+
+                            candidate_values = array[..., candidate_y, candidate_x]
+                            if np.any(np.isnan(candidate_values)):
+                                continue
+
+                            distance = (
+                                row_offset * row_offset + column_offset * column_offset
+                            )
+                            if distance < closest_distance:
+                                closest_distance = distance
+                                values[i] = candidate_values
+
+                    # Cells beyond this ring cannot be closer than the candidate found.
+                    if closest_distance <= (radius + 1) * (radius + 1):
+                        break
+
     return values
 
 

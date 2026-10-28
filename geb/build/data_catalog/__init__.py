@@ -7,6 +7,7 @@ from typing import Any
 from .aquastat import AQUASTAT
 from .ar6 import AR6
 from .base import Adapter
+from .climrisk import CLIMRISK
 from .cmip6 import CMIP6
 from .coast_rp import CoastRP
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
@@ -125,6 +126,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "IPCC",
             "url": "https://doi.org/10.5281/zenodo.6382554",
             "license": "Creative Commons Attribution 4.0 International",
+        },
+    },
+    "climrisk": {
+        "adapter": CLIMRISK(
+            folder="climrisk",
+            local_version=1,
+            filename="",
+            cache="local",
+        ),
+        "url": "placeholder",
+        "source": {
+            "name": "CLIMRISK",
+            "author": "Estrada et al. (2021)",
+            "paper_doi": "https://doi.org/10.1111/nyas.14652",
+            "license": "Not public",
+            "url": "placeholder",
         },
     },
     "ecmwf_forecasts": {

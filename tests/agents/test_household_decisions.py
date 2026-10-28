@@ -3,11 +3,34 @@
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from pytest import fixture
 
 from geb.agents.decision_module import (
     DecisionModule,
 )  # update to now decision model after merge
+
+
+@fixture
+def buildings() -> pd.DataFrame:
+    """This function creates a sample of buildings for testing.
+
+    Returns:
+        A pandas DataFrame containing the building attributes for testing.
+    """
+    buildings = pd.DataFrame(
+        {
+            "id": [1, 2, 3, 4, 5],
+            "x": [0, 1, 2, 3, 4],
+            "y": [0, 1, 2, 3, 4],
+            "COST_STRUCTURAL_USD_SQM": [100, 200, 300, 400, 500],
+            "COST_CONTENTS_USD_SQM": [50, 100, 150, 200, 250],
+            "COMID": [1, 1, 2, 2, 3],
+            "distance_to_river_m": [10, 20, 30, 40, 50],
+            "distance_to_coastline_m": [5, 10, 15, 20, 25],
+        }
+    )
+    return buildings
 
 
 @fixture
@@ -18,13 +41,11 @@ def decision_template() -> dict[str, Any]:
         A dictionary containing the parameters for the decision module.
     """
     geom_id = "<GeoID>"
-    n_agents = 100
+    n_agents = 1
     return_periods = np.array([10, 50])
     income = np.random.randint(10_000, 20_000, n_agents)
     wealth = 1.5 * income
     expendature_cap = 0.1
-    amenity_value = np.random.random(n_agents) * wealth
-    amenity_weight = 1
     risk_perception = np.full(n_agents, 1)
     expected_damages_no_adapt = np.array(
         [np.full(n_agents, 5_000), np.full(n_agents, 15_000)]
@@ -33,10 +54,20 @@ def decision_template() -> dict[str, Any]:
     adaptation_costs = 100
     time_adapted = np.zeros(n_agents)
     loan_duration = 20
-    T = 35
+    T = 15
     r = 0.03
     sigma = 1
     adapted = np.full(n_agents, 0)
+    distance_to_river = np.random.randint(0, 10e3, n_agents)
+    distance_to_coastline = np.maximum([10e3], [np.random.randint(5, 50e3, n_agents)])[
+        0
+    ]
+    GDP_i_t = 1
+    max_migration_cost = 5e5
+    sampled_building_ids = np.random.choice(np.arange(6), (n_agents, 3))
+    distance_to_building_m = np.full_like(sampled_building_ids, 5e3)
+    distance_to_river_buildings = np.random.randint(0, 10e3, (n_agents, 3))
+    distance_to_coastline_buildings = np.random.randint(0, 10e3, (n_agents, 3))
 
     decision_template = {
         "geom_id": geom_id,
@@ -44,8 +75,10 @@ def decision_template() -> dict[str, Any]:
         "wealth": wealth,
         "income": income,
         "expendature_cap": expendature_cap,
-        "amenity_value": amenity_value,
-        "amenity_weight": amenity_weight,
+        "household_distance_to_river_m": distance_to_river,
+        "household_distance_to_coastline_m": distance_to_coastline,
+        "distance_to_river_m": distance_to_river_buildings,
+        "distance_to_coastline_m": distance_to_coastline_buildings,
         "risk_perception": risk_perception,
         "expected_damages": expected_damages_no_adapt,
         "expected_damages_adapt": damages_adapt,
@@ -57,6 +90,10 @@ def decision_template() -> dict[str, Any]:
         "T": T,
         "r": r,
         "sigma": sigma,
+        "GDP_i_t": GDP_i_t,
+        "sampled_building_ids": sampled_building_ids,
+        "max_migration_costs": max_migration_cost,
+        "distance_to_building_m": distance_to_building_m,
     }
 
     return decision_template
@@ -259,4 +296,56 @@ def test_decision_horizon(decision_template: dict) -> None:
 
     assert all(EU_adapt_low < EU_adapt_high), (
         "Expected all EU_adapt_high values to be greater than EU_adapt_low due to summation over longer time period"
+    )
+
+
+def test_amenity_values(decision_template: dict) -> None:
+    """This function tests the functionality of amenity values.
+
+    Args:
+        decision_template: A dictionary containing the parameters for the decision module.
+    """
+    decision_module = DecisionModule()
+    # make sure all can adapt and behave rationally
+    decision_template["expendature_cap"] = 10
+    decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
+    decision_template["adaptation_costs"] = 0  # ensure no adaptation costs are incurred
+
+    # set damages to zero
+    decision_template["expected_damages"] = np.zeros(
+        (len(decision_template["p_floods"]), decision_template["n_agents"])
+    )
+    decision_template["expected_damages_adapt"] = np.zeros(
+        (len(decision_template["p_floods"]), decision_template["n_agents"])
+    )
+    # set migration costs to zero
+    decision_template["max_migration_costs"] = 0
+
+    # set amenity values to 100
+    decision_template["household_distance_to_river_m"] = np.full(
+        decision_template["n_agents"], 100
+    )
+    decision_template["household_distance_to_coastline_m"] = np.full(
+        decision_template["n_agents"], 100
+    )
+    decision_template["distance_to_river_m"] = np.full(
+        (decision_template["n_agents"], 3), 100
+    )
+    decision_template["distance_to_coastline_m"] = np.full(
+        (decision_template["n_agents"], 3), 100
+    )
+
+    EU_adapt = decision_module.calcEU_adapt_flood(**decision_template)
+    EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
+    building_idx, EU_relocate = decision_module.calcEU_relocate(**decision_template)
+
+    # The two calculations are mathematically equivalent here: zero damages,
+    # zero migration costs, and identical amenity values across all sampled homes.
+    # They are evaluated through different float32 summation paths, so tolerance-
+    # based comparison is required rather than exact equality.
+    assert np.allclose(EU_adapt, EU_do_not_adapt), (
+        "Expected all EU_adapt values to be approximately equal to EU_do_not_adapt as there are no costs incurred and no damages expected"
+    )
+    assert np.allclose(EU_relocate, EU_do_not_adapt), (
+        "Expected all EU_relocate values to be approximately equal to EU_do_not_adapt as there are no costs incurred and no damages expected"
     )

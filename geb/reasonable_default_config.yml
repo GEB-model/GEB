@@ -49,6 +49,7 @@ hazards:
       # window_days: 3.5  # days before AND after peak to extract (total window = 2 × window_days; default 3.5 → ±3.5 days = 7 days total)
       # tolerance: 0.1    # ±fraction tolerance around anchor discharge (default 0.1 = ±10%)
     p_value_threshold: 0.05
+    slr: 'auto'
     selection_strategy: first_significant
     fixed_shape: 0.0 # set to 0 to force gumbel (Exponential), null to allow free distribution
     SFINCS:
@@ -92,6 +93,7 @@ hydrology:
       minimum_timeseries_length_years: 5  # minimum total paired observation-simulation data for discharge evaluation stations (years; continuity is not required)
 
 agent_settings:
+  start_adaptation_year: 2020 # year in which to start agent adaption simulation, currently applies to government and households
   government:
     plant_forest: false  # default false. Enable (true) for forest planting policy for reforestation scenarios
     adaptation:
@@ -107,8 +109,15 @@ agent_settings:
     dynamic_market: false
     price_frequency: yearly
   households:
-    adapt: false # If True households adapt their houses based on random floods, like DYNAMO-M
+    adapt: false # If True household behavior is modeled, like DYNAMO-M
+    dry_floodproofing: true # If True households adapt their houses , like DYNAMO-M
+    relocate: true # If True households relocate based on EUT, like DYNAMO-M
+    intention_behavior_gap: 0.12  # fraction of households that have the intention to relocate but do not do so
     adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
+    start_simulation_year: 2020 # year in which to start household adaption simulation
+    adaptation_cost_scaler: 1 # Scale adaptation and relocation costs, usually by relative GDP per capita with respect to the EU
+    income_currency_conversion: 1.11  # Convert local currency to USD. Default value: 1.11 USD/EUR
+    ammenity_value_scaling_factor: 0.254820579 # scaling factor for riverine amenity based on Tesselaar et al. (2023).
     water_demand:
       method: default
     adjust_demand_factor: 1  # multiplier to adjust water demand up or down. 1 = no adjustment, 0.5 = half demand, 2 = double demand
@@ -233,6 +242,15 @@ agent_settings:
     interest_rate_factor: 1
     well_cost_factor: 1
     drought_threshold_factor: 1
+
+  climrisk:
+    project_income: false # if true turn on household income growth, calculating it with GDP per capita growth
+    project_costs: false # if true turn on adaptation, relocation and asset damages costs growth, calculating it with the growth of the sum of the GDP for all countries that include the modelled region.
+    ssp: '2' # Shared Socioeconomic Pathway, choose from: '1', '2', '3', '4', '5'.
+    rcp: '70' # Representative Concentration Pathway, choose from: '19', '26', '34', '45', '60', '70', '85'.
+    damage_function: 'K' # Macroeconomic climate damages function, choose from: 'K' (Kompas), 'KU' (Kompas + Urban Heat Island), 'KPU' (Kompas + U + persistent damages), 'RU' (RICE + U), 'RPU' (RICE + PU). Choose 'GDP' to project growth without damages.
+    warming_percentile: '90' # Global warming percentile, choose from: '10', '50', '90'.
+    country_wide: false # If true project GDP homogenously for all the country
 
 logging:
   logfile: GEB.log  

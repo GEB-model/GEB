@@ -63,6 +63,16 @@ setup_buildings:
 
 setup_household_characteristics:
 
+setup_climrisk:
+  ssp: # List of Shared Socioeconomic Pathways to build data for. Choose from: '1', '2', '3', '4', '5'.
+    - '2'
+  rcp: # List of Representative Concentration Pathways to build data for. Choose from: '19', '26', '34', '45', '60', '70', '85'.
+    - '70'
+  damage_function: # List of macroeconomic climate damages functions to build data for. Choose from: 'K' (Kompas), 'KU' (Kompas + Urban Heat Island), 'KPU' (Kompas + U + persistent damages), 'RU' (RICE + U), 'RPU' (RICE + PU). Choose 'GDP' to project growth without damages.
+    - 'K'
+  warming_percentile: # List of global warming percentiles to build data for. Choose from: '10', '50', '90'.
+    - '90'
+
 # setup_warning_communication_weights:
 
 setup_water_demand:

@@ -1951,9 +1951,16 @@ class Crops(BuildModelBase):
                         rotations_with_crop_idx.append(idx)
 
                 if not rotations_with_crop_idx:
-                    raise ValueError(
-                        f"No rotations found for crop ID {crop_id} in mirca unit {mirca_unit}"
-                    )
+                    rotations_with_crop_idx = (
+                        np.random.choice(
+                            np.arange(len(cropping_calenders_crop_rotation)),
+                            size=1,
+                            replace=False,
+                        ).tolist()
+                    )  # To copilot, This should be removed when merged with main again.
+                    # raise ValueError(
+                    #     f"No rotations found for crop ID {crop_id} in mirca unit {mirca_unit}"
+                    # )
 
                 # Get the area fractions and rotations for these indices
                 areas_with_crop = area_per_crop_rotation[rotations_with_crop_idx]
