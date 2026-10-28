@@ -21,6 +21,7 @@ EXPECTED_PARAMETERS: set[str] = {
     "lake_outflow_multiplier",
     "interflow_multiplier",
     "variable_runoff_shape_beta_multiplier",
+    "runoff_concentration_factor",
 }
 
 

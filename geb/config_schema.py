@@ -834,7 +834,6 @@ class ParametersConfig(BaseModel):
         description="Scale factor for the variable runoff shape parameter beta."
     )
     runoff_concentration_factor: float = Field(
-        1.0,
         gt=0.0,
         description="Multiplier for slope-dependent overland runoff concentration time using the Kerby (1959) overland flow method.",
     )
