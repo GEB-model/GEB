@@ -267,7 +267,7 @@ def q2_initial_water_level(
     centre = burn.to_crs(4326).union_all().centroid
     utm = get_utm_zone(centre.y, centre.x)
     burn = burn.to_crs(utm)
-    to_utm = Transformer.from_crs(4326, utm, always_xy=True)
+    to_utm = Transformer.from_crs(dem.rio.crs, utm, always_xy=True)
     ux, uy = to_utm.transform(cells.lon.values, cells.lat.values)
 
     # each burned cell belongs to the nearest burned river segment
