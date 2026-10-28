@@ -326,7 +326,22 @@ class Floods(Module):
 
         Raises:
             ValueError: If the forcing method is unknown.
+            ValueError: If Q2 river filling is requested with custom rivers, which do not provide the required
+                river-network topology.
         """
+        if self.config.get("fill_rivers_q2", False):
+            custom_rivers_path: str | Path | None = self.model.files["geom"].get(
+                "routing/custom_rivers"
+            )
+            if (
+                custom_rivers_path is not None
+                and not read_geom(custom_rivers_path).empty
+            ):
+                raise ValueError(
+                    "fill_rivers_q2 does not support custom river layers; it requires "
+                    "downstream_ID river-network for backwater check."
+                )
+
         # Save the flood depth to a zarr file
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
             event=event,
