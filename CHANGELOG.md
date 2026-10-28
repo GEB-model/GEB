@@ -1,3 +1,6 @@
+# Unreleased
+- Added option to start sfincs simulations with rivers filled with water, this makes the initial starting conditions better and more realistic
+
 # v1.0.0b36
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 

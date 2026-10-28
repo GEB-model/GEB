@@ -107,6 +107,10 @@ class FloodsConfig(BaseModel):
         "accumulated_runoff",
         description="Forcing method: 'headwater_points' or 'accumulated_runoff'.",
     )
+    fill_rivers_q2: bool = Field(
+        False,
+        description="Whether to start SFINCS with the burned river channels partly filled instead of dry. The initial water level uses the stored burned-channel depth, made consistent along the river (backwater) and capped at the bank. Requires subgrid and a single DEM.",
+    )
     minimum_flood_depth: float = Field(0.05, description="Minimum flood depth (m).")
     flood_map_output_interval_seconds: int | None = Field(
         None,
