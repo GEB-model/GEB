@@ -15,7 +15,7 @@ from geb.build.data_catalog.climrisk import CLIMRISK
 
 
 def _adapter(path: Path) -> CLIMRISK:
-    """Create an adapter with a local data path.
+    """Create an adapter whose data path points to a temporary directory.
 
     Args:
         path: Temporary directory used as the adapter data path.
@@ -23,9 +23,14 @@ def _adapter(path: Path) -> CLIMRISK:
     Returns:
         An uninitialized adapter configured with the supplied path.
     """
-    adapter = CLIMRISK.__new__(CLIMRISK)
-    adapter.path = path
-    return adapter
+
+    class TemporaryCLIMRISK(CLIMRISK):
+        @property
+        def path(self) -> Path:
+            """Return the temporary path used by this test adapter."""
+            return path
+
+    return TemporaryCLIMRISK.__new__(TemporaryCLIMRISK)
 
 
 def _region() -> gpd.GeoDataFrame:
@@ -180,11 +185,12 @@ def test_read_population_returns_cropped_float32_data(
         damage_function=None,
         warming_percentile=None,
         obtain_population=True,
+        reference_year=2010,
     )
 
     assert result.name == "population"
     assert result.dtype == np.float32
-    assert result.sizes == {"year": 3, "lon": 2, "lat": 2}
+    assert dict(result.sizes) == {"year": 3, "lon": 2, "lat": 2}
     assert result.attrs["lon_resolution"] == 0.5
     assert result.attrs["lat_resolution"] == 0.5
 
