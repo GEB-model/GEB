@@ -147,8 +147,14 @@ def subgrid_volume_m3(
         ]  # (cells, levels)
     nlev: int = zlevel.shape[1]
     dx: float = grid["dx"]
-    lat = grid["y0"] + (n + 0.5) * dx
-    area = (dx * 111320.0 * np.cos(np.deg2rad(lat))) * (dx * 110574.0)
+    with rasterio.open(root / "subgrid" / "dep_subgrid.tif") as src:
+        is_geographic: bool = src.crs.is_geographic
+    area: np.ndarray
+    if is_geographic:
+        lat: np.ndarray = grid["y0"] + (n + 0.5) * dx
+        area = (dx * 111320.0 * np.cos(np.deg2rad(lat))) * (dx * 110574.0)
+    else:
+        area = np.full(zs.shape, dx * dx)
     vol = np.zeros(zs.shape)
     full = zs >= zmax
     vol[full] = volmax[full] + area[full] * (zs[full] - np.maximum(zmax[full], -20.0))
