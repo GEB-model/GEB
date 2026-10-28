@@ -1,5 +1,6 @@
 """Test suite for household decision making module."""
 
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -99,14 +100,36 @@ def decision_template() -> dict[str, Any]:
     return decision_template
 
 
-def test_expenditure_cap(decision_template: dict) -> None:
+@fixture
+def decision_module() -> DecisionModule:
+    """Create a decision module with the household configuration it needs.
+
+    Returns:
+        Decision module configured with the household amenity scaling factor.
+    """
+    module = DecisionModule()
+    module.model = SimpleNamespace(
+        config={
+            "agent_settings": {
+                "households": {
+                    "ammenity_value_scaling_factor": 0.254820579,
+                }
+            }
+        }
+    )
+    return module
+
+
+def test_expenditure_cap(
+    decision_template: dict,
+    decision_module: DecisionModule,
+) -> None:
     """This function tests the functionality of the expenditure cap.
 
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
+        decision_module: Decision module configured with the household amenity scaling factor.
     """
-    decision_module = DecisionModule()
-
     # quick basic test
     EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_do_not_adapt > -np.inf), (
@@ -137,14 +160,17 @@ def test_expenditure_cap(decision_template: dict) -> None:
     )
 
 
-def test_risk_perception(decision_template: dict) -> None:
+def test_risk_perception(
+    decision_template: dict,
+    decision_module: DecisionModule,
+) -> None:
     """This function tests the functionality of risk perception.
 
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
+        decision_module: Decision module configured with the household amenity scaling factor.
 
     """
-    decision_module = DecisionModule()
     decision_template["expendature_cap"] = 10  # ensure all can adapt
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 0.01)
     EU_do_nothing_low_risk_perception = decision_module.calcEU_do_nothing_flood(
@@ -160,14 +186,16 @@ def test_risk_perception(decision_template: dict) -> None:
     ), "Expected EU_do_nothing_low to be greater than EU_do_nothing_high"
 
 
-def test_damages(decision_template: dict) -> None:
+def test_damages(
+    decision_template: dict,
+    decision_module: DecisionModule,
+) -> None:
     """This function tests the functionality of damages with and without adaptation.
 
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
+        decision_module: Decision module configured with the household amenity scaling factor.
     """
-    decision_module = DecisionModule()
-
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
@@ -189,13 +217,16 @@ def test_damages(decision_template: dict) -> None:
     )
 
 
-def test_time_adapted(decision_template: dict) -> None:
+def test_time_adapted(
+    decision_template: dict,
+    decision_module: DecisionModule,
+) -> None:
     """This function tests the functionality of the time since adaptation decision.
 
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
+        decision_module: Decision module configured with the household amenity scaling factor.
     """
-    decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
@@ -223,13 +254,16 @@ def test_time_adapted(decision_template: dict) -> None:
     )
 
 
-def test_loan_duration(decision_template: dict) -> None:
+def test_loan_duration(
+    decision_template: dict,
+    decision_module: DecisionModule,
+) -> None:
     """This function tests the functionality of the loan duration.
 
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
+        decision_module: Decision module configured with the household amenity scaling factor.
     """
-    decision_module = DecisionModule()
     # make sure all can adapt and behave rationally and set time discounting to zero
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
@@ -248,13 +282,16 @@ def test_loan_duration(decision_template: dict) -> None:
     )
 
 
-def test_time_discounting(decision_template: dict) -> None:
+def test_time_discounting(
+    decision_template: dict,
+    decision_module: DecisionModule,
+) -> None:
     """This function tests the functionality of time discounting.
 
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
+        decision_module: Decision module configured with the household amenity scaling factor.
     """
-    decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
@@ -272,13 +309,16 @@ def test_time_discounting(decision_template: dict) -> None:
     )
 
 
-def test_decision_horizon(decision_template: dict) -> None:
+def test_decision_horizon(
+    decision_template: dict,
+    decision_module: DecisionModule,
+) -> None:
     """This function tests the functionality of the decision horizon.
 
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
+        decision_module: Decision module configured with the household amenity scaling factor.
     """
-    decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
@@ -299,13 +339,16 @@ def test_decision_horizon(decision_template: dict) -> None:
     )
 
 
-def test_amenity_values(decision_template: dict) -> None:
+def test_amenity_values(
+    decision_template: dict,
+    decision_module: DecisionModule,
+) -> None:
     """This function tests the functionality of amenity values.
 
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
+        decision_module: Decision module configured with the household amenity scaling factor.
     """
-    decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
