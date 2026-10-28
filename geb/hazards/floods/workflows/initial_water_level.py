@@ -8,11 +8,8 @@ import numpy as np
 import pandas as pd
 import rasterio
 import xarray as xr
-from hydromt_sfincs.utils import (
-    read_binary_map,
-    read_binary_map_index,
-    write_binary_map,
-)
+from hydromt_sfincs import SfincsModel
+from hydromt_sfincs.utils import write_binary_map
 from pyproj import Transformer
 from shapely import STRtree, line_locate_point, points
 
@@ -22,52 +19,34 @@ from geb.workflows.methods import get_utm_zone
 BURN_MIN_M: float = 0.1
 
 
-def read_grid(root: Path) -> dict[str, Any]:
-    """Read the SFINCS grid of the root model.
+def read_sfincs_model(root: Path) -> SfincsModel:
+    """Open a SFINCS model and read its grid and subgrid through HydroMT-SFINCS.
 
     Args:
-        root: Path of the SFINCS root model (holds sfincs.inp, sfincs.ind and sfincs.msk).
+        root: Path of the SFINCS model directory.
 
     Returns:
-        Dictionary with mmax, nmax, y0, dx, the active-cell index ind and the mask msk (rows south to north).
+        The read-only HydroMT-SFINCS model. The caller is responsible for closing it.
+
     """
-    with open(root / "sfincs.inp") as f:
-        inp = {
-            k.strip(): v.strip()
-            for k, v in (line.split("=", 1) for line in f if "=" in line)
-        }
-    grid: dict[str, Any] = dict(
-        mmax=int(inp["mmax"]),
-        nmax=int(inp["nmax"]),
-        y0=float(inp["y0"]),
-        dx=float(inp["dx"]),
-    )
-    grid["ind"] = read_binary_map_index(root / "sfincs.ind")
-    grid["msk"] = read_binary_map(
-        root / "sfincs.msk",
-        grid["ind"],
-        (grid["nmax"], grid["mmax"]),
-        mv=0,
-        dtype="u1",
-    )
-    return grid
+    sfincs_model: SfincsModel = SfincsModel(root=str(root), mode="r")
+    sfincs_model.config.read()
+    sfincs_model.grid.read()
+    sfincs_model.subgrid.read()
+    return sfincs_model
 
 
 def burned_river_cells(
     root: Path,
     dem: xr.DataArray,
-    mmax: int,
-    nmax: int,
-    msk: np.ndarray,
+    grid_mask: xr.DataArray,
 ) -> pd.DataFrame:
     """Find the active SFINCS cells that hold burned river pixels.
 
     Args:
         root: Path of the SFINCS root model (holds subgrid/dep_subgrid.tif).
         dem: The DEM the rivers were burned into.
-        mmax: Number of SFINCS columns.
-        nmax: Number of SFINCS rows.
-        msk: SFINCS mask (rows south to north).
+        grid_mask: Active-cell mask read by the HydroMT-SFINCS grid accessor.
 
     Returns:
         Table with per cell: n, m (indices), bed (lowest burned pixel), bank (lowest DEM value over the burned
@@ -76,6 +55,9 @@ def burned_river_cells(
     rec: dict[str, list[np.ndarray]] = {
         k: [] for k in ("n", "m", "bed", "bank", "npx", "lon", "lat")
     }
+    nmax: int
+    mmax: int
+    nmax, mmax = grid_mask.shape
     with rasterio.open(root / "subgrid" / "dep_subgrid.tif") as src:
         assert src.transform.e > 0, "expected a south-up subgrid tif"
         assert src.width % mmax == 0 and src.width // mmax == src.height // nmax
@@ -102,7 +84,7 @@ def burned_river_cells(
             lat = np.where(burned, ys[:, None], 0.0).reshape(shape4).sum(
                 axis=(1, 3)
             ) / np.maximum(npx, 1)
-            nn, mm = np.where((npx > 0) & (msk[n0:n1] > 0))
+            nn, mm = np.where((npx > 0) & (grid_mask.values[n0:n1] > 0))
             for key, value in (
                 ("n", nn + n0),
                 ("m", mm),
@@ -117,8 +99,7 @@ def burned_river_cells(
 
 
 def subgrid_volume_m3(
-    root: Path,
-    grid: dict[str, Any],
+    sfincs_model: SfincsModel,
     zs: np.ndarray,
     n: np.ndarray,
     m: np.ndarray,
@@ -126,33 +107,26 @@ def subgrid_volume_m3(
     """Water volume per cell at a given level, from the subgrid tables as SFINCS computes it at t0.
 
     Args:
-        root: Path of the SFINCS root model (holds sfincs_subgrid.nc).
-        grid: Grid dictionary from read_grid.
+        sfincs_model: Read-only model with its subgrid component loaded.
         zs: Water level per cell.
         n: Row index per cell.
         m: Column index per cell.
 
     Returns:
         Water volume (m3) per cell.
+
     """
-    np_index = np.full((grid["nmax"], grid["mmax"]), -1, dtype=np.int64)
-    np_index.T.flat[grid["ind"]] = np.arange(grid["ind"].size)
-    cells = np_index[n, m]
-    with xr.open_dataset(root / "sfincs_subgrid.nc") as sbg:
-        zmin = sbg["z_zmin"].values[cells].astype(np.float64)
-        zmax = sbg["z_zmax"].values[cells].astype(np.float64)
-        volmax = sbg["z_volmax"].values[cells].astype(np.float64)
-        zlevel = sbg["z_level"].values
-        zlevel = (zlevel.T if zlevel.shape[0] != grid["ind"].size else zlevel)[
-            cells
-        ]  # (cells, levels)
+    subgrid_data: xr.Dataset = sfincs_model.subgrid.data
+    zmin: np.ndarray = subgrid_data["z_zmin"].values[n, m].astype(np.float64)
+    zmax: np.ndarray = subgrid_data["z_zmax"].values[n, m].astype(np.float64)
+    volmax: np.ndarray = subgrid_data["z_volmax"].values[n, m].astype(np.float64)
+    zlevel: np.ndarray = subgrid_data["z_level"].values[:, n, m].T.astype(np.float64)
     nlev: int = zlevel.shape[1]
-    dx: float = grid["dx"]
-    with rasterio.open(root / "subgrid" / "dep_subgrid.tif") as src:
-        is_geographic: bool = src.crs.is_geographic
+    dx: float = float(sfincs_model.grid.dx)
+    is_geographic: bool = sfincs_model.grid.crs.is_geographic
     area: np.ndarray
     if is_geographic:
-        lat: np.ndarray = grid["y0"] + (n + 0.5) * dx
+        lat: np.ndarray = sfincs_model.grid.mask.y.values[n]
         area = (dx * 111320.0 * np.cos(np.deg2rad(lat))) * (dx * 110574.0)
     else:
         area = np.full(zs.shape, dx * dx)
@@ -248,20 +222,22 @@ def channel_depth_level(
 
 
 def q2_initial_water_level(
-    root: Path,
+    sfincs_model: SfincsModel,
     dem: xr.DataArray,
-) -> tuple[np.ndarray, pd.DataFrame, dict[str, Any]]:
+) -> tuple[np.ndarray, pd.DataFrame]:
     """Initial water level per SFINCS cell from the burned rivers' stored channel depth.
 
     Args:
-        root: Path of the SFINCS root model (holds the grid, subgrid, rivers_to_burn and rivers files).
+        sfincs_model: Read-only HydroMT-SFINCS model with grid and subgrid loaded.
         dem: The DEM the rivers were burned into.
 
     Returns:
-        The level per cell (rows south to north, -9999 = dry), the per cell table and the grid dictionary.
+        The level per cell (rows south to north, -9999 = dry) and the per-cell table.
+
     """
-    grid = read_grid(root)
-    cells = burned_river_cells(root, dem, grid["mmax"], grid["nmax"], grid["msk"])
+    root: Path = Path(sfincs_model.root.path)
+    grid_mask: xr.DataArray = sfincs_model.grid.mask
+    cells = burned_river_cells(root, dem, grid_mask)
 
     burn = gpd.read_parquet(root / "rivers_to_burn.geoparquet")
     rivers = gpd.read_parquet(root / "rivers.geoparquet")
@@ -283,9 +259,9 @@ def q2_initial_water_level(
     )  # Stored channel depth reaches above the DEM river surface.
     cells["zs"] = zs
 
-    level = np.full((grid["nmax"], grid["mmax"]), -9999.0, dtype=np.float32)
+    level = np.full(grid_mask.shape, -9999.0, dtype=np.float32)
     level[cells.n.values, cells.m.values] = zs
-    return level, cells, grid
+    return level, cells
 
 
 def set_q2_initial_water_level(
@@ -300,19 +276,32 @@ def set_q2_initial_water_level(
 
     Returns:
         A one-line summary for the log.
+
     """
     root: Path = simulation.root_path
-    level, cells, grid = q2_initial_water_level(root, dem)
+    sfincs_reader: SfincsModel = read_sfincs_model(root)
+    try:
+        level, cells = q2_initial_water_level(sfincs_reader, dem)
+        volume: np.ndarray = subgrid_volume_m3(
+            sfincs_reader,
+            cells.zs.values.astype(np.float64),
+            cells.n.values,
+            cells.m.values,
+        )
 
-    write_binary_map(simulation.path / "sfincs.ini", level, grid["msk"], dtype="f4")
-    simulation.sfincs_model.config.update(inifile="sfincs.ini")
-    simulation.sfincs_model.config.write()
+        write_binary_map(
+            simulation.path / "sfincs.ini",
+            level,
+            sfincs_reader.grid.mask.values,
+            dtype="f4",
+        )
+        simulation.sfincs_model.config.update(inifile="sfincs.ini")
+        simulation.sfincs_model.config.write()
 
-    filled = cells.zs.values > -9999.0
-    volume = subgrid_volume_m3(
-        root, grid, cells.zs.values.astype(np.float64), cells.n.values, cells.m.values
-    )
-    return (
-        f"Channel-depth initial water level: {int(filled.sum())} of {len(cells)} burned river cells filled, "
-        f"{int(cells.capped.sum())} capped at the river surface, {volume.sum() / 1e6:.0f} Mm3 at t0"
-    )
+        filled = cells.zs.values > -9999.0
+        return (
+            f"Channel-depth initial water level: {int(filled.sum())} of {len(cells)} burned river cells filled, "
+            f"{int(cells.capped.sum())} capped at the river surface, {volume.sum() / 1e6:.0f} Mm3 at t0"
+        )
+    finally:
+        sfincs_reader.close()
