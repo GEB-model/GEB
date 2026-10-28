@@ -19,9 +19,6 @@ from geb.geb_types import (
     TwoDArrayFloat32,
 )
 from geb.hazards.event import Event
-from geb.hazards.floods.workflows.initial_water_level import (
-    set_q2_initial_water_level,
-)
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.routing import (
     get_discharge_per_river,
@@ -326,22 +323,7 @@ class Floods(Module):
 
         Raises:
             ValueError: If the forcing method is unknown.
-            ValueError: If Q2 river filling is requested with custom rivers, which do not provide the required
-                river-network topology.
         """
-        if self.config.get("fill_rivers_q2", False):
-            custom_rivers_path: str | Path | None = self.model.files["geom"].get(
-                "routing/custom_rivers"
-            )
-            if (
-                custom_rivers_path is not None
-                and not read_geom(custom_rivers_path).empty
-            ):
-                raise ValueError(
-                    "fill_rivers_q2 does not support custom river layers; it requires "
-                    "downstream_ID river-network for backwater check."
-                )
-
         # Save the flood depth to a zarr file
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
             event=event,
@@ -439,25 +421,6 @@ class Floods(Module):
 
         if simulation.sfincs_root_model.has_inflow:
             simulation.set_river_inflow(discharge_by_river=discharge_by_river)
-
-        if self.config.get("fill_rivers_q2", False):
-            if not self.config["subgrid"]:
-                raise ValueError(
-                    "fill_rivers_q2 requires hazards.floods.subgrid: true."
-                )
-            # for now we use FATHOM or custom 1st choice DEM to fill the rivers.
-            # we ignore the 2nd DEM choice, as it is used for gap-filling and not for river burning.
-            if len(self.DEM_config) != 1:
-                raise ValueError(
-                    "fill_rivers_q2 detects the burned rivers in a single DEM, but "
-                    f"{len(self.DEM_config)} DEMs are configured."
-                )
-            self.model.logger.info(
-                set_q2_initial_water_level(
-                    simulation,
-                    dem=self.DEM_config[0]["elevation"]["elevation"],
-                )
-            )
 
         return simulation
 
