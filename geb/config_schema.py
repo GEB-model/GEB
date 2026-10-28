@@ -836,7 +836,7 @@ class ParametersConfig(BaseModel):
     runoff_concentration_factor: float = Field(
         1.0,
         gt=0.0,
-        description="Multiplier for slope-dependent overland runoff concentration time.",
+        description="Multiplier for slope-dependent overland runoff concentration time using the Kerby (1959) overland flow method.",
     )
 
 

@@ -79,13 +79,10 @@ hydrology:
     riverbed_hydraulic_conductivity_multiplier: 0.1
     river_width:
       parameters:
-        default_alpha: 3.91 # Bjerklie et al. (2003) doi:10.1016/S0022-1694(03)00129-X (Table 3, inverted Q = 0.11 * W^1.62)
-        beta: 0.62          # Bjerklie et al. (2003) Table 3 exponent (1 / 1.62 = 0.617)
+        default_alpha: 3.91 # Bjerklie et al. (2003) doi:10.1016/S0022-1694(03)00129-X (Table 5, inverted Q = 0.11 * W^1.62)
+        beta: 0.62          # Bjerklie et al. (2003) Table 5 exponent (1 / 1.62 = 0.617)
     river_depth:
       parameters:
-        c: 0.15   # Bjerklie et al. (2003) Eq. 17 & Table 4 coupled inversion (Y = 0.15 * Q^0.21 * S^-0.20)
-        d: 0.21   # Bjerklie et al. (2003) discharge exponent
-        e: -0.20  # Bjerklie et al. (2003) slope exponent
         min_depth_m: 0.1
         shape_exponent: 0.5
         use_observed_width_as_bankfull: true
@@ -271,3 +268,4 @@ parameters:
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0
   variable_runoff_shape_beta_multiplier: 1.0
+  runoff_concentration_factor: 1.0
