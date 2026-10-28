@@ -430,8 +430,8 @@ class Floods(Module):
                 raise ValueError(
                     "fill_rivers_q2 requires hazards.floods.subgrid: true."
                 )
-            # for now we use FATHOM or custom 1st choice DEM to fill the rivers. 
-            # we ignore the 2nd DEM choice, as it is used for gap-filling and not for river burning.    
+            # for now we use FATHOM or custom 1st choice DEM to fill the rivers.
+            # we ignore the 2nd DEM choice, as it is used for gap-filling and not for river burning.
             if len(self.DEM_config) != 1:
                 raise ValueError(
                     "fill_rivers_q2 detects the burned rivers in a single DEM, but "
