@@ -270,6 +270,15 @@ class RunoffConcentrator(Module):
             self.model.config["parameters"]["runoff_concentration_factor"]
         )
 
+        if self.model.in_spinup:
+            self.spinup()
+
+    def set_weights(self) -> None:
+        """Derive cell-specific Kerby retardance roughness and calculate triangular weights.
+
+        Derives Kerby retardance roughness from HRU land use types, maps them to grid cells,
+        and computes unit hydrograph weights based on terrain slope and hillslope length.
+        """
         slope_m_per_m: ArrayFloat32 = self.grid.load2d(
             self.model.files["grid"]["landsurface/slope_m_per_m"]
         )
@@ -308,9 +317,6 @@ class RunoffConcentrator(Module):
                 concentration_factor=self.concentration_factor,
             )
         )
-
-        if self.model.in_spinup:
-            self.spinup()
 
     def _apply_triangular(
         self,
@@ -410,3 +416,4 @@ class RunoffConcentrator(Module):
         self.grid.var.overland_flow_buffer = np.tile(
             self.grid.full_compressed(0.0, dtype=np.float32), (self.lag_time_hours, 1)
         )
+        self.set_weights()
