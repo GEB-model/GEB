@@ -1,8 +1,13 @@
 # dev
+- Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.
+- Modularize routing architecture into topology, geometry, solver, and kernel modules, with performance optimizations (precomputed lookup tables for $h^{4/3}$, fused kernels, multithreading, and reduced memory allocations).
+- Cleaned confluence forward inflow limiting to use strictly physical stage limits, removing artificial static $1/\sqrt{N}$ CFL time-step penalties.
+- Include river channel transmission losses during streamflow routing to account for riverbed percolation.
+- Assign retention basins to dominant rivers within a configurable search radius, and release water dynamically only on the falling limb below a 0.85 threshold factor.
+- Improve runoff concentration time using the Kerby method.
+- Add setup of boundary outflows for hydrodynamic flood simulations with SFINCS.
 - Save model version in store metadata (checkpoint.json) and verify model version compatibility on loading, warning if spinup needs to be rerun.
-- Removed minimum_river_slope_m_per_m configuration option; kinematic minimum slope is handled internally.
-- Cleaned confluence forward inflow limiting to use strictly physical stage limits.
-- Removed fallback slicing on shape mismatch, parent directory completion lookups, and multi-tier metric score fallbacks.
+- Various improvements to dashboard.
 - SFINCS is now run with a native binary by default (`/scistor/ivm/GEB/sfincs/bin/sfincs`, or `sfincs-gpu` when a GPU is detected). Apptainer and Docker remain available by setting the `SFINCS_RUNTIME` environment variable to `apptainer` or `docker`.
 - Now set ssp-rcp for climate change projection based on model ssp setting.
 - Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.
