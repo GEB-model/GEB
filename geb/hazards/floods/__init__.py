@@ -245,6 +245,33 @@ class Floods(Module):
             utm_crs: str = f"EPSG:327{utm_zone}"  # Southern hemisphere
         return utm_crs
 
+    @property
+    def base_model_path(self) -> Path | None:
+        """Gets the folder from which existing SFINCS root models are read, if configured.
+
+        Returns:
+            The configured `base_model_path`, or None if root models should be built
+            in (or read from) the simulation root of this model.
+        """
+        base_model_path: str | Path | None = self.config.get("base_model_path")
+        return Path(base_model_path) if base_model_path else None
+
+    def get_simulations_root(self, sfincs_root_model: SFINCSRootModel) -> Path:
+        """Gets the folder in which simulations of a root model are stored.
+
+        Simulations are always stored in the simulation root of the current model, also
+        when the root model itself is read from `base_model_path`.
+
+        Args:
+            sfincs_root_model: The root model for which simulations are created.
+
+        Returns:
+            Path to the folder that will contain the simulation folders.
+        """
+        folder: Path = self.simulation_root / sfincs_root_model.name / "simulations"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
     def build(
         self,
         name: str,
@@ -254,6 +281,7 @@ class Floods(Module):
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         initial_water_level: float | None = 0.0,
+        base_model_path: Path | None = None,
     ) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 
@@ -270,11 +298,26 @@ class Floods(Module):
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundary cells.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
+            base_model_path: Optional folder containing an existing SFINCS root model named `name`.
+                If set, the root model is read from this folder instead of being built, and nothing is
+                written to it.
 
         Returns:
             The built or read SFINCSRootModel instance.
+
         """
-        sfincs_model = SFINCSRootModel(
+        if base_model_path is not None:
+            # The base model is shared and must never be rebuilt or overwritten from
+            # here, so it is only read. Simulations are still written to this model's
+            # own simulation root (see `get_simulations_root`).
+            self.model.logger.info(
+                f"Reading SFINCS model '{name}' from {base_model_path}"
+            )
+            return SFINCSRootModel(
+                base_model_path, name, logger=self.model.logger
+            ).read()
+
+        sfincs_model: SFINCSRootModel = SFINCSRootModel(
             self.simulation_root, name, logger=self.model.logger
         )
 
@@ -327,6 +370,7 @@ class Floods(Module):
         # Save the flood depth to a zarr file
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
             event=event,
+            simulation_root=self.get_simulations_root(sfincs_model),
             write_figures=self.config["write_figures"],
             flood_map_output_interval_seconds=self.config[
                 "flood_map_output_interval_seconds"
@@ -730,6 +774,7 @@ class Floods(Module):
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
                 initial_water_level=initial_water_level,
+                base_model_path=self.base_model_path,
             )
 
             if coastal_only:
@@ -751,29 +796,39 @@ class Floods(Module):
 
         for subbasin_id, subbasin in riverine_active_subbasin.iterrows():
             downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
-
+            assert downstream_basin != None
             if not (downstream_basin in subbasins.index or downstream_basin == -1):
                 all_subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
                 region_subbasins = all_subbasins[
                     all_subbasins.index.isin([subbasin_id, downstream_basin])
                 ].copy()
+                if not downstream_basin in all_subbasins.index:
+                    downstream_basin = (
+                        -1
+                    )  # set to -1 if downstream basin is not in the subbasins file
+                    self.model.logger.warning(
+                        f"Downstream basin {downstream_basin} for subbasin {subbasin_id} is not in the subbasins file. Setting downstream basin to -1 (assuming coastal outflow). This may lead to incorrect results if the downstream basin is actually a river basin."
+                    )
             else:
                 region_subbasins = subbasins[
                     subbasins.index.isin([subbasin_id, downstream_basin])
                 ].copy()
-
             region_rivers = rivers.copy()
 
             # if there is a downstream basin, mark it as downstream outflow subbasin
             if downstream_basin != -1:
                 region_subbasins.at[downstream_basin, "is_downstream_outflow"] = True
                 region_rivers.at[downstream_basin, "is_downstream_outflow"] = True
+                assert not region_subbasins["geometry"].isnull().any(), (
+                    f"Subbasins {region_subbasins.index.tolist()} have a missing geometry. Cannot build SFINCS model."
+                )
 
                 sfincs_inland_root_model = self.build(
                     name=f"inland_subbasin_{subbasin_id}",
                     subbasins=region_subbasins,
                     all_rivers=region_rivers,
                     coastal=False,
+                    base_model_path=self.base_model_path,
                 )
                 _shape_config = self.config.get("hydrograph_shape", {})
 
@@ -816,6 +871,9 @@ class Floods(Module):
 
         for return_period in self.config["return_periods"]:
             simulations: list[SFINCSSimulation] = []
+            representative_year = self.config.get(
+                "representative_year", self.model.current_time.year
+            )
 
             if coastal:
                 sfincs_coastal_simulation: SFINCSSimulation = (
@@ -825,7 +883,10 @@ class Floods(Module):
                         coastal_forcing_locations,
                         offset=coastal_offset,
                         sea_level_rise=sea_level_rise,
-                        year=self.model.current_time.year,
+                        year=representative_year,
+                        simulation_root=self.get_simulations_root(
+                            sfincs_coastal_root_model
+                        ),
                     )
                 )
                 simulations.append(sfincs_coastal_simulation)
@@ -895,6 +956,9 @@ class Floods(Module):
                 sfincs_inland_simulation: SFINCSSimulation = (
                     sfincs_inland_root_model.create_simulation(
                         event=event,
+                        simulation_root=self.get_simulations_root(
+                            sfincs_inland_root_model
+                        ),
                     )
                 )
 

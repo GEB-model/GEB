@@ -31,6 +31,7 @@ hazards:
     overwrite: auto  # whether to overwrite existing flood model. True, False, "auto". If "auto", it will check if the model input parameters have changed.
     coastal_only: false  # if true, only simulate floods in coastal areas, defined as areas with elevation below 10m. This can significantly reduce computation time for large domains with small coastal areas.
     write_figures: false  # whether to generate and save diagnostic figures
+    base_model_path: null  # optional path to a folder with existing SFINCS root models. If set, root models are only read from here (never built or overwritten) while simulations are stored in the current simulation root.
     return_periods:
       - 2
       - 5

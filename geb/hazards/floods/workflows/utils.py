@@ -18,7 +18,8 @@ from hydromt_sfincs import SfincsModel, utils
 from hydromt_sfincs.components.config.config_variables import SfincsConfigVariables
 from matplotlib.colors import LinearSegmentedColormap
 from shapely import line_locate_point
-from shapely.geometry import GeometryCollection, LineString, Point
+from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point
+from shapely.geometry.base import BaseGeometry
 
 from geb.geb_types import ArrayFloat32, ArrayInt64
 from geb.workflows.io import read_geom
@@ -243,14 +244,14 @@ def make_relative_paths(
         A dictionary with the updated paths relative to the new model root directory.
 
     Raises:
-        ValueError: If model_root and new_root do not have a common path.
+        ValueError: If model_root and new_root are on different drives.
     """
-    commonpath = ""
-    if os.path.splitdrive(model_root)[0] == os.path.splitdrive(new_root)[0]:
-        commonpath = os.path.commonpath([model_root, new_root])
-    if os.path.basename(commonpath) == "":
-        raise ValueError("model_root and new_root must have a common path")
-    relpath = Path(os.path.relpath(commonpath, new_root))
+    if os.path.splitdrive(model_root)[0] != os.path.splitdrive(new_root)[0]:
+        raise ValueError("model_root and new_root must be on the same drive")
+    # model_root does not have to be a parent of new_root, so the path is
+    # computed directly from the new root to the model root. Symlinks are resolved
+    # so the relative path is valid for the real directory layout.
+    relpath = Path(os.path.relpath(model_root.resolve(), new_root.resolve()))
 
     config_kwargs: dict[str, str] = dict()
     for key, value in config:
@@ -616,7 +617,8 @@ def run_sfincs_simulation(
         model_root: Path to the model root directory.
         simulation_root: Path to the simulation root directory.
             Some paths in the configuration will be made relative to this path.
-            The simulation directory must be a subdirectory of the model root directory.
+            The simulation directory does not have to be a subdirectory of the model root
+            directory, but both must share a common parent directory.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
         runtime: How to run SFINCS: 'native', 'apptainer' or 'docker'. If None, the
@@ -635,7 +637,7 @@ def run_sfincs_simulation(
         raise ValueError("gpu must be True, False, or 'auto'")
 
     if runtime is None:
-        runtime = os.getenv(key="SFINCS_RUNTIME", default="native")
+        runtime = os.getenv(key="SFINCS_RUNTIME", default="apptainer")
     runtime = runtime.lower()
     if runtime not in SFINCS_RUNTIMES:
         raise ValueError(f"runtime must be one of {SFINCS_RUNTIMES}, got '{runtime}'")
@@ -660,6 +662,12 @@ def run_sfincs_simulation(
             raise FileNotFoundError(f"SFINCS binary not found at {binary}")
         cmd = [str(binary.resolve())]
     else:
+        # The simulation may live outside the model root (e.g., when the root model is
+        # read from a different location), so we mount the closest common parent of both
+        # to keep the relative paths in the SFINCS configuration valid in the container.
+        mount_root: Path = Path(
+            os.path.commonpath([model_root.resolve(), simulation_root.resolve()])
+        )
         container_variable: str = "SFINCS_CONTAINER_GPU" if gpu else "SFINCS_CONTAINER"
         version: str | None = os.getenv(key=container_variable)
         if version is None:
@@ -678,9 +686,9 @@ def run_sfincs_simulation(
                 "apptainer",
                 "run",
                 "-B",  ## Bind mount
-                f"{model_root.resolve()}:/data",
+                f"{mount_root}:/data",
                 "--pwd",  ## Set working directory inside container
-                f"/data/{simulation_root.relative_to(model_root).as_posix()}",
+                f"/data/{simulation_root.resolve().relative_to(mount_root).as_posix()}",
                 "--nv",
                 version,
             ]
@@ -688,15 +696,15 @@ def run_sfincs_simulation(
             assert check_docker_running(), "Docker is not running"
             # in the docker image of SFINCS thet working directory is /data
             # but since we also want to load files that are from the model
-            # root, we mount the model root to /data and then change the
+            # root, we mount the common parent to /data and then change the
             # working directory within the Docker image to the simulation root
             cmd = [
                 "docker",
                 "run",
                 "-v",
-                f"{model_root.resolve()}:/data",
+                f"{mount_root}:/data",
                 "-w",
-                f"/data/{simulation_root.relative_to(model_root).as_posix()}",
+                f"/data/{simulation_root.resolve().relative_to(mount_root).as_posix()}",
                 version,
             ]
 
@@ -708,6 +716,41 @@ def run_sfincs_simulation(
         )
     else:
         return return_code
+
+
+def select_most_downstream_point(
+    river: LineString, crossing: Point | MultiPoint | GeometryCollection | LineString
+) -> Point:
+    """Select the most downstream point from a geometry that intersects a river.
+
+    Args:
+        river: LineString of the river geometry, oriented in the flow direction.
+        crossing: Intersection geometry of the river with another geometry (for example
+            the region boundary). Can be a Point, or a collection of Points and LineStrings.
+
+    Returns:
+        The point with the largest distance along the river.
+
+    Raises:
+        ValueError: If the crossing geometry is empty.
+        TypeError: If an unsupported geometry type is found in crossing.
+    """
+    if crossing.is_empty:
+        raise ValueError("Cannot select a downstream point from an empty geometry.")
+
+    geometries: list[BaseGeometry] = (
+        list(crossing.geoms) if hasattr(crossing, "geoms") else [crossing]
+    )
+    points: list[Point] = []
+    for geom in geometries:
+        if isinstance(geom, Point):
+            points.append(geom)
+        elif isinstance(geom, LineString):
+            points.extend(Point(coord) for coord in geom.coords)
+        else:
+            raise TypeError(f"Unsupported geometry type in crossing: {type(geom)}")
+
+    return max(points, key=lambda point: line_locate_point(river, point))
 
 
 def select_most_upstream_point(

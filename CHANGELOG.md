@@ -1,9 +1,12 @@
 # dev
+<<<<<<< HEAD
 - SFINCS is now run with a native binary by default (`/scistor/ivm/GEB/sfincs/bin/sfincs`, or `sfincs-gpu` when a GPU is detected). Apptainer and Docker remain available by setting the `SFINCS_RUNTIME` environment variable to `apptainer` or `docker`.
 - Now set ssp-rcp for climate change projection based on model ssp setting.
+- Added `hazards.floods.base_model_path` to read existing SFINCS root models from another location (read-only) while storing the SFINCS simulations in the current simulation root.
 - Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.
 # v1.0.0b36
 - Fixed CMIP6 download requesting historical years 2015-2016 and future years starting in 2017, which left a two-year gap and made the delta calculation fail. Historical now covers 1950-2014 and future 2015-2100; cached `cmip6_future_*.zip` files must be deleted and redownloaded.
+- Fixed SFINCS outflow point of rivers flowing into the ocean being moved in the wrong direction (out of the region) when the river extends beyond the region boundary, and fixed the 1 m upstream step for projected coordinate systems.
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 
 # v1.0.0b35
