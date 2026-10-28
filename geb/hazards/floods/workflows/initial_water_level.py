@@ -20,7 +20,7 @@ BURN_MIN_M: float = 0.1
 
 
 def read_sfincs_model(root: Path) -> SfincsModel:
-    """Open a SFINCS model and read its grid and subgrid through HydroMT-SFINCS.
+    """Open a SFINCS model and read its grid through HydroMT-SFINCS.
 
     Args:
         root: Path of the SFINCS model directory.
@@ -32,7 +32,6 @@ def read_sfincs_model(root: Path) -> SfincsModel:
     sfincs_model: SfincsModel = SfincsModel(root=str(root), mode="r")
     sfincs_model.config.read()
     sfincs_model.grid.read()
-    sfincs_model.subgrid.read()
     return sfincs_model
 
 
@@ -180,7 +179,7 @@ def q2_initial_water_level(
     """Initial water level per SFINCS cell from the burned rivers' stored channel depth.
 
     Args:
-        sfincs_model: Read-only HydroMT-SFINCS model with grid and subgrid loaded.
+        sfincs_model: Read-only HydroMT-SFINCS model with its grid loaded.
         dem: The DEM the rivers were burned into.
 
     Returns:
