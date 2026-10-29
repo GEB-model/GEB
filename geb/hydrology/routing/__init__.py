@@ -258,6 +258,7 @@ class RoutingVariables(Bucket):
     """Routing variables."""
 
     discharge_step_count: int
+    inflow_idx: int  # index of the current hourly time step in the inflow data
     sum_of_all_discharge_steps: ArrayFloat64
     rivers: gpd.GeoDataFrame
     river_ids: ArrayInt32
@@ -498,7 +499,7 @@ class Routing(Module):
         self.retention_basin_is_active = self.retention_basin_data["active"]
 
         self.inflow = {}
-        self.inflow_idx: int = -1  # index for the current time step in the inflow data
+        self.var.inflow_idx = -1
         if "routing/inflow_m3_per_s" in self.model.files["table"]:
             inflow_per_location: pd.DataFrame = read_table(
                 self.model.files["table"]["routing/inflow_m3_per_s"]
@@ -1721,8 +1722,9 @@ class Routing(Module):
                 self.router.update_channel_geometry(dynamic_width, dynamic_depth_m)
 
         for hour in range(24):
-            # increment inflow index for next hour
-            self.inflow_idx += 1
+            # stored in self.var so it is saved/restored with the model state,
+            # e.g. between forecast members
+            self.var.inflow_idx += 1
 
             total_runoff_m3: np.ndarray = (
                 total_runoff_m[hour, :] * self.grid.var.cell_area
@@ -1837,7 +1839,7 @@ class Routing(Module):
                 if self.grid.var.waterbody_ids[cell_index] != -1:
                     raise ValueError("Inflow cannot be added to waterbody cells.")
 
-                inflow_m3 = inflow[self.inflow_idx] * np.float32(3600)
+                inflow_m3 = inflow[self.var.inflow_idx] * np.float32(3600)
 
                 side_flow_channel_m3_per_hour[cell_index] += inflow_m3
 

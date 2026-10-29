@@ -828,6 +828,9 @@ class GEBModel(Module):
 
         if load_data_from_store:
             self.store.load(path=checkpoint_path, omit=omit)
+            # inflow data starts at the simulation start, so a checkpoint from an
+            # earlier run (e.g. spinup) must not carry over its inflow index
+            self.hydrology.routing.var.inflow_idx = -1
 
         # in spinup mode, save the spinup time range to the store for later verification
         # in run mode, verify that the spinup time range matches the stored time range
