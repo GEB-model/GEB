@@ -68,21 +68,22 @@ hazards:
 
 hydrology:
   karst:
-    capture_fraction: 1.0 # Full capture; Wan et al. (2024), doi:10.1029/2023WR036182.
+    capture_fraction: 1.0 # Fraction of surface runoff and interflow captured on karst land below the swallowing ceiling.
     release_time_days: 10.0 # Starting value in days.
+    vertical_conductivity_multiplier: 10.0 # Multiplier for vertical hydraulic conductivity in karst soils.
   routing:
-    minimum_river_slope_m_per_m: 0.0001
+    max_threads: null
+    fix_river_geometry_after_spinup: true
     retention_basins:
-      release_threshold_factor: 0.2
+      release_threshold_factor: 0.85
       activation_threshold_return_period_years: 2
+    riverbed_hydraulic_conductivity_multiplier: 0.1
     river_width:
       parameters:
-        default_alpha: 7.2
-        beta: 0.5
+        default_alpha: 7.2 # Andreadis et al. (2013) doi:10.1002/wrcr.20440
+        beta: 0.5          # Andreadis et al. (2013) doi:10.1002/wrcr.20440
     river_depth:
       parameters:
-        c: 0.27  # https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/wrcr.20440
-        d: 0.30  # https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/wrcr.20440
         min_depth_m: 0.1
         shape_exponent: 0.5
         use_observed_width_as_bankfull: true
@@ -262,8 +263,10 @@ parameters:
   bankfull_discharge_multiplier: 1.0
   crop_factor_multiplier: 1.0
   saturated_hydraulic_conductivity_multiplier: 1.0
+  vertical_saturated_hydraulic_conductivity_multiplier: 1.0
   groundwater_hydraulic_conductivity_multiplier: 1.0
   reservoir_release_factor: 0.1
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0
   variable_runoff_shape_beta_multiplier: 1.0
+  runoff_concentration_factor: 1.0

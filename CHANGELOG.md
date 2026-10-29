@@ -1,7 +1,19 @@
 # dev
+
+# v1.0.0b37
+- Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.
+- Modularize routing architecture into topology, geometry, solver, and kernel modules, with performance optimizations (precomputed lookup tables for $h^{4/3}$, fused kernels, multithreading, and reduced memory allocations).
+- Cleaned confluence forward inflow limiting to use strictly physical stage limits, removing artificial static $1/\sqrt{N}$ CFL time-step penalties.
+- Include river channel transmission losses during streamflow routing to account for riverbed percolation.
+- Assign retention basins to dominant rivers within a configurable search radius, and release water dynamically only on the falling limb below a 0.85 threshold factor.
+- Improve runoff concentration time using the Kerby method.
+- Add setup of boundary outflows for hydrodynamic flood simulations with SFINCS.
+- Save model version in store metadata (checkpoint.json) and verify model version compatibility on loading, warning if spinup needs to be rerun.
+- Various improvements to dashboard.
 - SFINCS is now run with a native binary by default (`/scistor/ivm/GEB/sfincs/bin/sfincs`, or `sfincs-gpu` when a GPU is detected). Apptainer and Docker remain available by setting the `SFINCS_RUNTIME` environment variable to `apptainer` or `docker`.
 - Now set ssp-rcp for climate change projection based on model ssp setting.
 - Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.
+
 # v1.0.0b36
 - Fixed CMIP6 download requesting historical years 2015-2016 and future years starting in 2017, which left a two-year gap and made the delta calculation fail. Historical now covers 1950-2014 and future 2015-2100; cached `cmip6_future_*.zip` files must be deleted and redownloaded.
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.

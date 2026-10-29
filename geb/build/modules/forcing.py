@@ -868,7 +868,7 @@ class Forcing(BuildModelBase):
         variable_delta_name: str,
         operation: Literal["add", "multiply"],
         representative_forcing_year: int,
-        ssp_rcp: int,
+        ssp_rcp: int | None = None,
     ) -> xr.DataArray:
         """Applies CMIP6 deltas to a forcing variable DataArray.
 
@@ -884,6 +884,9 @@ class Forcing(BuildModelBase):
         Raises:
             ValueError: If NaN values are found in the regridded deltas.
         """
+        if ssp_rcp is None:
+            ssp_rcp = self.ssp_rcp
+
         all_nans: int = da.isnull().sum().compute().item()
         cmip6_deltas: xr.DataArray = self.setup_deltas_CMIP6(
             representative_forcing_year=representative_forcing_year, ssp_rcp=ssp_rcp

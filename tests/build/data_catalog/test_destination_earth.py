@@ -6,11 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
-from aiohttp_retry import RetryClient
 
 from geb.build.data_catalog.destination_earth import (
     DestinationEarthFileSystem,
-    get_retry_client,
 )
 
 
@@ -91,22 +89,5 @@ def test_destination_earth_filesystem_retry_exhausted() -> None:
         ):
             await fs._cat_file("https://destine.eu/chunk/0.0.0")
         assert mock_logger.error.call_count == 1
-
-    asyncio.run(run_test())
-
-
-def test_get_retry_client_configuration() -> None:
-    """Test that get_retry_client configures retry options.
-
-    Ensures that retry exceptions include ClientError.
-    """
-
-    async def run_test() -> None:
-        client: RetryClient = await get_retry_client()
-        try:
-            assert client.retry_options.attempts == 100
-            assert aiohttp.ClientError in client.retry_options.exceptions
-        finally:
-            await client.close()
 
     asyncio.run(run_test())

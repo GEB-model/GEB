@@ -292,7 +292,7 @@ def _create_mock_land_surface(
     mock_hru_var: MagicMock = MagicMock()
     mock_hru_var.land_use_type = np.array([1, 2], dtype=np.int32)
     mock_hru_var.topwater_m = np.zeros(num_cells, dtype=np.float32)
-    mock_hru_var.water_content_m = np.full((6, num_cells), 0.1, dtype=np.float32)
+    mock_hru_var.water_content_m = np.full((num_cells, 6), 0.1, dtype=np.float32)
     mock_hru_var.snow_water_equivalent_m = np.zeros((num_cells, 2), dtype=np.float64)
     mock_hru_var.liquid_water_in_snow_m = np.zeros((num_cells, 2), dtype=np.float64)
     mock_hru_var.interception_storage_m = np.zeros(num_cells, dtype=np.float32)
@@ -333,14 +333,14 @@ def test_check_land_surface_water_valid(tmp_path: Path) -> None:
     # All zeros and balanced
     land_surface._check_land_surface_water(
         land_surface_inputs=mock_inputs,
-        water_content_m_prev=np.full((6, num_cells), 0.1, dtype=np.float32),
+        water_content_m_prev=np.full((num_cells, 6), 0.1, dtype=np.float32),
         topwater_m_prev=np.zeros(num_cells, dtype=np.float32),
         snow_water_equivalent_prev=np.zeros((num_cells, 2), dtype=np.float64),
         liquid_water_in_snow_prev=np.zeros((num_cells, 2), dtype=np.float64),
         snow_enthalpy_J_per_m2_prev=np.zeros((num_cells, 2), dtype=np.float32),
         snow_density_kg_per_m3_prev=np.zeros((num_cells, 2), dtype=np.float32),
         interception_storage_prev=np.zeros(num_cells, dtype=np.float32),
-        soil_enthalpy_J_per_m2_prev=np.zeros((6, num_cells), dtype=np.float32),
+        soil_enthalpy_J_per_m2_prev=np.zeros((num_cells, 6), dtype=np.float32),
         deep_soil_temperature_C_prev=np.zeros(num_cells, dtype=np.float32),
         wetting_front_depth_prev=np.zeros(num_cells, dtype=np.float32),
         wetting_front_suction_head_prev=np.zeros(num_cells, dtype=np.float32),
@@ -373,14 +373,14 @@ def test_check_land_surface_water_negative_topwater(tmp_path: Path) -> None:
         with pytest.raises(AssertionError, match="Negative topwater detected"):
             land_surface._check_land_surface_water(
                 land_surface_inputs=mock_inputs,
-                water_content_m_prev=np.full((6, num_cells), 0.1, dtype=np.float32),
+                water_content_m_prev=np.full((num_cells, 6), 0.1, dtype=np.float32),
                 topwater_m_prev=np.zeros(num_cells, dtype=np.float32),
                 snow_water_equivalent_prev=np.zeros((num_cells, 2), dtype=np.float64),
                 liquid_water_in_snow_prev=np.zeros((num_cells, 2), dtype=np.float64),
                 snow_enthalpy_J_per_m2_prev=np.zeros((num_cells, 2), dtype=np.float32),
                 snow_density_kg_per_m3_prev=np.zeros((num_cells, 2), dtype=np.float32),
                 interception_storage_prev=np.zeros(num_cells, dtype=np.float32),
-                soil_enthalpy_J_per_m2_prev=np.zeros((6, num_cells), dtype=np.float32),
+                soil_enthalpy_J_per_m2_prev=np.zeros((num_cells, 6), dtype=np.float32),
                 deep_soil_temperature_C_prev=np.zeros(num_cells, dtype=np.float32),
                 wetting_front_depth_prev=np.zeros(num_cells, dtype=np.float32),
                 wetting_front_suction_head_prev=np.zeros(num_cells, dtype=np.float32),
@@ -420,14 +420,14 @@ def test_check_land_surface_water_negative_runoff(tmp_path: Path) -> None:
         with pytest.raises(AssertionError, match="Negative runoff detected"):
             land_surface._check_land_surface_water(
                 land_surface_inputs=mock_inputs,
-                water_content_m_prev=np.full((6, num_cells), 0.1, dtype=np.float32),
+                water_content_m_prev=np.full((num_cells, 6), 0.1, dtype=np.float32),
                 topwater_m_prev=np.zeros(num_cells, dtype=np.float32),
                 snow_water_equivalent_prev=np.zeros((num_cells, 2), dtype=np.float64),
                 liquid_water_in_snow_prev=np.zeros((num_cells, 2), dtype=np.float64),
                 snow_enthalpy_J_per_m2_prev=np.zeros((num_cells, 2), dtype=np.float32),
                 snow_density_kg_per_m3_prev=np.zeros((num_cells, 2), dtype=np.float32),
                 interception_storage_prev=np.zeros(num_cells, dtype=np.float32),
-                soil_enthalpy_J_per_m2_prev=np.zeros((6, num_cells), dtype=np.float32),
+                soil_enthalpy_J_per_m2_prev=np.zeros((num_cells, 6), dtype=np.float32),
                 deep_soil_temperature_C_prev=np.zeros(num_cells, dtype=np.float32),
                 wetting_front_depth_prev=np.zeros(num_cells, dtype=np.float32),
                 wetting_front_suction_head_prev=np.zeros(num_cells, dtype=np.float32),
@@ -466,14 +466,14 @@ def test_check_land_surface_water_imbalance(tmp_path: Path) -> None:
         ):
             land_surface._check_land_surface_water(
                 land_surface_inputs=mock_inputs,
-                water_content_m_prev=np.full((6, num_cells), 0.1, dtype=np.float32),
+                water_content_m_prev=np.full((num_cells, 6), 0.1, dtype=np.float32),
                 topwater_m_prev=np.zeros(num_cells, dtype=np.float32),
                 snow_water_equivalent_prev=np.zeros((num_cells, 2), dtype=np.float64),
                 liquid_water_in_snow_prev=np.zeros((num_cells, 2), dtype=np.float64),
                 snow_enthalpy_J_per_m2_prev=np.zeros((num_cells, 2), dtype=np.float32),
                 snow_density_kg_per_m3_prev=np.zeros((num_cells, 2), dtype=np.float32),
                 interception_storage_prev=np.zeros(num_cells, dtype=np.float32),
-                soil_enthalpy_J_per_m2_prev=np.zeros((6, num_cells), dtype=np.float32),
+                soil_enthalpy_J_per_m2_prev=np.zeros((num_cells, 6), dtype=np.float32),
                 deep_soil_temperature_C_prev=np.zeros(num_cells, dtype=np.float32),
                 wetting_front_depth_prev=np.zeros(num_cells, dtype=np.float32),
                 wetting_front_suction_head_prev=np.zeros(num_cells, dtype=np.float32),

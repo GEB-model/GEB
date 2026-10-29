@@ -7,7 +7,6 @@ Two checks are performed:
    (float32 only; no threshold assertion, purely diagnostic).
 """
 
-import time
 from pathlib import Path
 
 import numpy as np
@@ -261,44 +260,3 @@ def test_padding_identity(error_case_path: Path) -> None:
         assert np.array_equal(ref_trimmed, pad_trimmed), (
             f"In-place input '{field}' differs between reference and padded runs."
         )
-
-
-def test_padding_speed(error_case_path: Path) -> None:
-    """Print wall-clock timing for padded vs unpadded runs (float32 only).
-
-    No timing threshold is asserted; this test always passes.  It is intended
-    to be run manually or in CI to detect regressions in throughput.
-
-    The function is JIT-compiled by Numba, so we warm up the cache with a
-    small call before benchmarking.
-    """
-    # Warm up Numba JIT cache with a single cell before timing.
-    warmup_inputs = _load_and_tile(error_case_path, 1)
-    land_surface_model(**warmup_inputs)
-
-    # Use 1009 cells (prime, not a multiple of 16) for a realistic benchmark.
-    num_cells = 1009
-    inputs_unpadded = _load_and_tile(error_case_path, num_cells)
-
-    # --- Unpadded run ---
-    inputs_run = _deep_copy_inputs(inputs_unpadded)
-    t_start = time.perf_counter()
-    land_surface_model(**inputs_run)
-    t_unpadded = time.perf_counter() - t_start
-
-    # --- Padded run ---
-    inputs_run_padded_base = _deep_copy_inputs(inputs_unpadded)
-    padded_nt = _pad_hru_arrays(LandSurfaceInputs(**inputs_run_padded_base))
-    # Make an independent copy so the JIT sees the same memory layout.
-    padded_inputs_run = _deep_copy_inputs(dict(padded_nt._asdict()))
-    t_start = time.perf_counter()
-    land_surface_model(**padded_inputs_run)
-    t_padded = time.perf_counter() - t_start
-
-    num_padded_cells = padded_nt.slope_m_per_m.shape[0]
-    print(
-        f"\n[padding speed] num_cells={num_cells}, padded_to={num_padded_cells}\n"
-        f"  unpadded : {t_unpadded * 1000:.1f} ms\n"
-        f"  padded   : {t_padded * 1000:.1f} ms\n"
-        f"  overhead : {(t_padded - t_unpadded) / t_unpadded * 100:+.1f}%"
-    )

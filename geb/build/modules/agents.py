@@ -2447,8 +2447,10 @@ class Agents(BuildModelBase):
             name="agents/farmers/discount_rate",
         )
 
-        interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
-        self.set_array(interest_rate, name="agents/farmers/interest_rate")
+        interest_rate_array: np.ndarray = np.full(
+            n_farmers, interest_rate, dtype=np.float32
+        )
+        self.set_array(interest_rate_array, name="agents/farmers/interest_rate")
 
     @build_method(depends_on=["setup_hydrography"], required=True)
     def setup_flood_protection_standards(self) -> None:

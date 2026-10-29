@@ -57,7 +57,7 @@ SKILL_SCORE_PLOT_CONFIGS: tuple[dict[str, object], ...] = (
         "label": "KGE",
         "ylim": (-1.0, 1.0),
         "cmap": "RdYlGn",
-        "vmin": -1.0,
+        "vmin": -0.5,
         "vmax": 1.0,
     },
     {
@@ -89,7 +89,7 @@ SKILL_SCORE_PLOT_CONFIGS: tuple[dict[str, object], ...] = (
         "label": "NSE",
         "ylim": (-1.0, 1.0),
         "cmap": "RdYlGn",
-        "vmin": -1.0,
+        "vmin": -0.5,
         "vmax": 1.0,
     },
     {
@@ -128,7 +128,8 @@ def calculate_discharge_metrics(
         DischargeMetrics with KGE, modified KGE, KGE correlation/bias/variability
         components, NSE, squared Pearson correlation r² (stored as `R2`), RMSE,
         and RRMSE; all NaN when there are fewer than 2 valid pairs. RMSE is in
-        m3/s; all other metrics are dimensionless.
+        m3/s; all other metrics are dimensionless. All calculated metrics are
+        rounded to 4 decimal places.
 
     """
     discharge_columns: list[str] = [
@@ -191,16 +192,16 @@ def calculate_discharge_metrics(
     rrmse: float = rmse / observed_std if observed_std > 0 else float("nan")
 
     return DischargeMetrics(
-        KGE=kge,
-        KGE_modified=modified_kge,
-        KGE_correlation=correlation,
-        KGE_bias_ratio=bias_ratio,
-        KGE_variability_ratio=variability_ratio,
-        NSE=nse,
+        KGE=round(kge, 4),
+        KGE_modified=round(modified_kge, 4),
+        KGE_correlation=round(correlation, 4),
+        KGE_bias_ratio=round(bias_ratio, 4),
+        KGE_variability_ratio=round(variability_ratio, 4),
+        NSE=round(nse, 4),
         # R2 stores Pearson r², not the coefficient of determination.
-        R2=correlation**2,
-        RMSE=rmse,
-        RRMSE=rrmse,
+        R2=round(correlation**2, 4),
+        RMSE=round(rmse, 4),
+        RRMSE=round(rrmse, 4),
     )
 
 
@@ -250,3 +251,33 @@ def use_daily_discharge_scores(station_scores: pd.DataFrame) -> None:
         daily_column: str = f"{metric_name}_daily"
         if daily_column in station_scores.columns:
             station_scores[metric_name] = station_scores[daily_column]
+
+
+def use_native_discharge_scores(station_scores: pd.DataFrame) -> None:
+    """Copy native observation-frequency scores to unsuffixed columns for the dashboard.
+
+    For stations with an hourly observation frequency, the hourly skill scores
+    are copied to the unsuffixed metric columns (e.g., KGE). For daily
+    stations, the daily skill scores are copied.
+
+    Args:
+        station_scores: Discharge evaluation table modified in place.
+    """
+    if station_scores.empty:
+        return
+    for metric_name in DischargeMetrics._fields:
+        hourly_col: str = f"{metric_name}_hourly"
+        daily_col: str = f"{metric_name}_daily"
+
+        def _get_native_value(row: pd.Series) -> float:
+            freq: str = str(row.get("observation_frequency", ""))
+            if freq == "hourly" and hourly_col in row and pd.notna(row[hourly_col]):
+                return float(row[hourly_col])
+            if freq == "daily" and daily_col in row and pd.notna(row[daily_col]):
+                return float(row[daily_col])
+            if metric_name in row and pd.notna(row[metric_name]):
+                return float(row[metric_name])
+            return float("nan")
+
+        native_scores: pd.Series = station_scores.apply(_get_native_value, axis=1)
+        station_scores[metric_name] = native_scores
