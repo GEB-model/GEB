@@ -13,7 +13,7 @@ import time
 import warnings
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -30,9 +30,9 @@ from pyflwdir.dem import fill_depressions
 from pyproj import CRS
 from rioxarray.merge import merge_arrays
 from scipy.ndimage import binary_dilation, value_indices
-from shapely import line_locate_point
-from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point
-from shapely.ops import nearest_points
+from shapely import line_locate_point, unary_union
+from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point, shape
+from shapely.ops import linemerge, nearest_points
 from tqdm import tqdm
 
 from geb.geb_types import (
@@ -244,7 +244,6 @@ class SFINCSRootModel:
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
-        setup_river_outflow_boundary: bool = True,
         outflow_boundary_width_m: float = 500.0,
         maximum_elevation_for_coastal_boundary_cells_m: float = 3.0,
         initial_water_level: float | None = 0.0,
@@ -266,7 +265,6 @@ class SFINCSRootModel:
             coastal: Whether to set up coastal boundary conditions. Defaults to False.
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition cells.
-            setup_river_outflow_boundary: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
             outflow_boundary_width_m: The width of the outflow boundary condition in meters. Defaults to 500 m.
             maximum_elevation_for_coastal_boundary_cells_m: The maximum elevation for cells to be considered as coastal boundary condition cells. Defaults to 3 m.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
@@ -528,62 +526,63 @@ class SFINCSRootModel:
             )
             self.logger.info("Setting up river outflow boundary conditions...")
             time_start = time.perf_counter()
-            if setup_river_outflow_boundary:
-                outflow_points = self.rivers[self.rivers["is_outflow_boundary"]][
-                    "outflow_point_xy"
-                ]
-                assert len(outflow_points) > 0, "No outflow points found for rivers"
-                outflow_points = gpd.GeoDataFrame(
-                    geometry=gpd.points_from_xy(
-                        outflow_points.apply(lambda xy: xy[0]),
-                        outflow_points.apply(lambda xy: xy[1]),
-                    ),
-                    crs=self.crs,
-                )
-                outflow_points = outflow_points.to_crs(self.utm_zone)
-                outflow_points.geometry = outflow_points.buffer(
-                    (self.outflow_boundary_width_m / 2) * 1.1
-                ).to_crs(self.crs)
+            outflow_points = self.rivers[self.rivers["is_outflow_boundary"]][
+                "outflow_point_xy"
+            ]
+            assert len(outflow_points) > 0, "No outflow points found for rivers"
+            outflow_points = gpd.GeoDataFrame(
+                geometry=gpd.points_from_xy(
+                    outflow_points.apply(lambda xy: xy[0]),
+                    outflow_points.apply(lambda xy: xy[1]),
+                ),
+                crs=self.crs,
+            )
+            outflow_points = outflow_points.to_crs(self.utm_zone)
+            outflow_points.geometry = outflow_points.buffer(
+                (self.outflow_boundary_width_m / 2) * 1.1
+            ).to_crs(self.crs)
 
-                sf.mask.create_active(
-                    include_polygon=outflow_points,
-                    all_touched=False,
-                    reset_mask=False,
-                )
+            sf.mask.create_active(
+                include_polygon=outflow_points,
+                all_touched=False,
+                reset_mask=False,
+            )
 
-                # create polygon from mask
-                area = list(
-                    rasterio.features.shapes(
-                        self.mask,
-                        transform=self.mask.rio.transform(),
-                        connectivity=8,
-                        mask=self.mask,
-                    )
+            # create polygon from mask
+            area = list(
+                rasterio.features.shapes(
+                    self.mask,
+                    transform=self.mask.rio.transform(),
+                    connectivity=8,
+                    mask=self.mask,
                 )
-                area = gpd.GeoDataFrame.from_features(
-                    [
-                        {"geometry": geom, "properties": {"value": int(value)}}
-                        for geom, value in area
-                    ],
-                    crs=self.mask.rio.crs,
-                )
-                if len(area) > 1:
-                    # remove isolated cells by keeping only the largest polygon
-                    area["area"] = area.geometry.area
-                    area = area.sort_values("area", ascending=False).iloc[0:1]
-                    area = area.drop(columns=["area"])
-                    # raise ValueError(
-                    #     "Calculated outflow area is not a single polygon, cannot calculate outflow conditions"
-                    # )
+            )
+            area = gpd.GeoDataFrame.from_features(
+                [
+                    {"geometry": geom, "properties": {"value": int(value)}}
+                    for geom, value in area
+                ],
+                crs=self.mask.rio.crs,
+            )
+            if len(area) > 1:
+                # remove isolated cells by keeping only the largest polygon
+                area["area"] = area.geometry.area
+                area = area.sort_values("area", ascending=False).iloc[0:1]
+                area = area.drop(columns=["area"])
+                # raise ValueError(
+                #     "Calculated outflow area is not a single polygon, cannot calculate outflow conditions"
+                # )
 
-                self.calculate_outflow_conditions(area=area)
+            self.calculate_outflow_conditions(area=area)
 
-                # must be performed BEFORE burning rivers.
-                self.setup_river_outflow_boundary()
+            # must be performed BEFORE burning rivers.
+            self.setup_river_outflow_boundary()
             time_setup_river_outflow = time.perf_counter() - time_start
             self.logger.info(
                 f"SFINCS model river outflow setup took {time_setup_river_outflow:.2f} seconds"
             )
+
+        self.setup_boundary_observation_lines()
 
         # We are only interested in flooding within the subbasins of interest.
         # This area of interest mask is used later to filter the flood maps.
@@ -746,6 +745,24 @@ class SFINCSRootModel:
                 )
                 sf.elevation.data["dep"] = burned_elv
                 sf.roughness.data["manning"] = burned_manning
+
+        if not rivers_to_burn.empty:
+            bed_elevation_grid: xr.DataArray = (
+                sf.subgrid.data["z_zmin"] if subgrid else self.elevation
+            )
+            for river_idx, river in self.rivers[
+                self.rivers["is_outflow_boundary"]
+                & (self.rivers["downstream_ID"] != -1)
+            ].iterrows():
+                outflow_col, outflow_row = coord_to_pixel(
+                    river["outflow_point_xy"],
+                    self.mask.rio.transform().to_gdal(),
+                )
+                self.rivers.at[river_idx, "outflow_elevation"] = (
+                    bed_elevation_grid[outflow_row, outflow_col].item() + river["depth"]
+                )
+
+        sf.write()
 
         write_geom(self.rivers, self.path / "rivers.geoparquet")
         write_geom(self.subbasins, self.path / "subbasins.geoparquet")
@@ -1024,9 +1041,8 @@ class SFINCSRootModel:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
-                            line_locate_point(river, outflow_point) - 0.000008983
-                            if self.is_geographic
-                            else 1.0
+                            line_locate_point(river, outflow_point)
+                            - (0.000008983 if self.is_geographic else 1.0)
                         )
                     )
                     if not isinstance(outflow_point, Point):
@@ -1133,9 +1149,8 @@ class SFINCSRootModel:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
-                            line_locate_point(river, outflow_point) - 0.000008983
-                            if self.is_geographic
-                            else 1.0
+                            line_locate_point(river, outflow_point)
+                            - (0.000008983 if self.is_geographic else 1.0)
                         )
                     )
                     if not isinstance(outflow_point, Point):
@@ -1156,10 +1171,6 @@ class SFINCSRootModel:
                             "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
                         )
 
-                outflow_elevation: float = self.elevation[
-                    outflow_row, outflow_col
-                ].item()
-                self.rivers.at[river_idx, "outflow_elevation"] = outflow_elevation
                 self.rivers.at[river_idx, "outflow_point_xy"] = np.array(
                     [
                         outflow_point.x,
@@ -1206,6 +1217,92 @@ class SFINCSRootModel:
 
             assert self.sfincs_model.grid_type == "regular"
             self.mask.values[outflow_mask] = SFINCS_WATER_LEVEL_BOUNDARY
+
+    def setup_boundary_observation_lines(self) -> None:
+        """Sets up observation lines (cross-sections) along the boundary interface.
+
+        Creates SFINCS cross-sections along the shared edges between active cells
+        and water-level boundary cells. Lines are oriented with active
+        cells on the right and boundary cells on the left so that outflow is
+        positive and inflow is negative.
+        """
+        transform = self.mask.rio.transform()
+        gdal_transform: tuple[float, float, float, float, float, float] = (
+            transform.to_gdal()
+        )
+        dx: float = abs(float(transform.a))
+        dy: float = abs(float(transform.e))
+
+        active_polygon = unary_union(
+            [
+                shape(geom)
+                for geom, _ in rasterio.features.shapes(
+                    (self.mask.values == 1).astype(np.uint8),
+                    mask=(self.mask.values == 1),
+                    transform=transform,
+                    connectivity=4,
+                )
+            ]
+        )
+        boundary_polygon = unary_union(
+            [
+                shape(geom)
+                for geom, _ in rasterio.features.shapes(
+                    (self.mask.values == SFINCS_WATER_LEVEL_BOUNDARY).astype(np.uint8),
+                    mask=(self.mask.values == SFINCS_WATER_LEVEL_BOUNDARY),
+                    transform=transform,
+                    connectivity=4,
+                )
+            ]
+        )
+
+        shared_boundary = active_polygon.boundary.intersection(
+            boundary_polygon.boundary
+        )
+        if isinstance(shared_boundary, LineString):
+            raw_lines: list[LineString] = [shared_boundary]
+        else:
+            merged_lines = linemerge(
+                [geom for geom in shared_boundary.geoms if isinstance(geom, LineString)]
+            )
+            raw_lines = (
+                [merged_lines]
+                if isinstance(merged_lines, LineString)
+                else list(merged_lines.geoms)
+            )
+
+        oriented_lines: list[LineString] = []
+        for line in raw_lines:
+            coords = list(line.coords)
+            x0, y0 = coords[0]
+            x1, y1 = coords[1]
+            seg_dx: float = x1 - x0
+            seg_dy: float = y1 - y0
+            seg_len: float = math.hypot(seg_dx, seg_dy)
+            ux: float = seg_dx / seg_len
+            uy: float = seg_dy / seg_len
+
+            # Step half a cell along the first edge and half a cell to its left
+            # to sample the adjacent pixel center on the left side of the line.
+            left_x: float = x0 + 0.5 * (ux - uy) * dx
+            left_y: float = y0 + 0.5 * (uy + ux) * dy
+            col_left, row_left = coord_to_pixel((left_x, left_y), gdal_transform)
+
+            # Reverse the line when the active cell is on the left so active cells
+            # are always on the right (positive discharge = outflow).
+            if self.mask.values[row_left, col_left] == 1:
+                line = LineString(coords[::-1])
+            oriented_lines.append(line)
+
+        observation_lines: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            geometry=oriented_lines,
+            crs=self.crs,
+            index=pd.Index([f"boundary_{i + 1}" for i in range(len(oriented_lines))]),
+        )
+        self.sfincs_model.cross_sections.create(
+            locations=observation_lines,
+            merge=False,
+        )
 
     def get_flood_plain(
         self, maximum_height_above_nearest_drainage_m: float = 30.0
@@ -1997,7 +2094,6 @@ class SFINCSSimulation:
         spinup_seconds: int = 86400,
         write_figures: bool = False,
         flood_map_output_interval_seconds: int | None = None,
-        setup_river_outflow: bool = True,
     ) -> None:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
@@ -2010,7 +2106,6 @@ class SFINCSSimulation:
             write_figures: Whether to generate and save figures for the model. Defaults to False.
             flood_map_output_interval_seconds: The interval in seconds at which to output flood maps. Defaults to None (15 minutes).
                 None means no output.
-            setup_river_outflow: Whether to set up river outflow boundary conditions. Defaults to True.
 
         Raises:
             ValueError: If flood_map_output_interval_seconds is not None when exporting final intensity.
@@ -2078,8 +2173,7 @@ class SFINCSSimulation:
         self.total_runoff_volume_m3: float = 0.0
         self.total_discharge_volume_m3: float = 0.0
 
-        if setup_river_outflow:
-            self.set_river_outflow_boundary_condition()
+        self.set_river_outflow_boundary_condition()
 
         self.inflow_was_set = False
 
@@ -2242,7 +2336,9 @@ class SFINCSSimulation:
         # discard it
         self.total_discharge_volume_m3 += (
             timeseries[:-1].sum(axis=1)
-            * (timeseries.index[1:] - timeseries.index[:-1]).total_seconds()
+            * cast(
+                pd.TimedeltaIndex, timeseries.index[1:] - timeseries.index[:-1]
+            ).total_seconds()
         ).sum()
 
         self.print_forcing_volume()
@@ -2298,8 +2394,11 @@ class SFINCSSimulation:
             time=slice(self.event.start_time, self.event.end_time)
         )
 
-        # mask out all basins that are not in the model
-        mask: TwoDArrayBool = np.isin(basin_ids, self.sfincs_root_model.subbasins.index)
+        # mask out all basins that are not active in the model
+        active_rivers = self.sfincs_root_model.active_rivers[
+            ~self.sfincs_root_model.active_rivers["is_downstream_outflow"]
+        ]
+        mask: TwoDArrayBool = np.isin(basin_ids, active_rivers.index)
         runoff_m = xr.where(mask, runoff_m, 0.0)  # set runoff to 0 outside model basins
         river_ids_no_waterbodies_removed = np.where(
             mask, river_ids_no_waterbodies_removed, -1
@@ -2583,13 +2682,13 @@ class SFINCSSimulation:
         return flood_map
 
     def get_flood_volume(self, flood_depth: xr.DataArray) -> float:
-        """Compute the total flood volume from the flood depth map.
+        """Compute the total flood volume on active cells from the flood depth map.
 
         Args:
-            flood_depth: An xarray DataArray containing the flood depth.
+            flood_depth: An xarray DataArray containing the flood depth (meters).
 
         Returns:
-            The total flood volume in cubic meters.
+            The total flood volume on active model cells in cubic meters.
 
         Raises:
             ValueError: If the model CRS is not defined.
@@ -2600,22 +2699,46 @@ class SFINCSSimulation:
         if self.sfincs_model.crs is None:
             raise ValueError("Model CRS is not defined.")
 
+        mask: xr.DataArray = self.sfincs_model.mask.data["mask"]
+
         # Calculate cell area based on the model's CRS
         if self.sfincs_model.crs.is_geographic:
-            cell_area: xr.DataArray = xr.full_like(
-                self.sfincs_model.mask.data["mask"], np.nan, dtype=np.float32
-            )
+            cell_area: xr.DataArray = xr.full_like(mask, np.nan, dtype=np.float32)
             height, width = cell_area.shape
             cell_area.values = calculate_cell_area_m2(
                 cell_area.rio.transform(), height, width
             )
         else:
             cell_area = xr.full_like(
-                self.sfincs_model.mask.data["mask"],
-                math.prod(self.sfincs_model.mask.data["mask"].rio.resolution()),
+                mask,
+                math.prod(mask.rio.resolution()),
                 dtype=np.float32,
             )
-        return (flood_depth * cell_area).sum().item()
+
+        # Only include active cells (mask == 1), excluding water-level boundary cells (mask == 2).
+        return (flood_depth.where(mask == 1) * cell_area).sum().item()
+
+    def get_outflow_volume(self) -> float:
+        """Compute the net water volume that flowed out across the boundary observation lines.
+
+        Returns:
+            Net outflow volume across the domain boundary in cubic meters. Positive
+            values indicate net outflow; negative values indicate net inflow.
+        """
+        his_file: Path = self.path / "sfincs_his.nc"
+        with xr.open_dataset(his_file) as ds_his:
+            discharge_m3_per_s: xr.DataArray = ds_his["crosssection_discharge"]
+            time_seconds: npt.NDArray[np.float64] = (
+                (discharge_m3_per_s.time - discharge_m3_per_s.time[0])
+                .values.astype("timedelta64[s]")
+                .astype(np.float64)
+            )
+            volume_per_cross_section_m3: npt.NDArray[np.float64] = np.trapezoid(
+                discharge_m3_per_s.values.astype(np.float64),
+                time_seconds,
+                axis=0,
+            )
+            return float(np.sum(volume_per_cross_section_m3))
 
     def cleanup(self) -> None:
         """Cleans up the simulation directory by removing temporary files."""

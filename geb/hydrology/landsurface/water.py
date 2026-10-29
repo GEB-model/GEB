@@ -1332,9 +1332,7 @@ def get_bubbling_pressure_m_positive(
         - 0.00855375 * clay**2 * thetas**2
         + 0.50028060 * thetas**2 * clay
     ).astype(np.float32)
-    return bubbling_pressure_cm / np.float32(
-        100.0
-    )  # convert from cm to m  # ty:ignore[invalid-return-type]
+    return bubbling_pressure_cm / np.float32(100.0)  # convert from cm to m  # ty:ignore[invalid-return-type]
 
 
 def get_pore_size_index_brakensiek(

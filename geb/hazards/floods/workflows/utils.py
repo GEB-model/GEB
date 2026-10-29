@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime
 from os.path import isfile, join
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -430,7 +430,7 @@ def create_hydrograph_from_discharge_shape(
     for time, above in above_lower_mask.items():
         if above and not in_event:
             in_event = True
-            event_start = time
+            event_start = cast(pd.Timestamp, time)
         elif not above and in_event:
             in_event = False
             event_slice = discharge_series[event_start:time]

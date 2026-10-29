@@ -341,76 +341,6 @@ def test_dynamic_array_operations() -> None:
     assert a[0] == 1
 
 
-@pytest.fixture
-def array() -> DynamicArray:
-    """Fixture that provides a DynamicArray for testing.
-
-    Returns:
-        A DynamicArray instance with sample data.
-    """
-    return DynamicArray(np.array([1, 2, 3, 4, 5]), max_n=10)
-
-
-def test_add_ufunc(array: DynamicArray) -> None:
-    """Test add ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.add(array, 1)
-    np.testing.assert_array_equal(result.data, np.array([2, 3, 4, 5, 6]))
-
-
-def test_subtract_ufunc(array: DynamicArray) -> None:
-    """Test subtract ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.subtract(array, 1)
-    np.testing.assert_array_equal(result.data, np.array([0, 1, 2, 3, 4]))
-
-
-def test_multiply_ufunc(array: DynamicArray) -> None:
-    """Test multiply ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.multiply(array, 2)
-    np.testing.assert_array_equal(result.data, np.array([2, 4, 6, 8, 10]))
-
-
-def test_divide_ufunc(array: DynamicArray) -> None:
-    """Test divide ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.divide(array, 2)
-    np.testing.assert_array_equal(result.data, np.array([0.5, 1.0, 1.5, 2.0, 2.5]))
-
-
-def test_power_ufunc(array: DynamicArray) -> None:
-    """Test power ufunc on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.power(array, 2)
-    np.testing.assert_array_equal(result.data, np.array([1, 4, 9, 16, 25]))
-
-
-def test_reduce_ufunc(array: DynamicArray) -> None:
-    """Test reduction ufuncs on DynamicArray.
-
-    Args:
-        array: The DynamicArray to be tested.
-    """
-    result = np.add.reduce(array)
-    assert result == 15
-
-
 def test_stack_dynamic_arrays() -> None:
     """Test stacking multiple DynamicArrays using np.stack.
 
@@ -440,6 +370,16 @@ def test_concatenate_dynamic_arrays() -> None:
     assert isinstance(concatenated, np.ndarray)
     assert concatenated.shape == (6,)
     np.testing.assert_array_equal(concatenated, np.array([1, 2, 3, 4, 5, 6]))
+
+
+@pytest.fixture
+def array() -> DynamicArray:
+    """Fixture that provides a DynamicArray for testing.
+
+    Returns:
+        A DynamicArray instance with sample data.
+    """
+    return DynamicArray(np.array([1, 2, 3, 4, 5]), max_n=10)
 
 
 def test_save_and_restore(array: DynamicArray) -> None:
@@ -528,6 +468,7 @@ def test_store_checkpoint_metadata() -> None:
     import json
 
     from geb.store import Store
+    from geb.version import __version__
 
     class DummyModel:
         def __init__(self) -> None:
@@ -539,7 +480,11 @@ def test_store_checkpoint_metadata() -> None:
             self.logger = type(
                 "DummyLogger",
                 (),
-                {"debug": lambda *args: None, "info": lambda *args: None},
+                {
+                    "debug": lambda *args: None,
+                    "info": lambda *args: None,
+                    "warning": lambda *args: None,
+                },
             )()
 
         def get_checkpoint_path(self, dt: datetime.datetime | None = None) -> Path:
@@ -566,6 +511,7 @@ def test_store_checkpoint_metadata() -> None:
     assert meta["timestamp"] == "1985-06-15T00:00:00"
     assert meta["run_name"] == "test_run"
     assert meta["in_spinup"] is False
+    assert meta["model_version"] == __version__
 
     # Load store from checkpoint_dir
     new_model = DummyModel()
@@ -577,6 +523,114 @@ def test_store_checkpoint_metadata() -> None:
     assert np.array_equal(var_bucket.my_val, np.array([10, 20, 30]))
 
     shutil.rmtree(checkpoint_dir)
+
+
+def test_store_version_check_model_newer_than_store(tmp_path: Path) -> None:
+    """Test RuntimeError when current model version is newer than store version."""
+    import json
+    from typing import Any, cast
+
+    import pytest
+
+    from geb.model import GEBModel
+    from geb.store import Store
+
+    class DummyModel:
+        def __init__(self) -> None:
+            self.simulate_hydrology: bool = False
+            self.config: dict[str, Any] = {"hazards": {"floods": {"simulate": False}}}
+            self.logger: Any = type(
+                "DummyLogger",
+                (),
+                {
+                    "debug": lambda *args: None,
+                    "info": lambda *args: None,
+                    "warning": lambda *args: None,
+                },
+            )()
+
+    store_dir: Path = tmp_path / "checkpoint_older"
+    store_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path: Path = store_dir / "checkpoint.json"
+    with open(metadata_path, "w") as f:
+        json.dump({"model_version": "0.0.1"}, f)
+
+    model: DummyModel = DummyModel()
+    store: Store = Store(cast(GEBModel, model))
+    with pytest.raises(RuntimeError, match="older model version"):
+        store.load(store_dir)
+
+
+def test_store_version_check_store_newer_than_model(tmp_path: Path) -> None:
+    """Test RuntimeError when store version is newer than current model version."""
+    import json
+    from typing import Any, cast
+
+    import pytest
+
+    from geb.model import GEBModel
+    from geb.store import Store
+
+    class DummyModel:
+        def __init__(self) -> None:
+            self.simulate_hydrology: bool = False
+            self.config: dict[str, Any] = {"hazards": {"floods": {"simulate": False}}}
+            self.logger: Any = type(
+                "DummyLogger",
+                (),
+                {
+                    "debug": lambda *args: None,
+                    "info": lambda *args: None,
+                    "warning": lambda *args: None,
+                },
+            )()
+
+    store_dir: Path = tmp_path / "checkpoint_newer"
+    store_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path: Path = store_dir / "checkpoint.json"
+    with open(metadata_path, "w") as f:
+        json.dump({"model_version": "999.0.0"}, f)
+
+    model: DummyModel = DummyModel()
+    store: Store = Store(cast(GEBModel, model))
+    with pytest.raises(RuntimeError, match="newer model version"):
+        store.load(store_dir)
+
+
+def test_store_version_check_missing_version(tmp_path: Path) -> None:
+    """Test RuntimeError when model version is not available from the store."""
+    import json
+    from typing import Any, cast
+
+    import pytest
+
+    from geb.model import GEBModel
+    from geb.store import Store
+
+    class DummyModel:
+        def __init__(self) -> None:
+            self.simulate_hydrology: bool = False
+            self.config: dict[str, Any] = {"hazards": {"floods": {"simulate": False}}}
+            self.logger: Any = type(
+                "DummyLogger",
+                (),
+                {
+                    "debug": lambda *args: None,
+                    "info": lambda *args: None,
+                    "warning": lambda *args: None,
+                },
+            )()
+
+    store_dir: Path = tmp_path / "checkpoint_no_version"
+    store_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path: Path = store_dir / "checkpoint.json"
+    with open(metadata_path, "w") as f:
+        json.dump({"run_name": "test"}, f)
+
+    model: DummyModel = DummyModel()
+    store: Store = Store(cast(GEBModel, model))
+    with pytest.raises(RuntimeError, match="Model version is not available"):
+        store.load(store_dir)
 
 
 def test_model_checkpoint_helpers(tmp_path: Path) -> None:

@@ -1,5 +1,7 @@
 """Tests for flood hazard functions."""
 
+from pathlib import Path
+
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -8,6 +10,9 @@ import pytest
 from geb.hazards.floods import group_subbasins
 
 from ..testconfig import output_folder
+
+output_folder_floods: Path = output_folder / "floods"
+output_folder_floods.mkdir(exist_ok=True, parents=True)
 
 
 @pytest.fixture
@@ -786,7 +791,7 @@ def test_group_subbasins(sample_river_graph: nx.DiGraph) -> None:
     rivers_xy.plot(column="group", categorical=True, markersize=5)
 
     plt.title("Subbasin Groups Based on Upstream Area")
-    plt.savefig(output_folder / "subbasin_groups.png")
+    plt.savefig(output_folder_floods / "subbasin_groups.png")
 
 
 def test_group_subbasins_large_threshold(

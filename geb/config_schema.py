@@ -199,8 +199,14 @@ class HazardsConfig(BaseModel):
 class RiverWidthParameters(BaseModel):
     """Parameters for river width calculation."""
 
-    default_alpha: float = Field(7.2, description="Default alpha parameter.")
-    beta: float = Field(0.5, description="Beta parameter.")
+    default_alpha: float = Field(
+        7.2,
+        description="Default alpha parameter for bankfull width = alpha * Q^beta.",
+    )
+    beta: float = Field(
+        0.5,
+        description="Beta parameter for bankfull width = alpha * Q^beta.",
+    )
 
 
 class RiverWidthConfig(BaseModel):
@@ -214,26 +220,21 @@ class RiverWidthConfig(BaseModel):
 class RiverDepthParameters(BaseModel):
     """Parameters for river depth calculation."""
 
-    c: float = Field(
-        description="Power law coefficient c for mean channel depth = c * Q^d."
-    )
-    d: float = Field(
-        description="Power law exponent d for mean channel depth = c * Q^d."
-    )
     min_depth_m: float = Field(
+        0.1,
         ge=0.0,
         description="Minimum allowable bankfull depth (m).",
     )
     shape_exponent: float = Field(
+        0.5,
         gt=0.0,
         description="Power-law cross-sectional shape exponent r (0.5 for parabolic channel).",
     )
     use_observed_width_as_bankfull: bool = Field(
         True,
         description=(
-            "Whether to use observed channel width directly as bankfull width and scale depth "
-            "accordingly using baseline expected channel width. If False, reverts to previous "
-            "machinery using reach-specific alpha for expected width."
+            "Whether to use observed channel width directly as bankfull width. If False, "
+            "reverts to using reach-specific alpha for expected width."
         ),
     )
 
@@ -250,7 +251,7 @@ class RetentionBasinsConfig(BaseModel):
     """Configuration for retention basins in routing."""
 
     release_threshold_factor: float = Field(
-        0.2,
+        0.85,
         description="Factor to multiply the activation threshold by to get the release threshold.",
     )
     activation_threshold_return_period_years: float = Field(
@@ -266,16 +267,29 @@ class RoutingConfig(BaseModel):
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
     )
-    minimum_river_slope_m_per_m: float = Field(
-        1e-4,
-        gt=0.0,
+    max_threads: int | None = Field(
+        None,
+        ge=1,
         description=(
-            "Minimum channel slope used to parameterize kinematic-wave routing (m/m)."
+            "Maximum number of CPU threads to allocate for the local inertial routing "
+            "substep solver. If None, automatically determined based on domain size, "
+            "available physical cores, and Slurm allocation."
         ),
     )
-    retention_basin_release_threshold_factor: float = Field(
-        0.9,
-        description="Factor to multiply the activation threshold by to get the release threshold.",
+    fix_river_geometry_after_spinup: bool = Field(
+        True,
+        description=(
+            "Whether to keep river geometry (channel width and depth) fixed after spinup. "
+            "If True, river geometry is only updated during the spinup period and remains fixed during the run."
+        ),
+    )
+    riverbed_hydraulic_conductivity_multiplier: float = Field(
+        0.1,
+        ge=0.0,
+        description=(
+            "Multiplier applied to underlying aquifer hydraulic conductivity "
+            "to calculate streambed infiltration conductivity."
+        ),
     )
     minimum_river_slope: float = Field(
         0.0001,
@@ -323,14 +337,20 @@ class KarstConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     capture_fraction: float = Field(
+        1.0,
         ge=0.0,
         le=1.0,
-        description="Fraction of runoff and interflow captured on karst land (0–1).",
+        description="Fraction of runoff and interflow captured on karst land below the swallowing ceiling (0–1).",
     )
     release_time_days: float = Field(
         gt=0.0,
         allow_inf_nan=False,
         description="Exponential release time (days): after this many dry days, exp(-1) of the initial storage remains (about 36.8%).",
+    )
+    vertical_conductivity_multiplier: float = Field(
+        10.0,
+        ge=1.0,
+        description="Multiplier for vertical saturated hydraulic conductivity in karst areas (>= 1.0).",
     )
 
 
@@ -821,6 +841,9 @@ class ParametersConfig(BaseModel):
     saturated_hydraulic_conductivity_multiplier: float = Field(
         description="Saturated hydraulic conductivity multiplier."
     )
+    vertical_saturated_hydraulic_conductivity_multiplier: float = Field(
+        description="Vertical saturated hydraulic conductivity multiplier."
+    )
     groundwater_hydraulic_conductivity_multiplier: float = Field(
         description="Groundwater hydraulic conductivity multiplier."
     )
@@ -829,6 +852,10 @@ class ParametersConfig(BaseModel):
     interflow_multiplier: float = Field(description="Interflow multiplier.")
     variable_runoff_shape_beta_multiplier: float = Field(
         description="Scale factor for the variable runoff shape parameter beta."
+    )
+    runoff_concentration_factor: float = Field(
+        gt=0.0,
+        description="Multiplier for slope-dependent overland runoff concentration time using the Kerby (1959) overland flow method.",
     )
 
 

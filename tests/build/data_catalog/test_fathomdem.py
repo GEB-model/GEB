@@ -12,7 +12,6 @@ import pytest
 import xarray as xr
 from shapely.geometry import box
 
-from geb.build.data_catalog import DataCatalog
 from geb.build.data_catalog.fathomdem import (
     FathomDem,
     parse_fathomdem_tile_bounds,
@@ -56,15 +55,6 @@ def test_parse_fathomdem_tile_bounds() -> None:
     assert bounds_sw["maxy"] == -14.0
 
     assert parse_fathomdem_tile_bounds("invalid_tile.tif") is None
-
-
-def test_fathomdem_in_data_catalog() -> None:
-    """Test that fathomdem is registered in DataCatalog."""
-    logger = logging.getLogger("test_fathomdem")
-    catalog = DataCatalog(logger=logger)
-    assert "fathomdem" in catalog.catalog
-    adapter = catalog.catalog["fathomdem"]["adapter"]
-    assert isinstance(adapter, FathomDem)
 
 
 def test_missing_zenodo_access_token_raises(

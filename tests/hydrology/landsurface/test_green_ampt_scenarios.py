@@ -1,5 +1,6 @@
 """Tests for Green-Ampt infiltration scenarios."""
 
+from pathlib import Path
 from typing import NamedTuple
 
 import matplotlib.pyplot as plt
@@ -11,6 +12,9 @@ from geb.hydrology.landsurface.energy import (
 )
 from geb.hydrology.landsurface.water import generate_rainfall_lookup_table, infiltration
 from tests.testconfig import output_folder
+
+output_folder_green_ampt: Path = output_folder / "green_ampt"
+output_folder_green_ampt.mkdir(exist_ok=True, parents=True)
 
 
 class SimulationResults(NamedTuple):
@@ -250,7 +254,9 @@ def run_infiltration_simulation(
     ax.set_xlabel("Time (hours)")
     ax.legend()
 
-    plot_path = output_folder / f"green_ampt_{title.replace(' ', '_').lower()}.png"
+    plot_path = (
+        output_folder_green_ampt / f"green_ampt_{title.replace(' ', '_').lower()}.png"
+    )
     plt.tight_layout()
     plt.savefig(plot_path)
     plt.close()
@@ -499,7 +505,7 @@ def test_ga_full_column_saturation_processes() -> None:
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(output_folder / "green_ampt_intermittent_with_drainage.png")
+    plt.savefig(output_folder_green_ampt / "green_ampt_intermittent_with_drainage.png")
     plt.close()
 
 

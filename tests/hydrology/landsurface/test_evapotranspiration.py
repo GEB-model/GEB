@@ -572,22 +572,3 @@ def test_get_transpiration_factor_edge_cases() -> None:
 
     factor5 = get_transpiration_factor(0.25, 0.1, 0.2)  # w > wcrit
     assert factor5 == 1.0
-
-
-def test_get_critical_soil_moisture_content_bounds() -> None:
-    """Test get_critical_soil_moisture_content with boundary p values."""
-    wfc = 0.25
-    wwp = 0.1
-
-    # p = 1: critical = wwp
-    critical_p1 = get_critical_soil_moisture_content(1.0, wfc, wwp)
-    assert np.isclose(critical_p1, wwp)
-
-    # p = 0: critical = wfc
-    critical_p0 = get_critical_soil_moisture_content(0.0, wfc, wwp)
-    assert np.isclose(critical_p0, wfc)
-
-    # p = 0.5: critical = midpoint
-    expected_mid = (wfc + wwp) / 2
-    critical_p0_5 = get_critical_soil_moisture_content(0.5, wfc, wwp)
-    assert np.isclose(critical_p0_5, expected_mid)

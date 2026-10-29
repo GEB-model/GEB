@@ -18,7 +18,7 @@ import xarray as xr
 from dateutil.relativedelta import relativedelta
 from packaging.version import Version
 
-from geb import GEB_PACKAGE_DIR, __version__
+from geb import GEB_PACKAGE_DIR
 from geb.agents import Agents
 from geb.build.version_updates import get_and_maybe_do_version_updates
 from geb.hazards.driver import HazardDriver
@@ -28,6 +28,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Bucket, Store
+from geb.version import __version__
 from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
@@ -843,6 +844,7 @@ class GEBModel(Module):
             self.forcing: Forcing = Forcing(self)
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
+            self.hydrology.runoff_concentrator.set_weights()
 
         self.report_folder = self.model.output_folder / "report"
 
@@ -1602,6 +1604,19 @@ class GEBModel(Module):
     def create_done_file(self) -> None:
         """Create a file to indicate that the model run or spinup is done."""
         (self.output_folder / "done.txt").touch()
+
+    @property
+    def completion_time(self) -> str | None:
+        """Get the completion timestamp of the model run or spinup if completed.
+
+        Returns:
+            Timestamp string if done, or None if not completed.
+        """
+        done_file: Path = self.output_folder / "done.txt"
+        if not done_file.exists():
+            return None
+        mtime: float = done_file.stat().st_mtime
+        return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
 
     @property
     def is_done(self) -> bool:
