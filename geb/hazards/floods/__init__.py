@@ -326,8 +326,7 @@ class Floods(Module):
 
         Raises:
             ValueError: If the forcing method is unknown.
-            ValueError: If subgrid is off or more than one DEM is configured, as the burned rivers
-                are detected in the subgrid of a single DEM.
+            ValueError: If subgrid is off, as the burned rivers are detected in the subgrid DEM.
         """
         # Save the flood depth to a zarr file
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
@@ -431,17 +430,10 @@ class Floods(Module):
             raise ValueError(
                 "Filling the rivers at the start of SFINCS requires hazards.floods.subgrid: true."
             )
-        # for now we use FATHOM or custom 1st choice DEM to fill the rivers.
-        # we ignore the 2nd DEM choice, as it is used for gap-filling and not for river burning.
-        if len(self.DEM_config) != 1:
-            raise ValueError(
-                "Filling the rivers at the start of SFINCS detects the burned rivers in a "
-                f"single DEM, but {len(self.DEM_config)} DEMs are configured."
-            )
         self.model.logger.info(
             set_river_initial_water_level(
                 simulation,
-                dem=self.DEM_config[0]["elevation"]["elevation"],
+                DEMs=self.DEM_config,
             )
         )
 

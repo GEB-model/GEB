@@ -6,23 +6,24 @@ from typing import Any
 import numpy as np
 import rasterio
 import xarray as xr
+from hydromt_sfincs.workflows import merge_multi_dataarrays
 
 
 def river_initial_water_level(
     root: Path,
-    dem: xr.DataArray,
+    DEMs: list[dict[str, Any]],
     grid_mask: xr.DataArray,
 ) -> xr.DataArray:
     """Create an initial water-level map from the unburned DEM in river cells.
 
-    The burned subgrid DEM is compared with the original DEM. River burning only
+    The burned subgrid DEM is compared with the unburned subgrid DEM. River burning only
     lowers the DEM, so every lowered subgrid pixel is a river pixel. For each SFINCS
-    cell containing river pixels, the minimum original DEM elevation at those pixels
+    cell containing river pixels, the minimum unburned subgrid DEM elevation at those pixels
     becomes the initial water level.
 
     Args:
         root: SFINCS model directory containing ``subgrid/dep_subgrid.tif``.
-        dem: Original DEM used to build the SFINCS subgrid (m).
+        DEMs: DEMs used to build the SFINCS subgrid, as configured for the hydrodynamic model.
         grid_mask: SFINCS active-cell mask, used as the output grid template.
 
     Returns:
@@ -33,6 +34,19 @@ def river_initial_water_level(
     """
     nmax, mmax = grid_mask.shape
     initial_level: xr.DataArray = xr.full_like(grid_mask, np.nan, dtype=np.float32)
+    # Same merge arguments as SFINCSRootModel.build passes to subgrid.create.
+    elevation_list: list[dict[str, Any]] = [
+        {
+            "da": DEM["elevation"]["elevation"],
+            "reproj_method": "bilinear",
+            **{
+                key: DEM[key]
+                for key in ("zmin", "zmax", "offset", "merge_method")
+                if key in DEM
+            },
+        }
+        for DEM in DEMs
+    ]
 
     with rasterio.open(root / "subgrid" / "dep_subgrid.tif") as burned_dem_file:
         if burned_dem_file.transform.e <= 0:
@@ -50,6 +64,10 @@ def river_initial_water_level(
         pixel_height: float = burned_dem_file.transform.e
         for row_start in range(0, nmax, 1000):
             row_end: int = min(row_start + 1000, nmax)
+            active_cells: np.ndarray = grid_mask.values[row_start:row_end] > 0
+            if not active_cells.any():
+                continue
+
             window: rasterio.windows.Window = rasterio.windows.Window(
                 0,
                 pixels_per_cell * row_start,
@@ -69,10 +87,28 @@ def river_initial_water_level(
                 + (np.arange(burned_dem.shape[1]) + 0.5) * pixel_width
             )
 
-            # Padded subgrid pixels outside DEM coverage stay NaN and cannot be rivers.
-            original_dem: np.ndarray = dem.reindex(
-                y=ys, x=xs, method="nearest", tolerance=pixel_width / 4
-            ).values.astype(np.float32)
+            window_grid: xr.DataArray = xr.DataArray(
+                np.zeros(burned_dem.shape, dtype=np.float32),
+                coords={"y": ys, "x": xs},
+                dims=("y", "x"),
+            )
+            window_grid.raster.set_crs(grid_mask.raster.crs)
+            active_pixels: np.ndarray = np.repeat(
+                np.repeat(active_cells, pixels_per_cell, axis=0),
+                pixels_per_cell,
+                axis=1,
+            )
+            with np.errstate(invalid="ignore"):
+                merged_dem: xr.DataArray = merge_multi_dataarrays(
+                    da_list=elevation_list,
+                    da_like=window_grid,
+                    interp_method="linear",
+                )
+                if np.isnan(merged_dem.values[active_pixels]).any():
+                    merged_dem = merged_dem.raster.interpolate_na(
+                        method="rio_idw", extrapolate=True
+                    )
+                original_dem: np.ndarray = merged_dem.values.astype(np.float32)
             river_pixels: np.ndarray = burned_dem < original_dem
             cell_shape: tuple[int, int, int, int] = (
                 row_end - row_start,
@@ -101,13 +137,13 @@ def river_initial_water_level(
 
 def set_river_initial_water_level(
     simulation: Any,
-    dem: xr.DataArray,
+    DEMs: list[dict[str, Any]],
 ) -> str:
     """Set SFINCS initial water levels from the unburned DEM in river cells.
 
     Args:
         simulation: SFINCS simulation with its HydroMT-SFINCS model initialized.
-        dem: Original DEM used to build the SFINCS subgrid (m).
+        DEMs: DEMs used to build the SFINCS subgrid, as configured for the hydrodynamic model.
 
     Returns:
         A short summary for the SFINCS log.
@@ -115,7 +151,7 @@ def set_river_initial_water_level(
     sfincs_model = simulation.sfincs_model
     initial_level: xr.DataArray = river_initial_water_level(
         root=simulation.root_path,
-        dem=dem,
+        DEMs=DEMs,
         grid_mask=sfincs_model.grid.mask,
     )
     filled_cells: int = int(initial_level.notnull().sum().item())
