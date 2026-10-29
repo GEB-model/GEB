@@ -71,17 +71,15 @@ class Hydrology:
         Returns:
             Path to the created dashboard, keyed by ``dashboard``.
         """
-        run_output_folder: Path = (
-            Path(self.model.config["general"]["output_folder"]) / run_name
-        )
+        run_output_folder: Path = Path(self.model.config["output_folder"]) / run_name
         return dashboard.create_discharge_dashboard(
             evaluation_folder=self.evaluate_discharge_output_folder,
             run_output_folder=run_output_folder,
             geometry_files=self.model.files["geom"],
             table_files=self.model.files["table"],
-            minimum_upstream_area_km2=self.model.config["hydrology"]["evaluation"][
-                "discharge"
-            ]["minimum_upstream_area_km2"],
+            minimum_upstream_area_km2=self.model.config["evaluation"]["discharge"][
+                "minimum_upstream_area_km2"
+            ],
             logger=self.model.logger,
             correct_discharge_observations=correct_discharge_observations,
             output_filename=output_filename,

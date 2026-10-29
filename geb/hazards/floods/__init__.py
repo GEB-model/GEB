@@ -173,11 +173,7 @@ class Floods(Module):
         super().__init__(model)
 
         self.model: GEBModel = model
-        self.config: dict[str, Any] = (
-            self.model.config["hazards"]["floods"]
-            if "floods" in self.model.config["hazards"]
-            else {}
-        )
+        self.config: dict[str, Any] = self.model.config["hazards"]["floods"]
 
         self.DEM_config: list[dict[str, Any]] = read_params(
             self.model.files["dict"]["hydrodynamics/DEM_config"]
@@ -573,7 +569,7 @@ class Floods(Module):
                 )  # log the start of the simulation
 
                 sfincs_simulation.run(
-                    gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
+                    gpu=self.config["SFINCS"]["gpu"],
                 )  # run the simulation
 
                 if event.export_max_intensity and event.export_final_intensity:
@@ -632,7 +628,7 @@ class Floods(Module):
 
         # This check is done to compute damages (using ERA5) only after multiverse is finished
         if self.model.multiverse_name is None:
-            if self.model.config["general"]["forecasts"]["use"]:
+            if self.model.config["forecasts"]["use"]:
                 print("Multiverse no longer active, now compute flood damages...")
             # Check if damage simulation is enabled before calculating damages
             if self.model.config["hazards"]["damage"]["simulate"]:
@@ -774,9 +770,7 @@ class Floods(Module):
                     all_rivers=region_rivers,
                     coastal=False,
                 )
-                _shape_config = self.config.get("hydrograph_shape", {})
-
-                spinup_name = self.model.config["general"]["spinup_name"]
+                spinup_name = self.model.config["spinup_name"]
                 output_root = self.model.report_folder.parent.parent
                 spinup_folder = (
                     output_root / spinup_name / "report" / "hydrology.routing"
@@ -807,9 +801,9 @@ class Floods(Module):
                     selection_strategy=self.config["selection_strategy"],
                     fixed_shape=self.config["fixed_shape"],
                     write_figures=self.config["write_figures"],
-                    hydrograph_shape=_shape_config.get("method", "triangular"),
-                    shape_window_days=_shape_config.get("window_days", 3.5),
-                    shape_tolerance=_shape_config.get("tolerance", 0.1),
+                    hydrograph_shape=self.config["hydrograph_shape"]["method"],
+                    shape_window_days=self.config["hydrograph_shape"]["window_days"],
+                    shape_tolerance=self.config["hydrograph_shape"]["tolerance"],
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
@@ -908,7 +902,7 @@ class Floods(Module):
             simulation = MultipleSFINCSSimulations(simulations=simulations)
             if simulations:
                 simulation.run(
-                    gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
+                    gpu=self.config["SFINCS"]["gpu"],
                 )
                 flood_depth_return_period: xr.DataArray = (
                     simulation.read_max_flood_depth(self.config["minimum_flood_depth"])
@@ -1029,7 +1023,7 @@ class Floods(Module):
         all_rivers = self.model.hydrology.routing.var.rivers
 
         # if spinup is requested, at least discard the first 10 years of data.
-        if run_name == self.model.config["general"]["spinup_name"]:
+        if run_name == self.model.config["spinup_name"]:
             assert run_name is not None
             discharge = get_discharge_per_river(
                 folder=self.model.report_folder.parent.parent
@@ -1078,7 +1072,7 @@ class Floods(Module):
         )
         all_rivers = self.model.hydrology.routing.var.rivers
 
-        spinup_name = self.model.config["general"]["spinup_name"]
+        spinup_name = self.model.config["spinup_name"]
         output_root = self.model.report_folder.parent.parent
         spinup_discharge = get_discharge_per_river(
             folder=output_root / spinup_name / "report" / "hydrology.routing",

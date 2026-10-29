@@ -267,7 +267,9 @@ class RunoffConcentrator(Module):
 
         self.lag_time_hours: int = lag_time_hours
         self.concentration_factor: float = float(
-            self.model.config["parameters"]["runoff_concentration_factor"]
+            self.model.config["hydrology"]["runoff_concentrator"][
+                "runoff_concentration_factor"
+            ]
         )
 
         if self.model.in_spinup:

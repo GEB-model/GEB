@@ -1,25 +1,23 @@
 inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
 
 ###
-# This section contains several general model settings.
-general:
-  ###
-  # model start time (YYYY-MM-DD).
-  start_time: 2000-01-01
-  ###
-  # model end time (YYYY-MM-DD).
-  end_time: 2023-12-30
-  # end_time: 2030-01-01
-  ###
-  # start of the spinup time (YYYY-MM-DD).
-  # spinup_time: 1999-01-01
-  # spinup_time: 1980-01-01
-  spinup_time: 1980-01-01
-  # spinup_time: 2020-01-01
-  ###
-  # base folder where to report output data to
-  region:
-    subbasin: 23011134
+# model start time (YYYY-MM-DD).
+start_time: 2000-01-01
+###
+# model end time (YYYY-MM-DD).
+end_time: 2023-12-30
+# end_time: 2030-01-01
+###
+# start of the spinup time (YYYY-MM-DD).
+# spinup_time: 1999-01-01
+# spinup_time: 1980-01-01
+spinup_time: 1980-01-01
+# spinup_time: 2020-01-01
+
+###
+# Model domain / region settings.
+region:
+  subbasin: 23011134
 hazards:
   floods:
     simulate: false
@@ -36,19 +34,6 @@ hazards:
     events:
       - start_time: 2021-07-12 09:00:00
         end_time: 2021-07-20 09:00:00
-
-parameters:
-  mannings_n_multiplier: 1.0
-  bankfull_discharge_multiplier: 1.0
-  crop_factor_multiplier: 1.0
-  saturated_hydraulic_conductivity_multiplier: 1.0
-  vertical_saturated_hydraulic_conductivity_multiplier: 1.0
-  groundwater_hydraulic_conductivity_multiplier: 1.0
-  reservoir_release_factor: 0.1
-  lake_outflow_multiplier: 1.0
-  interflow_multiplier: 1.0
-  variable_runoff_shape_beta_multiplier: 1.0
-  runoff_concentration_factor: 1.0
 
 report:
   hydrology.landsurface:
@@ -95,34 +80,34 @@ calibration:
       gaussian_indpb: 0.3
     parameters:
       mannings_n_multiplier:
-          variable: parameters.mannings_n_multiplier
+          variable: hydrology.routing.mannings_n_multiplier
           min: 0.5
           max: 2.0
       bankfull_discharge_multiplier:
-          variable: parameters.bankfull_discharge_multiplier
+          variable: hydrology.routing.bankfull_discharge_multiplier
           min: 0.5
           max: 2.0
       crop_factor_multiplier:
-          variable: parameters.crop_factor_multiplier
+          variable: hydrology.landsurface.crop_factor_multiplier
           min: 0.5
           max: 2.0
       variable_runoff_shape_beta_multiplier:
-          variable: parameters.variable_runoff_shape_beta_multiplier
+          variable: hydrology.landsurface.variable_runoff_shape_beta_multiplier
           min: 0.5
           max: 2.0
       saturated_hydraulic_conductivity_multiplier:
-          variable: parameters.saturated_hydraulic_conductivity_multiplier
+          variable: hydrology.landsurface.saturated_hydraulic_conductivity_multiplier
           min: 0.5
           max: 2.0
       groundwater_hydraulic_conductivity_multiplier:
-          variable: parameters.groundwater_hydraulic_conductivity_multiplier
+          variable: hydrology.groundwater.hydraulic_conductivity_multiplier
           min: 0.5
           max: 2.0
       reservoir_M_factor:
-          variable: agent_settings.reservoir_operators.reservoir_M_factor
+          variable: agents.reservoir_operators.reservoir_M_factor
           min: 0.05
           max: 0.4
       return_fraction:
-          variable: agent_settings.farmers.return_fraction
+          variable: agents.farmers.return_fraction
           min: 0.3
           max: 0.8

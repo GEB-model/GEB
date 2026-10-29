@@ -1,5 +1,9 @@
 # dev
 
+# v1.0.0b39
+- Cleaned model configuration. This requires manual updating of config if you use any custom configuration. Some works, but this was really needed for future-proofing.
+- Added experimental "geb run --with some.config.parameter" to run model with a specific configuration without changing to the config on disk.
+
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.
 - Modularize routing architecture into topology, geometry, solver, and kernel modules, with performance optimizations (precomputed lookup tables for $h^{4/3}$, fused kernels, multithreading, and reduced memory allocations).

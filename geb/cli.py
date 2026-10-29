@@ -1,6 +1,5 @@
 """Command line interface for GEB."""
 
-import datetime
 import functools
 import inspect
 import json
@@ -33,6 +32,7 @@ from geb.runner import (
     create_logger,
     init_fn,
     init_multiple_fn,
+    parse_override_value,
     run_model_with_method,
     set_fn,
     share_fn,
@@ -262,6 +262,13 @@ def click_run_options() -> Any:
 
         @universal_options
         @click.option(
+            "--with",
+            "-w",
+            "with_overrides",
+            multiple=True,
+            help="Override config values (key=value, same syntax as geb set). Can be repeated or provide multiple space-separated pairs.",
+        )
+        @click.option(
             "--save-checkpoint",
             "save_checkpoints",
             multiple=True,
@@ -283,17 +290,25 @@ def click_run_options() -> Any:
             default=SKIP_DONE_DEFAULT,
             help="Only run the method if the model is not already marked as done.",
         )
+        @click.pass_context
         @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def wrapper(ctx: click.Context, *args: Any, **kwargs: Any) -> Any:
             """Wrapper function for run options.
 
             Args:
+                ctx: Click context containing extra arguments.
                 *args: Positional arguments.
                 **kwargs: Keyword arguments.
 
             Returns:
                 The result of the wrapped function.
             """
+            extra_with: list[str] = list(kwargs.pop("with_overrides", ()))
+            if hasattr(ctx, "args"):
+                for arg in ctx.args:
+                    if "=" in arg:
+                        extra_with.append(arg)
+            kwargs["with_overrides"] = tuple(extra_with)
             return func(*args, **kwargs)
 
         return wrapper
@@ -301,11 +316,12 @@ def click_run_options() -> Any:
     return decorator
 
 
-@cli.command()
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click_run_options()
 def run(
     save_checkpoints: tuple[str, ...] = (),
     continue_from_checkpoint: str | None = None,
+    with_overrides: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> None:
     """Run model.
@@ -315,6 +331,7 @@ def run(
     Args:
         save_checkpoints: Checkpoint dates or 'end' to save checkpoints during or after run.
         continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
+        with_overrides: Config overrides to apply in-memory.
         **kwargs: Keyword arguments to pass to the run function.
 
     """
@@ -323,10 +340,12 @@ def run(
         method_args["save_checkpoints"] = save_checkpoints
     if continue_from_checkpoint is not None:
         method_args["continue_from_checkpoint"] = continue_from_checkpoint
-    run_model_with_method(method="run", method_args=method_args, **kwargs)
+    run_model_with_method(
+        method="run", method_args=method_args, with_overrides=with_overrides, **kwargs
+    )
 
 
-@cli.command()
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click_run_options()
 @click.option(
     "--multi",
@@ -351,6 +370,7 @@ def run_yearly(
     prefix: str,
     save_checkpoints: tuple[str, ...] = (),
     continue_from_checkpoint: str | None = None,
+    with_overrides: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> None:
     """Run model in yearly mode.
@@ -363,6 +383,7 @@ def run_yearly(
         prefix: Prefix for the output files.
         save_checkpoints: Checkpoint dates to save.
         continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
+        with_overrides: Config overrides to apply in-memory.
         **kwargs: Keyword arguments to pass to the run_yearly function.
 
     Raises:
@@ -383,7 +404,10 @@ def run_yearly(
 
     if not multi:
         run_model_with_method(
-            method="run_yearly", method_args=base_method_args, **kwargs
+            method="run_yearly",
+            method_args=base_method_args,
+            with_overrides=with_overrides,
+            **kwargs,
         )
         return
 
@@ -394,15 +418,17 @@ def run_yearly(
         run_model_with_method(
             method="run_yearly",
             method_args=args,
+            with_overrides=with_overrides,
             **kwargs,
         )
 
 
-@cli.command()
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click_run_options()
 def spinup(
     save_checkpoints: tuple[str, ...] = (),
     continue_from_checkpoint: str | None = None,
+    with_overrides: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> None:
     """Run model spinup.
@@ -412,6 +438,7 @@ def spinup(
     Args:
         save_checkpoints: Checkpoint dates to save checkpoints during spinup.
         continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
+        with_overrides: Config overrides to apply in-memory.
         **kwargs: Keyword arguments to pass to the spinup function.
 
     """
@@ -420,10 +447,15 @@ def spinup(
         method_args["save_checkpoints"] = save_checkpoints
     if continue_from_checkpoint is not None:
         method_args["continue_from_checkpoint"] = continue_from_checkpoint
-    run_model_with_method(method="spinup", method_args=method_args, **kwargs)
+    run_model_with_method(
+        method="spinup",
+        method_args=method_args,
+        with_overrides=with_overrides,
+        **kwargs,
+    )
 
 
-@cli.command()
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click.argument("method", required=True)
 @click.option(
     "--method-arg",
@@ -438,6 +470,7 @@ def exec(
     method_args_raw: tuple[str, ...],
     save_checkpoints: tuple[str, ...] = (),
     continue_from_checkpoint: str | None = None,
+    with_overrides: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> None:
     """Execute a specific method on the model.
@@ -447,6 +480,7 @@ def exec(
         method_args_raw: Arguments to pass to the method, as KEY=VALUE strings.
         save_checkpoints: Checkpoint dates to save.
         continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
+        with_overrides: Config overrides to apply in-memory.
         **kwargs: Keyword arguments to pass to the method.
 
     Raises:
@@ -466,7 +500,12 @@ def exec(
     if continue_from_checkpoint is not None:
         method_args["continue_from_checkpoint"] = continue_from_checkpoint
 
-    run_model_with_method(method=method, method_args=method_args, **kwargs)
+    run_model_with_method(
+        method=method,
+        method_args=method_args,
+        with_overrides=with_overrides,
+        **kwargs,
+    )
 
 
 def click_build_options(
@@ -610,45 +649,7 @@ def set(
     for arg in ctx.args:
         if "=" in arg:
             key, value = arg.split("=", 1)
-
-            # Try to convert value to appropriate type
-            def is_float(element: str) -> bool:
-                try:
-                    float(element)
-                    return True
-                except ValueError:
-                    return False
-
-            def is_date(element: str) -> bool:
-                try:
-                    datetime.date.fromisoformat(element)
-                    return True
-                except ValueError:
-                    return False
-
-            def is_datetime(element: str) -> bool:
-                try:
-                    datetime.datetime.fromisoformat(element)
-                    return True
-                except ValueError:
-                    return False
-
-            if value.isdigit():
-                value = int(value)
-            elif is_float(value):
-                value = float(value)
-            elif is_date(value):
-                value = datetime.date.fromisoformat(value)
-            elif is_datetime(value):
-                value = datetime.datetime.fromisoformat(value)
-            elif value.lower() == "true":
-                value = True
-            elif value.lower() == "false":
-                value = False
-            else:
-                value: str = value  # Keep as string if it cannot be converted to a more specific type
-
-            params[key] = value
+            params[key] = parse_override_value(value)
         else:
             click.echo(
                 f"Warning: Ignoring invalid argument '{arg}'. Expected format: key=value",

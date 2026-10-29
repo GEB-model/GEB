@@ -1423,7 +1423,7 @@ def create_multi_basin_configs(
 
         model_config: dict[str, Any] = {
             "inherits": relative_model_config,
-            "general": {"region": {"subbasin": cluster_subbasin_ids}},
+            "region": {"subbasin": cluster_subbasin_ids},
         }
         if total_basin_area_km2 is not None:
             model_config["basin"] = {"total_area_km2": round(total_basin_area_km2, 2)}

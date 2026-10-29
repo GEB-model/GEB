@@ -3,14 +3,17 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ForecastsConfig(BaseModel):
     """Configuration for forecasts."""
 
-    use: bool = Field(False, description="Whether to use forecasts.")
-    provider: str = Field("ECMWF", description="The forecast provider.")
+    use: bool = Field(..., description="Whether to use forecasts.")
+    provider: str = Field(..., description="The forecast provider.")
+    processing: Literal[
+        "merged_control_ensemble", "control_forecast", "probabilistic_forecast"
+    ] = Field(..., description="Forecast processing option.")
 
 
 class RegionConfig(BaseModel):
@@ -21,39 +24,11 @@ class RegionConfig(BaseModel):
     )
 
 
-class GeneralConfig(BaseModel):
-    """General model configuration."""
-
-    start_time: date = Field(..., description="Model start time (YYYY-MM-DD).")
-    end_time: date = Field(..., description="Model end time (YYYY-MM-DD).")
-    spinup_time: date = Field(..., description="Start of the spinup time (YYYY-MM-DD).")
-    input_folder: str = Field("input/", description="Path to the input folder.")
-    preprocessing_folder: str = Field(
-        "preprocessing/", description="Path to the preprocessing folder."
-    )
-    output_folder: str = Field("output/", description="Path to the output folder.")
-    spinup_name: str = Field("spinup", description="Name of the spinup simulation.")
-    simulation_root: str = Field(
-        "simulation_root", description="Root directory for the simulation."
-    )
-    name: str = Field("default", description="Name of the simulation.")
-    export_inital_on_spinup: bool = Field(
-        True, description="Whether to export initial state on spinup."
-    )
-    simulate_forest: bool = Field(False, description="Whether to simulate forest.")
-    forecasts: ForecastsConfig = Field(
-        default_factory=ForecastsConfig, description="Forecast configuration."
-    )
-    region: RegionConfig = Field(
-        default_factory=RegionConfig, description="Region configuration."
-    )
-
-
 class SFINCSConfig(BaseModel):
     """Configuration for SFINCS."""
 
     gpu: bool | Literal["auto"] = Field(
-        "auto",
+        ...,
         description="True, False, 'auto'. If 'auto', it will check if a GPU is available using nvidia-smi.",
     )
 
@@ -69,15 +44,17 @@ class ShapeConfig(BaseModel):
     """Configuration for the hydrograph shape method used in return-period maps."""
 
     method: Literal["triangular", "direct", "anchor"] = Field(
-        "triangular",
+        ...,
         description="Hydrograph shape method: 'triangular' (symmetric), 'direct' (historical shape at target discharge), or 'anchor' (historical shape at Q_2 rescaled to target).",
     )
     window_days: float = Field(
-        3.5,
+        ...,
+        gt=0.0,
         description="Days before and after peak to extract when deriving shape from historical events (total window = 2 × window_days).",
     )
     tolerance: float = Field(
-        0.1,
+        ...,
+        ge=0.0,
         description="Fractional tolerance around anchor discharge for event selection (e.g. 0.1 = ±10%).",
     )
 
@@ -86,11 +63,12 @@ class FloodProtectionStandardConfig(BaseModel):
     """Configuration for flood protection standard settings."""
 
     mode: Literal["auto", "manual"] = Field(
-        "manual",
+        ...,
         description="Flood protection standard mode: 'auto' (derive from data) or 'manual' (use configured value)",
     )
     manual_value: int = Field(
-        10,
+        ...,
+        ge=1,
         description="Flood protection standard return period used when mode is 'manual' (years).",
     )
 
@@ -98,133 +76,156 @@ class FloodProtectionStandardConfig(BaseModel):
 class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
-    simulate: bool = Field(False, description="Whether to simulate floods.")
+    simulate: bool = Field(..., description="Whether to simulate floods.")
     subbasins: list[int] | Literal["all"] | Literal["auto"] = Field(
-        "all",
+        ...,
         description="Subbasin ID, list of subbasin IDs, or 'all' to simulate all subbasins. Only works for flood events currently.",
     )
     forcing_method: Literal["headwater_points", "accumulated_runoff"] = Field(
-        "accumulated_runoff",
+        ...,
         description="Forcing method: 'headwater_points' or 'accumulated_runoff'.",
     )
-    minimum_flood_depth: float = Field(0.05, description="Minimum flood depth (m).")
+    minimum_flood_depth: float = Field(
+        ..., ge=0.0, description="Minimum flood depth (m)."
+    )
     flood_map_output_interval_seconds: int | None = Field(
-        None,
+        ...,
         description="Interval in seconds to output flood maps. null means no output.",
     )
     grid_size_multiplier: int = Field(
-        1,
+        ...,
+        ge=1,
         description="Must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.",
     )
-    subgrid: bool = Field(False, description="Whether to use subgrid.")
+    subgrid: bool = Field(..., description="Whether to use subgrid.")
     overwrite: bool | Literal["auto"] = Field(
-        "auto",
+        ...,
         description="Whether to overwrite existing flood model. True, False, 'auto'. If 'auto', it will check if a GPU is available using nvidia-smi.",
     )
     coastal_only: bool = Field(
-        False, description="Whether to simulate coastal floods only."
+        ..., description="Whether to simulate coastal floods only."
     )
     write_figures: bool = Field(
-        True, description="Whether to generate and save diagnostic figures."
+        ..., description="Whether to generate and save diagnostic figures."
     )
     return_periods: list[int] = Field(
-        [2, 5, 10, 25, 50, 100, 250, 500, 1000],
+        ...,
         description="Return periods for flood maps.",
     )
     flood_protection_standard: FloodProtectionStandardConfig = Field(
-        default_factory=FloodProtectionStandardConfig,
+        ...,
         description="Flood protection standard settings.",
     )
     p_value_threshold: float = Field(
-        0.05,
+        ...,
+        ge=0.0,
+        le=1.0,
         description="Anderson-Darling p-value threshold for threshold selection.",
     )
     selection_strategy: Literal["first_significant", "best_fit"] = Field(
-        "first_significant",
+        ...,
         description="Strategy for selecting the best threshold: 'first_significant' (early stopping) or 'best_fit' (maximize p-value).",
     )
     fixed_shape: float | None = Field(
-        0.0,
+        ...,
         description="Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted.",
     )
-    events: list[FloodEventConfig] = Field(
-        default_factory=list, description="List of flood events."
-    )
+    events: list[FloodEventConfig] = Field(..., description="List of flood events.")
     hydrograph_shape: ShapeConfig = Field(
-        default_factory=ShapeConfig,
+        ...,
         description="Hydrograph shape configuration for return-period maps.",
     )
     run_for_validation_events: bool = Field(
-        False,
+        ...,
         description="Whether to run flood model for validation events (i.e., events with observed flood maps).",
     )
-    SFINCS: SFINCSConfig = Field(
-        default_factory=SFINCSConfig, description="SFINCS configuration."
+    SFINCS: SFINCSConfig = Field(..., description="SFINCS configuration.")
+    detect_floods_from_discharge: bool = Field(
+        ...,
+        description="If True, floods are detected based on discharge thresholds at a specific location.",
     )
+    discharge_threshold: float = Field(
+        ...,
+        description="Discharge threshold in m3/s for flood detection.",
+    )
+    threshold_location: list[str | float] = Field(
+        ...,
+        description="[lon, lat] of the location where the discharge threshold is applied.",
+    )
+    observation_files: list[str] = Field(
+        ...,
+        description="List of observation files for all floods.",
+    )
+
+    @field_validator("return_periods")
+    @classmethod
+    def validate_return_periods(cls, v: list[int]) -> list[int]:
+        """Validate that return periods are positive integers.
+
+        Args:
+            v: List of return periods to validate (years).
+
+        Returns:
+            The validated list of positive return periods.
+
+        Raises:
+            ValueError: If return_periods is empty or contains non-positive integers.
+        """
+        if not v:
+            raise ValueError("return_periods list cannot be empty.")
+        for rp in v:
+            if not isinstance(rp, int) or isinstance(rp, bool) or rp <= 0:
+                raise ValueError(f"Return period must be a positive integer, got: {rp}")
+        return v
 
 
 class DamageConfig(BaseModel):
     """Configuration for damage calculation."""
 
-    simulate: bool = Field(False, description="Whether to simulate damage.")
+    simulate: bool = Field(..., description="Whether to simulate damage.")
 
 
 class ErosionConfig(BaseModel):
     """Configuration for erosion simulation."""
 
-    simulate: bool = Field(False, description="Whether to simulate erosion.")
+    simulate: bool = Field(..., description="Whether to simulate erosion.")
 
 
 class HazardsConfig(BaseModel):
     """Configuration for hazards."""
 
-    floods: FloodsConfig = Field(
-        default_factory=FloodsConfig, description="Flood configuration."
-    )
-    damage: DamageConfig = Field(
-        default_factory=DamageConfig, description="Damage configuration."
-    )
-    erosion: ErosionConfig = Field(
-        default_factory=ErosionConfig, description="Erosion configuration."
-    )
-
-
-class RiverWidthParameters(BaseModel):
-    """Parameters for river width calculation."""
-
-    default_alpha: float = Field(
-        7.2,
-        description="Default alpha parameter for bankfull width = alpha * Q^beta.",
-    )
-    beta: float = Field(
-        0.5,
-        description="Beta parameter for bankfull width = alpha * Q^beta.",
-    )
+    floods: FloodsConfig = Field(..., description="Flood configuration.")
+    damage: DamageConfig = Field(..., description="Damage configuration.")
 
 
 class RiverWidthConfig(BaseModel):
     """Configuration for river width."""
 
-    parameters: RiverWidthParameters = Field(
-        default_factory=RiverWidthParameters, description="River width parameters."
+    default_alpha: float = Field(
+        ...,
+        description="Default alpha parameter for bankfull width = alpha * Q^beta.",
+    )
+    beta: float = Field(
+        ...,
+        description="Beta parameter for bankfull width = alpha * Q^beta.",
     )
 
 
-class RiverDepthParameters(BaseModel):
-    """Parameters for river depth calculation."""
+class RiverDepthConfig(BaseModel):
+    """Configuration for river depth."""
 
     min_depth_m: float = Field(
-        0.1,
+        ...,
         ge=0.0,
         description="Minimum allowable bankfull depth (m).",
     )
     shape_exponent: float = Field(
-        0.5,
+        ...,
         gt=0.0,
         description="Power-law cross-sectional shape exponent r (0.5 for parabolic channel).",
     )
     use_observed_width_as_bankfull: bool = Field(
-        True,
+        ...,
         description=(
             "Whether to use observed channel width directly as bankfull width. If False, "
             "reverts to using reach-specific alpha for expected width."
@@ -232,23 +233,18 @@ class RiverDepthParameters(BaseModel):
     )
 
 
-class RiverDepthConfig(BaseModel):
-    """Configuration for river depth."""
-
-    parameters: RiverDepthParameters = Field(
-        description="Parameters for river depth calculation.",
-    )
-
-
 class RetentionBasinsConfig(BaseModel):
     """Configuration for retention basins in routing."""
 
     release_threshold_factor: float = Field(
-        0.85,
+        ...,
+        ge=0.0,
+        le=1.0,
         description="Factor to multiply the activation threshold by to get the release threshold.",
     )
     activation_threshold_return_period_years: float = Field(
-        2.0,
+        ...,
+        gt=0.0,
         description="Return period in years used to calculate the activation threshold for retention basins.",
     )
 
@@ -256,12 +252,8 @@ class RetentionBasinsConfig(BaseModel):
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
 
-    algorithm: Literal["accuflux", "kinematic_wave"] = Field(
-        "kinematic_wave",
-        description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
-    )
     max_threads: int | None = Field(
-        None,
+        ...,
         ge=1,
         description=(
             "Maximum number of CPU threads to allocate for the local inertial routing "
@@ -270,48 +262,101 @@ class RoutingConfig(BaseModel):
         ),
     )
     fix_river_geometry_after_spinup: bool = Field(
-        True,
+        ...,
         description=(
             "Whether to keep river geometry (channel width and depth) fixed after spinup. "
             "If True, river geometry is only updated during the spinup period and remains fixed during the run."
         ),
     )
+    mannings_n_multiplier: float = Field(
+        ..., ge=0.0, description="Manning's n multiplier."
+    )
+    bankfull_discharge_multiplier: float = Field(
+        ...,
+        gt=0.0,
+        description="Calibration multiplier for bankfull discharge (Q_bf) used to determine channel geometry and overbank spill capacity.",
+    )
+    lake_outflow_multiplier: float = Field(
+        ..., ge=0.0, description="Lake outflow multiplier."
+    )
+    retention_basins: RetentionBasinsConfig = Field(
+        ..., description="Retention basins configuration."
+    )
     riverbed_hydraulic_conductivity_multiplier: float = Field(
-        0.1,
+        ...,
         ge=0.0,
         description=(
             "Multiplier applied to underlying aquifer hydraulic conductivity "
             "to calculate streambed infiltration conductivity."
         ),
     )
-    river_width: RiverWidthConfig = Field(
-        default_factory=RiverWidthConfig, description="River width configuration."
+    river_width: RiverWidthConfig = Field(..., description="River width configuration.")
+    river_depth: RiverDepthConfig = Field(..., description="River depth configuration.")
+
+
+class LandSurfaceConfig(BaseModel):
+    """Configuration for land surface hydrology."""
+
+    crop_factor_multiplier: float = Field(
+        ..., ge=0.0, description="Crop factor multiplier."
     )
-    river_depth: RiverDepthConfig = Field(description="River depth configuration.")
+    interflow_multiplier: float = Field(
+        ..., ge=0.0, description="Interflow multiplier."
+    )
+    saturated_hydraulic_conductivity_multiplier: float = Field(
+        ..., ge=0.0, description="Saturated hydraulic conductivity multiplier."
+    )
+    vertical_saturated_hydraulic_conductivity_multiplier: float = Field(
+        ..., ge=0.0, description="Vertical saturated hydraulic conductivity multiplier."
+    )
+    variable_runoff_shape_beta_multiplier: float = Field(
+        ..., ge=0.0, description="Variable runoff shape beta multiplier."
+    )
+
+
+class GroundWaterConfig(BaseModel):
+    """Configuration for groundwater hydrology."""
+
+    hydraulic_conductivity_multiplier: float = Field(
+        ..., ge=0.0, description="Groundwater hydraulic conductivity multiplier."
+    )
+
+
+class RunoffConcentratorConfig(BaseModel):
+    """Configuration for runoff concentration."""
+
+    runoff_concentration_factor: float = Field(
+        ...,
+        gt=0.0,
+        description="Multiplier for slope-dependent overland runoff concentration time using the Kerby (1959) overland flow method.",
+    )
 
 
 class DischargeEvaluationConfig(BaseModel):
     """Configuration for discharge evaluation."""
 
     minimum_upstream_area_km2: float = Field(
-        400.0,
+        ...,
         ge=0.0,
         description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
     )
     minimum_timeseries_length_years: float = Field(
-        5.0,
+        ...,
         ge=0.0,
         description="Minimum total paired observation-simulation data for stations included in discharge evaluation (years; continuity is not required).",
     )
 
 
-class HydrologyEvaluationConfig(BaseModel):
-    """Configuration for hydrology evaluation."""
+class EvaluationConfig(BaseModel):
+    """Configuration for model evaluation."""
 
     discharge: DischargeEvaluationConfig = Field(
-        default_factory=DischargeEvaluationConfig,
+        ...,
         description="Discharge evaluation configuration.",
     )
+
+
+HydrologyEvaluationConfig = EvaluationConfig
 
 
 class KarstConfig(BaseModel):
@@ -320,18 +365,19 @@ class KarstConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     capture_fraction: float = Field(
-        1.0,
+        ...,
         ge=0.0,
         le=1.0,
         description="Fraction of runoff and interflow captured on karst land below the swallowing ceiling (0–1).",
     )
     release_time_days: float = Field(
+        ...,
         gt=0.0,
         allow_inf_nan=False,
         description="Exponential release time (days): after this many dry days, exp(-1) of the initial storage remains (about 36.8%).",
     )
     vertical_conductivity_multiplier: float = Field(
-        10.0,
+        ...,
         ge=1.0,
         description="Multiplier for vertical saturated hydraulic conductivity in karst areas (>= 1.0).",
     )
@@ -340,22 +386,31 @@ class KarstConfig(BaseModel):
 class HydrologyConfig(BaseModel):
     """Configuration for hydrology."""
 
-    routing: RoutingConfig = Field(
-        default_factory=RoutingConfig, description="Routing configuration."
+    simulate_forest: bool = Field(..., description="Whether to simulate forest.")
+    hydrological_year_start_month: int = Field(
+        ..., ge=1, le=12, description="Hydrological year start month (1-12)."
     )
-    karst: KarstConfig = Field(description="Karst recharge settings.")
-    evaluation: HydrologyEvaluationConfig = Field(
-        default_factory=HydrologyEvaluationConfig,
-        description="Hydrology evaluation configuration.",
+    erosion: ErosionConfig = Field(..., description="Erosion configuration.")
+    landsurface: LandSurfaceConfig = Field(
+        ..., description="Land surface configuration."
     )
+    groundwater: GroundWaterConfig = Field(
+        ..., description="Groundwater configuration."
+    )
+    routing: RoutingConfig = Field(..., description="Routing configuration.")
+    runoff_concentrator: RunoffConcentratorConfig = Field(
+        ...,
+        description="Runoff concentrator configuration.",
+    )
+    karst: KarstConfig = Field(..., description="Karst recharge settings.")
 
 
 class MarketConfig(BaseModel):
     """Configuration for market agent."""
 
-    dynamic_market: bool = Field(False, description="Whether to use dynamic market.")
+    dynamic_market: bool = Field(..., description="Whether to use dynamic market.")
     price_frequency: Literal["yearly"] = Field(
-        "yearly", description="Frequency of price updates."
+        ..., description="Frequency of price updates."
     )
 
 
@@ -363,34 +418,43 @@ class GovernmentAdaptationConfig(BaseModel):
     """Configuration for government-led adaptation policy."""
 
     enabled: bool = Field(
-        False, description="Whether to enable government adaptation policy."
+        ..., description="Whether to enable government adaptation policy."
     )
     mode: Literal["cba", "threshold"] = Field(
-        "cba",
+        ...,
         description="Adaptation policy mode: 'cba' (cost-benefit analysis) or 'threshold'.",
     )
     EAD_threshold: float = Field(
-        1000000.0,
+        ...,
+        ge=0.0,
         description="Expected annual damage threshold that can trigger adaptation action.",
     )
     equity_indicator_threshold: float = Field(
-        0.5,
+        ...,
+        ge=0.0,
+        le=1.0,
         description="Equity indicator threshold between 0 and 1.",
     )
     ecosystem_indicator_threshold: float = Field(
-        0.5,
+        ...,
+        ge=0.0,
+        le=1.0,
         description="Ecosystem indicator threshold between 0 and 1.",
     )
     adaptation_fraction: float = Field(
-        0.1,
+        ...,
+        ge=0.0,
+        le=1.0,
         description="Fraction of households selected for adaptation action.",
     )
     dike_elevation_cost_per_meter_usd: float = Field(
-        6800.0,
+        ...,
+        ge=0.0,
         description="Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
     )
     dike_maintenance_cost_per_year_usd: float = Field(
-        80.0,
+        ...,
+        ge=0.0,
         description="Annual maintenance cost for a dike segment of 1 meter length (USD/year).",
     )
 
@@ -399,11 +463,11 @@ class GovernmentConfig(BaseModel):
     """Configuration for government agent."""
 
     plant_forest: bool = Field(
-        False,
+        ...,
         description="Whether to enable forest-planting policy for reforestation scenarios.",
     )
     adaptation: GovernmentAdaptationConfig = Field(
-        default_factory=GovernmentAdaptationConfig,
+        ...,
         description="Government adaptation policy configuration.",
     )
 
@@ -411,17 +475,17 @@ class GovernmentConfig(BaseModel):
 class RiskPerceptionConfig(BaseModel):
     """Configuration for risk perception."""
 
-    base: float = Field(1.6, description="Base risk perception.")
-    coef: float = Field(-2.5, description="Coefficient for risk perception.")
-    max: float = Field(10.0, description="Maximum risk perception.")
-    min: float = Field(0.01, description="Minimum risk perception.")
+    base: float = Field(..., description="Base risk perception.")
+    coef: float = Field(..., description="Coefficient for risk perception.")
+    max: float = Field(..., description="Maximum risk perception.")
+    min: float = Field(..., description="Minimum risk perception.")
 
 
 class FloodRiskCalculationsConfig(BaseModel):
     """Configuration for flood risk calculations."""
 
     risk_perception: RiskPerceptionConfig = Field(
-        default_factory=RiskPerceptionConfig,
+        ...,
         description="Risk perception configuration.",
     )
 
@@ -430,7 +494,7 @@ class ExpectedUtilityConfig(BaseModel):
     """Configuration for expected utility."""
 
     flood_risk_calculations: FloodRiskCalculationsConfig = Field(
-        default_factory=FloodRiskCalculationsConfig,
+        ...,
         description="Flood risk calculations configuration.",
     )
 
@@ -438,24 +502,141 @@ class ExpectedUtilityConfig(BaseModel):
 class WaterDemandConfig(BaseModel):
     """Configuration for water demand."""
 
-    method: str = Field("default", description="Method for water demand calculation.")
+    method: str = Field(..., description="Method for water demand calculation.")
+
+
+class WarningResponseRatesConfig(BaseModel):
+    """Configuration for warning response rates."""
+
+    area_based_warnings: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Response rate for area-based warnings (0.0-1.0).",
+    )
+    building_based_warnings: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Response rate for building-based warnings with specific measures (0.0-1.0).",
+    )
+
+
+class ResidentialBuildingsWarningTargetConfig(BaseModel):
+    """Configuration for residential buildings warning target."""
+
+    enabled: bool = Field(
+        ...,
+        description="Enable water level based warnings with measures for residential buildings.",
+    )
+    warning_type: Literal["area_based", "building_based"] = Field(
+        ...,
+        description="Type of warnings: 'area_based' for basic flood warnings or 'building_based' for impact-based warnings.",
+    )
+
+
+class CriticalInfrastructureWarningTargetConfig(BaseModel):
+    """Configuration for critical infrastructure warning target."""
+
+    enabled: bool = Field(
+        ...,
+        description="Enable water level based warnings for critical infrastructure.",
+    )
+    get_critical_facilities: bool = Field(
+        ...,
+        description="If True, critical facilities (vulnerable and emergency) are extracted from OSM using the catchment polygon as boundary.",
+    )
+    asset_type: list[str] = Field(
+        ...,
+        description="Asset types for critical infrastructure warnings.",
+    )
+
+
+class WarningTargetConfig(BaseModel):
+    """Configuration for warning targets."""
+
+    residential_buildings: ResidentialBuildingsWarningTargetConfig = Field(
+        ...,
+        description="Residential buildings warning target configuration.",
+    )
+    critical_infrastructure: CriticalInfrastructureWarningTargetConfig = Field(
+        ...,
+        description="Critical infrastructure warning target configuration.",
+    )
+
+
+class WarningSystemConfig(BaseModel):
+    """Configuration for early warning system."""
+
+    probability_threshold: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Flood probability threshold for issuing warnings (0.0-1.0).",
+    )
+    area_threshold: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Area threshold (percentage of postal code area) for warnings (0.0-1.0).",
+    )
+    building_threshold: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Building threshold (percentage of buildings in postal code) for warnings (0.0-1.0).",
+    )
+    communication_efficiency: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Communication efficiency: fraction of households that can be reached (0.0-1.0).",
+    )
+    weight_by_socioeconomic_factors: bool = Field(
+        ...,
+        description="Whether to consider socioeconomic factors in the distribution of warnings.",
+    )
+    damage_reduction_over_leadtime: bool = Field(
+        ...,
+        description="Whether to consider the reduction of damage over lead time due to more effective warnings.",
+    )
+    evacuation_lead_time_threshold: float = Field(
+        ...,
+        ge=0.0,
+        description="Lead time threshold for evacuation warnings (hours).",
+    )
+    response_rates: WarningResponseRatesConfig = Field(
+        ...,
+        description="Response rates for different warning types.",
+    )
+    warning_target: WarningTargetConfig = Field(
+        ...,
+        description="Warning targets configuration.",
+    )
 
 
 class HouseholdsConfig(BaseModel):
     """Configuration for households agent."""
 
-    adapt: bool = Field(False, description="Whether households adapt.")
-    warning_response: bool = Field(
-        False, description="Whether households respond to warnings."
+    adapt: bool = Field(..., description="Whether households adapt.")
+    adapt_to_actual_floods: bool = Field(
+        ...,
+        description="Whether households adapt their houses based on actual floods experienced.",
     )
     water_demand: WaterDemandConfig = Field(
-        default_factory=WaterDemandConfig, description="Water demand configuration."
+        ..., description="Water demand configuration."
     )
     adjust_demand_factor: float = Field(
-        1.0, description="Factor to adjust water demand."
+        ..., ge=0.0, description="Factor to adjust water demand."
+    )
+    warning_response: bool = Field(
+        ..., description="Whether households respond to warnings."
+    )
+    warning_system: WarningSystemConfig = Field(
+        ..., description="Warning system configuration."
     )
     expected_utility: ExpectedUtilityConfig = Field(
-        default_factory=ExpectedUtilityConfig,
+        ...,
         description="Expected utility configuration.",
     )
 
@@ -463,34 +644,43 @@ class HouseholdsConfig(BaseModel):
 class MicrocreditConfig(BaseModel):
     """Configuration for microcredit."""
 
-    ruleset: str = Field("no-adaptation", description="Ruleset for microcredit.")
-    interest_rate: float = Field(0.2, description="Interest rate.")
-    loan_duration: int = Field(2, description="Loan duration (years).")
-    loss_threshold: float = Field(25.0, description="Loss threshold.")
+    ruleset: str = Field(..., description="Ruleset for microcredit.")
+    interest_rate: float = Field(..., ge=0.0, description="Interest rate.")
+    loan_duration: int = Field(..., ge=0, description="Loan duration (years).")
 
 
 class SocialNetworkConfig(BaseModel):
     """Configuration for social network."""
 
-    radius: float = Field(5000.0, description="Radius of social network (m).")
-    size: int = Field(10, description="Number of neighbors in social network.")
+    radius: float = Field(..., gt=0.0, description="Radius of social network (m).")
+    size: int = Field(..., ge=0, description="Number of neighbors in social network.")
 
 
-class InsuranceConfig(BaseModel):
-    """Configuration for insurance."""
+class InsurancePolicyConfig(BaseModel):
+    """Configuration for an insurance policy type."""
 
-    duration: int = Field(2, description="Duration of insurance (years).")
-    seut_factor: float = Field(1.0, description="SEUT factor.")
-    personal_insurance: dict[str, Any] = Field(
-        default_factory=lambda: {"ruleset": "no-adaptation"},
-        description="Personal insurance configuration.",
+    ruleset: str = Field(..., description="Ruleset for insurance.")
+    loading_rate: float = Field(..., ge=0.0, description="Loading rate.")
+
+
+class InsurersConfig(BaseModel):
+    """Configuration for insurers agent."""
+
+    duration: int = Field(..., ge=1, description="Insurance duration (years).")
+    seut_factor: float = Field(..., description="SEUT factor.")
+    government_premium_cap: bool = Field(
+        ..., description="Whether government premium cap is applied."
     )
-    index_insurance: dict[str, Any] = Field(
-        default_factory=lambda: {"ruleset": "no-adaptation"},
+    traditional_insurance: InsurancePolicyConfig = Field(
+        ...,
+        description="Traditional insurance configuration.",
+    )
+    index_insurance: InsurancePolicyConfig = Field(
+        ...,
         description="Index insurance configuration.",
     )
-    pr_insurance: dict[str, Any] = Field(
-        default_factory=lambda: {"ruleset": "no-adaptation"},
+    pr_insurance: InsurancePolicyConfig = Field(
+        ...,
         description="PR insurance configuration.",
     )
 
@@ -498,119 +688,111 @@ class InsuranceConfig(BaseModel):
 class CropSwitchingConfig(BaseModel):
     """Configuration for crop switching."""
 
-    ruleset: str = Field("no-adaptation", description="Ruleset for crop switching.")
+    ruleset: str = Field(..., description="Ruleset for crop switching.")
+    loan_duration: int = Field(..., ge=0, description="Loan duration (years).")
+    switching_cap: float = Field(..., ge=0.0, description="Switching cap fraction.")
 
 
-class AdaptationSprinklerConfig(BaseModel):
-    """Configuration for sprinkler adaptation."""
+class AdaptationEfficiencyConfig(BaseModel):
+    """Configuration for irrigation efficiency adaptation."""
 
-    ruleset: str = Field(
-        "no-adaptation", description="Ruleset for sprinkler adaptation."
-    )
-    lifespan_base: int = Field(25, description="Base lifespan (years).")
-    lifespan_sprink_drip: int = Field(
-        15, description="Lifespan for sprinkler/drip (years)."
-    )
-    loan_duration: int = Field(21, description="Loan duration (years).")
-    decision_horizon: int = Field(20, description="Decision horizon (years).")
-    m2_cost: float = Field(1.0, description="Cost per m2.")
+    ruleset: str = Field(..., description="Ruleset for sprinkler adaptation.")
+    dynamic_adaptation: bool = Field(..., description="Whether adaptation is dynamic.")
+    static_price: bool = Field(..., description="Whether price is static.")
+    loan_duration: int = Field(..., ge=0, description="Loan duration (years).")
+    decision_horizon: int = Field(..., ge=0, description="Decision horizon (years).")
     return_fraction_surface: float = Field(
-        0.75, description="Return fraction for surface irrigation."
+        ..., ge=0.0, le=1.0, description="Return fraction for surface irrigation."
     )
     return_fraction_sprinkler: float = Field(
-        0.3, description="Return fraction for sprinkler irrigation."
+        ..., ge=0.0, le=1.0, description="Return fraction for sprinkler irrigation."
     )
     return_fraction_drip: float = Field(
-        0.2, description="Return fraction for drip irrigation."
+        ..., ge=0.0, le=1.0, description="Return fraction for drip irrigation."
     )
     irr_eff_surface: float = Field(
-        0.60, description="Irrigation efficiency for surface irrigation."
+        ..., ge=0.0, le=1.0, description="Irrigation efficiency for surface irrigation."
     )
     irr_eff_sprinkler: float = Field(
-        0.75, description="Irrigation efficiency for sprinkler irrigation."
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Irrigation efficiency for sprinkler irrigation.",
     )
     irr_eff_drip: float = Field(
-        0.95, description="Irrigation efficiency for drip irrigation."
+        ..., ge=0.0, le=1.0, description="Irrigation efficiency for drip irrigation."
     )
-
-
-class AdaptationIrrigationExpansionConfig(BaseModel):
-    """Configuration for irrigation expansion adaptation."""
-
-    ruleset: str = Field(
-        "no-adaptation", description="Ruleset for irrigation expansion."
+    efficiency_division: list[float] = Field(
+        ...,
+        description="Ratio of different irrigation methods (surface, sprinkler).",
     )
 
 
 class AdaptationWellConfig(BaseModel):
     """Configuration for well adaptation."""
 
-    seut_factor: float = Field(1.0, description="SEUT factor.")
-    loan_duration: int = Field(21, description="Loan duration (years).")
-    lifespan: int = Field(20, description="Lifespan (years).")
-    decision_horizon: int = Field(20, description="Decision horizon (years).")
-    ruleset: str = Field("no-adaptation", description="Ruleset for well adaptation.")
-    pump_hours: float = Field(3.5, description="Pump hours.")
+    ruleset: str = Field(..., description="Ruleset for well adaptation.")
+    seut_factor: float = Field(..., description="SEUT factor.")
+    loan_duration: int = Field(..., ge=0, description="Loan duration (years).")
+    lifespan: int = Field(..., ge=0, description="Lifespan (years).")
+    decision_horizon: int = Field(..., ge=0, description="Decision horizon (years).")
+    pump_hours: float = Field(..., ge=0.0, description="Pump hours.")
     specific_weight_water: float = Field(
-        9800.0, description="Specific weight of water (kg/m3*m/s2)."
+        ..., gt=0.0, description="Specific weight of water (kg/m3*m/s2)."
     )
     max_initial_sat_thickness: float = Field(
-        50.0, description="Maximum initial saturated thickness (m)."
+        ..., gt=0.0, description="Maximum initial saturated thickness (m)."
     )
-    well_yield: float = Field(0.00005, description="Well yield (m3/s).")
-    pump_efficiency: float = Field(0.7, description="Pump efficiency.")
-    energy_cost_rate: float = Field(0.074, description="Energy cost rate ($/KWh).")
-    maintenance_factor: float = Field(0.07, description="Maintenance factor.")
-    WHY_10: float = Field(82.0209974, description="Cost parameter WHY_10 ($/m).")
-    WHY_20: float = Field(164.0, description="Cost parameter WHY_20 ($/m).")
-    WHY_30: float = Field(50.0, description="Cost parameter WHY_30 ($/m).")
+    pump_efficiency: float = Field(..., gt=0.0, description="Pump efficiency.")
+    maintenance_factor: float = Field(..., ge=0.0, description="Maintenance factor.")
 
 
 class DecisionsConfig(BaseModel):
     """Configuration for decisions."""
 
-    decision_horizon: int = Field(10, description="Decision horizon (years).")
-    expenditure_cap: float = Field(0.5, description="Expenditure cap.")
+    decision_horizon: int = Field(..., ge=0, description="Decision horizon (years).")
+    expenditure_cap: float = Field(..., ge=0.0, description="Expenditure cap.")
 
 
 class WaterPriceConfig(BaseModel):
     """Configuration for water price."""
 
+    static: bool = Field(..., description="Whether water price is static.")
     water_costs_m3_reservoir: float = Field(
-        0.0, description="Water costs per m3 from reservoir."
+        ..., ge=0.0, description="Water costs per m3 from reservoir."
     )
     water_costs_m3_groundwater: float = Field(
-        0.0, description="Water costs per m3 from groundwater."
+        ..., ge=0.0, description="Water costs per m3 from groundwater."
     )
     water_costs_m3_channel: float = Field(
-        0.0, description="Water costs per m3 from channel."
+        ..., ge=0.0, description="Water costs per m3 from channel."
     )
 
 
 class DroughtEventPerceptionConfig(BaseModel):
     """Configuration for drought event perception."""
 
-    drought_threshold: float = Field(5.0, description="Drought threshold.")
+    drought_threshold: float = Field(..., description="Drought threshold.")
 
 
 class DroughtRiskPerceptionConfig(BaseModel):
     """Configuration for drought risk perception."""
 
-    base: float = Field(1.6, description="Base risk perception.")
-    coef: float = Field(-2.5, description="Coefficient for risk perception.")
-    max: float = Field(10.0, description="Maximum risk perception.")
-    min: float = Field(0.5, description="Minimum risk perception.")
+    base: float = Field(..., description="Base risk perception.")
+    coef: float = Field(..., description="Coefficient for risk perception.")
+    max: float = Field(..., description="Maximum risk perception.")
+    min: float = Field(..., description="Minimum risk perception.")
 
 
 class DroughtRiskCalculationsConfig(BaseModel):
     """Configuration for drought risk calculations."""
 
     event_perception: DroughtEventPerceptionConfig = Field(
-        default_factory=DroughtEventPerceptionConfig,
+        ...,
         description="Event perception configuration.",
     )
     risk_perception: DroughtRiskPerceptionConfig = Field(
-        default_factory=DroughtRiskPerceptionConfig,
+        ...,
         description="Risk perception configuration.",
     )
 
@@ -618,153 +800,95 @@ class DroughtRiskCalculationsConfig(BaseModel):
 class FarmersExpectedUtilityConfig(BaseModel):
     """Configuration for farmers expected utility."""
 
-    insurance: InsuranceConfig = Field(
-        default_factory=InsuranceConfig, description="Insurance configuration."
-    )
     crop_switching: CropSwitchingConfig = Field(
-        default_factory=CropSwitchingConfig, description="Crop switching configuration."
+        ..., description="Crop switching configuration."
     )
-
-
-class FarmersConfig(BaseModel):
-    """Configuration for farmers agent."""
-
-    ruleset: str | None = Field(None, description="Ruleset for farmers.")
-    base_management_yield_ratio: float = Field(
-        1.0, description="Base management yield ratio."
-    )
-    farmers_going_out_of_business: bool = Field(
-        False, description="Whether farmers go out of business."
-    )
-    cultivation_cost_fraction: float = Field(
-        0.1, description="Cultivation cost fraction."
-    )
-    microcredit: MicrocreditConfig = Field(
-        default_factory=MicrocreditConfig, description="Microcredit configuration."
-    )
-    return_fraction: float = Field(0.5, description="Return fraction.")
-    social_network: SocialNetworkConfig = Field(
-        default_factory=SocialNetworkConfig, description="Social network configuration."
-    )
-    expected_utility: FarmersExpectedUtilityConfig = Field(
-        default_factory=FarmersExpectedUtilityConfig,
-        description="Expected utility configuration.",
-    )
-    adaptation_sprinkler: AdaptationSprinklerConfig = Field(
-        default_factory=AdaptationSprinklerConfig,
-        description="Sprinkler adaptation configuration.",
-    )
-    adaptation_irrigation_expansion: AdaptationIrrigationExpansionConfig = Field(
-        default_factory=AdaptationIrrigationExpansionConfig,
-        description="Irrigation expansion adaptation configuration.",
+    adaptation_efficiency: AdaptationEfficiencyConfig = Field(
+        ...,
+        description="Adaptation efficiency configuration.",
     )
     adaptation_well: AdaptationWellConfig = Field(
-        default_factory=AdaptationWellConfig,
+        ...,
         description="Well adaptation configuration.",
     )
-    decisions: DecisionsConfig = Field(
-        default_factory=DecisionsConfig, description="Decisions configuration."
-    )
-    water_price: WaterPriceConfig = Field(
-        default_factory=WaterPriceConfig, description="Water price configuration."
-    )
+    decisions: DecisionsConfig = Field(..., description="Decisions configuration.")
+    water_price: WaterPriceConfig = Field(..., description="Water price configuration.")
     drought_risk_calculations: DroughtRiskCalculationsConfig = Field(
-        default_factory=DroughtRiskCalculationsConfig,
+        ...,
         description="Drought risk calculations configuration.",
     )
+
+
+class CropFarmersConfig(BaseModel):
+    """Configuration for crop farmers agent."""
+
+    ruleset: str = Field(..., description="Ruleset for crop farmers.")
+    base_management_yield_ratio: float = Field(
+        ..., gt=0.0, description="Base management yield ratio."
+    )
+    cultivation_cost_fraction: float = Field(
+        ..., ge=0.0, description="Cultivation cost fraction."
+    )
+    microcredit: MicrocreditConfig = Field(
+        ..., description="Microcredit configuration."
+    )
+    social_network: SocialNetworkConfig = Field(
+        ..., description="Social network configuration."
+    )
+    expected_utility: FarmersExpectedUtilityConfig = Field(
+        ...,
+        description="Expected utility configuration.",
+    )
+
+
+FarmersConfig = CropFarmersConfig
 
 
 class ReservoirOperatorsConfig(BaseModel):
     """Configuration for reservoir operators."""
 
-    ruleset: str = Field(
-        "no-adaptation", description="Ruleset for reservoir operators."
-    )
+    ruleset: str = Field(..., description="Ruleset for reservoir operators.")
     equal_abstraction: bool = Field(
-        False, description="Whether to use equal abstraction."
+        ..., description="Whether to use equal abstraction."
     )
-    reservoir_M_factor: float = Field(0.1, description="Reservoir M factor.")
-
-
-class SensitivityAnalysisConfig(BaseModel):
-    """Configuration for sensitivity analysis."""
-
-    risk_aversion_factor: float = Field(1.0, description="Risk aversion factor.")
-    discount_rate_factor: float = Field(1.0, description="Discount rate factor.")
-    interest_rate_factor: float = Field(1.0, description="Interest rate factor.")
-    well_cost_factor: float = Field(1.0, description="Well cost factor.")
-    drought_threshold_factor: float = Field(
-        1.0, description="Drought threshold factor."
+    reservoir_M_factor: float = Field(..., ge=0.0, description="Reservoir M factor.")
+    reservoir_release_factor: float = Field(
+        ..., ge=0.0, description="Reservoir release factor."
     )
 
 
-class AgentSettingsConfig(BaseModel):
+class AgentsConfig(BaseModel):
     """Configuration for agents."""
 
     government: GovernmentConfig = Field(
-        default_factory=GovernmentConfig, description="Government agent configuration."
+        ..., description="Government agent configuration."
     )
-
-    market: MarketConfig = Field(
-        default_factory=MarketConfig, description="Market agent configuration."
-    )
+    market: MarketConfig = Field(..., description="Market agent configuration.")
     households: HouseholdsConfig = Field(
-        default_factory=HouseholdsConfig, description="Households agent configuration."
+        ..., description="Households agent configuration."
     )
-    farmers: FarmersConfig = Field(
-        default_factory=FarmersConfig, description="Farmers agent configuration."
+    insurers: InsurersConfig = Field(..., description="Insurers agent configuration.")
+    crop_farmers: CropFarmersConfig = Field(
+        ...,
+        description="Crop farmers agent configuration.",
     )
     fix_activation_order: bool = Field(
-        True, description="Whether to fix activation order."
+        ..., description="Whether to fix activation order."
     )
     reservoir_operators: ReservoirOperatorsConfig = Field(
-        default_factory=ReservoirOperatorsConfig,
+        ...,
         description="Reservoir operators configuration.",
-    )
-    sensitivity_analysis: SensitivityAnalysisConfig = Field(
-        default_factory=SensitivityAnalysisConfig,
-        description="Sensitivity analysis configuration.",
-    )
-
-
-class LoggingConfig(BaseModel):
-    """Configuration for logging."""
-
-    logfile: str = Field("GEB.log", description="Log file path.")
-    loglevel: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
-        "DEBUG", description="Log level."
-    )
-
-
-class CropFarmersDrawConfig(BaseModel):
-    """Configuration for drawing crop farmers."""
-
-    draw_every_nth: int = Field(1, description="Draw every nth farmer.")
-
-
-class DrawAgentsConfig(BaseModel):
-    """Configuration for drawing agents."""
-
-    crop_farmers: CropFarmersDrawConfig = Field(
-        default_factory=CropFarmersDrawConfig,
-        description="Crop farmers drawing configuration.",
-    )
-
-
-class DrawConfig(BaseModel):
-    """Configuration for drawing."""
-
-    draw_agents: DrawAgentsConfig = Field(
-        default_factory=DrawAgentsConfig, description="Agents drawing configuration."
     )
 
 
 class ReportConfigInternal(BaseModel):
     """Internal report configuration."""
 
-    compression_level: int = Field(9, description="Compression level (1-22).")
+    compression_level: int = Field(
+        ..., ge=1, le=22, description="Compression level (1-22)."
+    )
     chunk_target_size_bytes: int = Field(
-        100000000, description="Target chunk size in bytes."
+        ..., gt=0, description="Target chunk size in bytes."
     )
 
 
@@ -774,91 +898,42 @@ class ReportConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     config: ReportConfigInternal = Field(
-        default_factory=ReportConfigInternal,
+        ...,
         alias="_config",
         description="Internal report configuration.",
     )
     water_circle: bool = Field(
-        False, alias="_water_circle", description="Whether to report water circle."
+        ..., alias="_water_circle", description="Whether to report water circle."
     )
     water_balance: bool = Field(
-        False, alias="_water_balance", description="Whether to report water balance."
+        ..., alias="_water_balance", description="Whether to report water balance."
     )
     water_storage: bool = Field(
-        False, alias="_water_storage", description="Whether to report water storage."
+        ..., alias="_water_storage", description="Whether to report water storage."
     )
     energy_balance: bool = Field(
-        False, alias="_energy_balance", description="Whether to report energy balance."
+        ..., alias="_energy_balance", description="Whether to report energy balance."
     )
     discharge_stations: bool = Field(
-        True,
+        ...,
         alias="_discharge_stations",
         description="Whether to report discharge stations.",
     )
     bankfull_depths: bool = Field(
-        True,
+        ...,
         alias="_bankfull_depths",
         description="Whether to report bankfull depths each year.",
     )
     retention_basins: bool = Field(
-        False,
+        ...,
         alias="_retention_basins",
         description="Whether to report retention basins.",
     )
     meteorological_stations: bool = Field(
-        True,
+        ...,
         alias="_meteorological_stations",
         description="Whether to report meteorological stations.",
     )
-
-
-class ParametersConfig(BaseModel):
-    """Configuration for parameters."""
-
-    mannings_n_multiplier: float = Field(description="Manning's n multiplier.")
-    bankfull_discharge_multiplier: float = Field(
-        gt=0.0,
-        description="Calibration multiplier for bankfull discharge (Q_bf) used to determine channel geometry and overbank spill capacity.",
-    )
-    crop_factor_multiplier: float = Field(description="Crop factor multiplier.")
-    saturated_hydraulic_conductivity_multiplier: float = Field(
-        description="Saturated hydraulic conductivity multiplier."
-    )
-    vertical_saturated_hydraulic_conductivity_multiplier: float = Field(
-        description="Vertical saturated hydraulic conductivity multiplier."
-    )
-    groundwater_hydraulic_conductivity_multiplier: float = Field(
-        description="Groundwater hydraulic conductivity multiplier."
-    )
-    reservoir_release_factor: float = Field(description="Reservoir release factor.")
-    lake_outflow_multiplier: float = Field(description="Lake outflow multiplier.")
-    interflow_multiplier: float = Field(description="Interflow multiplier.")
-    variable_runoff_shape_beta_multiplier: float = Field(
-        description="Scale factor for the variable runoff shape parameter beta."
-    )
-    runoff_concentration_factor: float = Field(
-        gt=0.0,
-        description="Multiplier for slope-dependent overland runoff concentration time using the Kerby (1959) overland flow method.",
-    )
-
-
-class PlantFATEConfig(BaseModel):
-    """Configuration for PlantFATE."""
-
-    spinup_ini_file: str = Field(
-        "data/plantFATE/p_spinup.ini", description="Path to spinup INI file."
-    )
-    run_ini_file: str = Field(
-        "data/plantFATE/p_run.ini", description="Path to run INI file."
-    )
-    new_forest_ini_file: str = Field(
-        "data/plantFATE/p_new_forest.ini", description="Path to new forest INI file."
-    )
-    new_forest: bool = Field(False, description="Whether to simulate new forest.")
-    new_forest_filename: str | None = Field(
-        None, description="Filename for new forest."
-    )
-    n_cells: str | int = Field("all", description="Number of cells to simulate.")
 
 
 class CalibrationTargetsConfig(BaseModel):
@@ -912,29 +987,53 @@ class CalibrationConfig(BaseModel):
 class Config(BaseModel):
     """Main model configuration."""
 
-    general: GeneralConfig = Field(..., description="General configuration.")
-    hazards: HazardsConfig = Field(
-        default_factory=HazardsConfig, description="Hazards configuration."
+    id: str | None = Field(
+        ...,
+        description="Run ID. If provided, sets spinup_name to 'spinup_<id>' and name to 'run_<id>'.",
     )
-    hydrology: HydrologyConfig = Field(
-        default_factory=HydrologyConfig, description="Hydrology configuration."
+    start_time: date = Field(..., description="Model start time (YYYY-MM-DD).")
+    end_time: date = Field(..., description="Model end time (YYYY-MM-DD).")
+    spinup_time: date = Field(..., description="Start of the spinup time (YYYY-MM-DD).")
+    input_folder: str = Field(..., description="Path to the input folder.")
+    output_folder: str = Field(..., description="Path to the output folder.")
+    spinup_name: str = Field(..., description="Name of the spinup simulation.")
+    simulation_root: str = Field(..., description="Root directory for the simulation.")
+    name: str = Field(..., description="Name of the simulation.")
+    loglevel: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        ..., description="Logging level."
     )
-    agent_settings: AgentSettingsConfig = Field(
-        default_factory=AgentSettingsConfig, description="Agent settings."
+    region: RegionConfig | None = Field(None, description="Region configuration.")
+
+    forecasts: ForecastsConfig = Field(..., description="Forecasts configuration.")
+    hazards: HazardsConfig = Field(..., description="Hazards configuration.")
+    hydrology: HydrologyConfig = Field(..., description="Hydrology configuration.")
+    evaluation: EvaluationConfig = Field(..., description="Evaluation configuration.")
+    agents: AgentsConfig = Field(..., description="Agents configuration.")
+    report: ReportConfig = Field(..., description="Reporting configuration.")
+    calibration: CalibrationConfig | dict[str, Any] | None = Field(
+        None, description="Calibration configuration."
     )
-    logging: LoggingConfig = Field(
-        default_factory=LoggingConfig, description="Logging configuration."
-    )
-    draw: DrawConfig = Field(
-        default_factory=DrawConfig, description="Drawing configuration."
-    )
-    report: ReportConfig = Field(
-        default_factory=ReportConfig, description="Reporting configuration."
-    )
-    parameters: ParametersConfig = Field(description="Parameters configuration.")
-    plantFATE: PlantFATEConfig = Field(
-        default_factory=PlantFATEConfig, description="PlantFATE configuration."
-    )
-    calibration: CalibrationConfig = Field(
-        default_factory=CalibrationConfig, description="Calibration configuration."
-    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_run_id(cls, data: Any) -> Any:
+        """Handle auto-deriving run names from id.
+
+        Args:
+            data: Raw configuration input data.
+
+        Returns:
+            Updated configuration dictionary with auto-derived names.
+        """
+        if not isinstance(data, dict):
+            return data
+        data = data.copy()
+        run_id = data.get("id")
+        if run_id is not None:
+            run_id_str: str = str(run_id)
+            if data.get("spinup_name") in (None, "spinup"):
+                data["spinup_name"] = f"spinup_{run_id_str}"
+            if data.get("name") in (None, "default"):
+                data["name"] = f"run_{run_id_str}"
+
+        return data

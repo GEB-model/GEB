@@ -10,16 +10,17 @@ import shutil
 import subprocess
 import sys
 import time
+import warnings
 import zipfile
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from operator import attrgetter
 from pathlib import Path
 from typing import Any, TextIO, TypeVar, cast
 
 import pandas as pd
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from geb import GEB_PACKAGE_DIR
 from geb.build import (
@@ -116,10 +117,161 @@ DetectDuplicateKeysYamlLoader.add_constructor(
 )
 
 
+def parse_override_value(value_str: str) -> Any:
+    """Convert string override to appropriate Python type.
+
+    Args:
+        value_str: String representation of the value.
+
+    Returns:
+        Converted value as int, float, date, datetime, bool, None, list, dict, or original string.
+    """
+    stripped: str = value_str.strip()
+    if (stripped.startswith("[") and stripped.endswith("]")) or (
+        stripped.startswith("{") and stripped.endswith("}")
+    ):
+        try:
+            return yaml.safe_load(stripped)
+        except Exception:
+            pass
+
+    if value_str.isdigit():
+        return int(value_str)
+
+    try:
+        return float(value_str)
+    except ValueError:
+        pass
+
+    try:
+        return date.fromisoformat(value_str)
+    except ValueError:
+        pass
+
+    try:
+        return datetime.fromisoformat(value_str)
+    except ValueError:
+        pass
+
+    if value_str.lower() == "true":
+        return True
+    if value_str.lower() == "false":
+        return False
+    if value_str == "null":
+        return None
+
+    return value_str
+
+
+def parse_with_args(args: tuple[str, ...] | list[str]) -> dict[str, Any]:
+    """Parse extra args or --with args into key=value dictionary.
+
+    Args:
+        args: Sequence of strings representing key=value arguments.
+
+    Returns:
+        Dictionary mapping config keys to parsed values.
+    """
+    overrides: dict[str, Any] = {}
+    tokens: list[str] = []
+    for arg in args:
+        tokens.extend(arg.split())
+
+    for token in tokens:
+        if "=" in token:
+            key: str
+            val: str
+            key, val = token.split("=", 1)
+            overrides[key] = parse_override_value(val)
+        else:
+            warnings.warn(
+                f"Ignoring invalid argument '{token}'. Expected format: key=value",
+                UserWarning,
+                stacklevel=2,
+            )
+    return overrides
+
+
+def apply_config_overrides(
+    config: dict[str, Any], overrides: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply dictionary of overrides with dot notation to config dictionary in-memory.
+
+    Args:
+        config: Configuration dictionary to update.
+        overrides: Dictionary of key-value pairs where keys can use dot notation.
+
+    Returns:
+        Updated configuration dictionary.
+
+    Raises:
+        KeyError: If an intermediate or target key is missing and '+' suffix is not used.
+    """
+    for key, value in overrides.items():
+        create: bool = False
+        if key.endswith("+"):
+            key = key[:-1]
+            create = True
+
+        keys: list[str] = key.split(".")
+        current_mapping: dict[str, Any] = config
+
+        for k in keys[:-1]:
+            if k not in current_mapping or not isinstance(current_mapping[k], dict):
+                if create:
+                    current_mapping[k] = {}
+                else:
+                    raise KeyError(
+                        f"Key '{k}' not found in config. If you want to create it, use the '+' suffix for the KEY."
+                    )
+            current_mapping = current_mapping[k]
+
+        if not create and keys[-1] not in current_mapping:
+            raise KeyError(
+                f"Key '{keys[-1]}' not found in config. If you want to create it, use the '+' suffix for the KEY."
+            )
+        current_mapping[keys[-1]] = value
+
+    return config
+
+
+def normalize_config(
+    config: dict[str, Any],
+    explicit_overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Normalize configuration by handling run id auto-derivation.
+
+    Args:
+        config: Configuration dictionary to normalize.
+        explicit_overrides: Optional dictionary of explicitly passed overrides.
+
+    Returns:
+        Normalized configuration dictionary.
+    """
+    # Handle id derivation for spinup_name and name
+    run_id = config.get("id")
+    if run_id is not None:
+        run_id_str: str = str(run_id)
+        explicit_keys: set[str] = (
+            set(explicit_overrides.keys()) if explicit_overrides else set()
+        )
+
+        if "spinup_name" not in explicit_keys:
+            if config.get("spinup_name") in (None, "spinup"):
+                config["spinup_name"] = f"spinup_{run_id_str}"
+
+        if "name" not in explicit_keys:
+            if config.get("name") in (None, "default"):
+                config["name"] = f"run_{run_id_str}"
+
+    return config
+
+
 def parse_config(
     config_path: dict | Path | str,
     current_directory: Path | None = None,
     schema: type[BaseModel] | None = None,
+    overrides: tuple[str, ...] | list[str] | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Parse config.
 
@@ -130,6 +282,7 @@ def parse_config(
         current_directory: Current directory to resolve relative paths.
             If None, the current working directory is used.
         schema: Pydantic schema to validate the config against.
+        overrides: Optional overrides (sequence of 'key=value' or dict) to apply in-memory.
 
     Returns:
         Full model configuation of the model without any remaining 'inherits' keys.
@@ -138,7 +291,7 @@ def parse_config(
         current_directory = Path.cwd()
 
     if isinstance(config_path, dict):
-        config = config_path
+        config = config_path.copy()
     else:
         config: dict | None = yaml.load(
             open(current_directory / config_path, "r"),
@@ -168,22 +321,30 @@ def parse_config(
         ]  # remove inherits key from config to avoid infinite recursion
         config = multi_level_merge(inherited_config, config)
         config = parse_config(
-            config, current_directory=current_directory, schema=schema
+            config, current_directory=current_directory, schema=schema, overrides=None
         )
+
+    # Apply overrides (if any)
+    explicit_overrides: dict[str, Any] | None = None
+    if overrides is not None:
+        if isinstance(overrides, (tuple, list)):
+            explicit_overrides = parse_with_args(overrides)
+        elif isinstance(overrides, dict):
+            explicit_overrides = overrides.copy()
+        if explicit_overrides:
+            config = apply_config_overrides(config, explicit_overrides)
+
+    # Normalize config (id auto-derivation)
+    config = normalize_config(config, explicit_overrides=explicit_overrides)
 
     # Validate config
     if schema is not None:
-        try:
-            schema(**config)
-        except ValidationError as e:
-            # We warn instead of raising an error to allow for extra fields or partial configs
-            # during development, but ideally this should be strict.
-            logging.warning(f"Configuration validation failed: {e}")
+        schema.model_validate(config)
 
     return config
 
 
-def create_logger(name: str) -> logging.Logger:
+def create_logger(name: str, loglevel: str | int = "DEBUG") -> logging.Logger:
     """Create logger with console and file handler.
 
     Notes:
@@ -192,28 +353,37 @@ def create_logger(name: str) -> logging.Logger:
 
     Args:
         name: Name of the logger.
+        loglevel: Logging level (name like 'DEBUG', 'INFO' or int).
+
     Returns:
         Logger instance.
     """
+    numeric_level: int = (
+        getattr(logging, loglevel.upper(), logging.DEBUG)
+        if isinstance(loglevel, str)
+        else loglevel
+    )
     logger: logging.Logger = logging.getLogger(name)
     sfincslogger = logging.getLogger(name="hydromt.hydromt_sfincs")
 
+    logger.setLevel(numeric_level)
+    sfincslogger.setLevel(numeric_level)
+
     if logger.handlers:
+        for handler in logger.handlers:
+            handler.setLevel(numeric_level)
+        for handler in sfincslogger.handlers:
+            handler.setLevel(numeric_level)
         return logger
 
-    loglevel = logging.DEBUG
     formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(message)s", datefmt="%d-%m %H:%M:%S"
     )
     formatter.converter = time.localtime
 
-    # set log level to debug
-    logger.setLevel(loglevel)
-    sfincslogger.setLevel(loglevel)
-
     # create console handler and set level to debug
     streamhandler: logging.StreamHandler[TextIO] = logging.StreamHandler()
-    streamhandler.setLevel(loglevel)
+    streamhandler.setLevel(numeric_level)
     streamhandler.setFormatter(formatter)
 
     logger.addHandler(streamhandler)
@@ -227,7 +397,7 @@ def create_logger(name: str) -> logging.Logger:
     folder.mkdir(exist_ok=True, parents=True)
 
     filehandler = logging.FileHandler(folder / f"{name}.log", mode="w")
-    filehandler.setLevel(loglevel)
+    filehandler.setLevel(numeric_level)
     filehandler.setFormatter(formatter)
 
     logger.addHandler(filehandler)
@@ -284,6 +454,7 @@ def run_model_with_method(
     method_args: dict = {},
     close_after_run: bool = True,
     skip_done: bool = SKIP_DONE_DEFAULT,
+    with_overrides: tuple[str, ...] | list[str] | dict[str, Any] = (),
 ) -> Any:
     """Run model with a specific method.
 
@@ -299,6 +470,7 @@ def run_model_with_method(
         method_args: Optional arguments to pass to the method.
         close_after_run: If True, close the model after running the method. Defaults to True.
         skip_done: If True, only run the method if the model is not already marked as done.
+        with_overrides: Configuration overrides to apply in-memory for this run.
 
     Returns:
         The result of the method run or the GEBModel instance if no method was run.
@@ -310,11 +482,18 @@ def run_model_with_method(
     ) -> Any:
         from geb.config_schema import Config
 
-        config_parsed: dict[str, Any] = parse_config(config, schema=Config)
+        config_parsed: dict[str, Any] = parse_config(
+            config, schema=Config, overrides=with_overrides
+        )
+        model_loglevel: str = config_parsed["loglevel"]
+        numeric_level: int = getattr(logging, model_loglevel.upper(), logging.DEBUG)
+        logger.setLevel(numeric_level)
+        for handler in logger.handlers:
+            handler.setLevel(numeric_level)
         files: dict[str, Any] = parse_config(
-            read_params(Path("input/files.yml"))
-            if "files" not in config_parsed["general"]
-            else config_parsed["general"]["files"]
+            config_parsed["files"]
+            if "files" in config_parsed
+            else read_params(Path("input/files.yml"))
         )
 
         t0 = datetime.now()
@@ -754,7 +933,7 @@ def get_builder(
         Instance of the model builder.
     """
     config = parse_config(config, schema=Config)
-    input_folder = Path(config["general"]["input_folder"])
+    input_folder = Path(config["input_folder"])
 
     arguments = {
         "root": input_folder,
@@ -856,16 +1035,19 @@ def init_fn(
             else:
                 basin_ids: int = int(basin_id)
 
-            config_dict["general"]["region"]["subbasin"] = basin_ids
+            if "region" in config_dict:
+                config_dict["region"]["subbasin"] = basin_ids
+            else:
+                config_dict["region"] = {"subbasin": basin_ids}
         elif ISO3 is not None:
-            del config_dict["general"]["region"]["subbasin"]
-            config_dict["general"]["region"] = {
+            region_dict: dict[str, Any] = {
                 "geom": {
                     "source": "GADM_level1",
                     "key": ISO3,
                     "column": "GID_0",
                 }
             }
+            config_dict["region"] = region_dict
         else:
             # if the default region is given, also copy the data folder with specific data for that
             shutil.copytree(
@@ -936,38 +1118,9 @@ def set_fn(
         logger.info("Updating model configuration values.")
 
         config_dict: dict[str, Any] = parse_config(config, schema=Config)
-        for key, value in kwargs.items():
-            if key.endswith("+"):
-                key: str = key[:-1]
-                create: bool = True
-            else:
-                create: bool = False
-
-            keys: list[str] = key.split(".")
-            d = config_dict
-
-            for k in keys[:-1]:
-                if k not in d or not isinstance(d[k], dict):
-                    if create:
-                        d[k] = {}
-                    else:
-                        raise KeyError(
-                            f"Key '{k}' not found in config. If you want to create it, use the '+' suffix for the KEY."
-                        )
-                d: dict[str, Any] = d[k]
-
-            if value == "null":
-                value = None
-            elif value == "true":
-                value = True
-            elif value == "false":
-                value = False
-
-            if not create and keys[-1] not in d:
-                raise KeyError(
-                    f"Key '{keys[-1]}' not found in config. If you want to create it, use the '+' suffix for the KEY."
-                )
-            d[keys[-1]] = value
+        config_dict = apply_config_overrides(config_dict, kwargs)
+        config_dict = normalize_config(config_dict, explicit_overrides=kwargs)
+        Config.model_validate(config_dict)
 
         with open(config, "w") as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
@@ -1068,7 +1221,7 @@ def build_fn(
 
         model.build(
             methods=methods,
-            region=parse_config(config, schema=Config)["general"]["region"],
+            region=parse_config(config, schema=Config)["region"],
             continue_=continue_,
             check_required_methods=check_required_methods,
         )
@@ -1144,7 +1297,7 @@ def alter_fn(
                 yaml.dump(raw_config, f, default_flow_style=False, sort_keys=False)
 
         config_from_original_model = parse_config(from_model / config, schema=Config)
-        input_folder: Path = Path(config_from_original_model["general"]["input_folder"])
+        input_folder: Path = Path(config_from_original_model["input_folder"])
 
         original_input_path: Path = from_model / input_folder
 
@@ -1222,10 +1375,10 @@ def update_version_fn(
     def update_version_operation(logger: logging.Logger, **kwargs: Any) -> None:
         parsed_build_config = parse_config(build_config)
         parsed_config = parse_config(config, schema=Config)
-        input_folder = Path(parsed_config["general"]["input_folder"])
+        input_folder = Path(parsed_config["input_folder"])
         custom_model = (
-            parsed_config["general"]["custom_model"]
-            if "custom_model" in parsed_config["general"]
+            parsed_build_config.get("_custom_model")
+            if isinstance(parsed_build_config, dict)
             else None
         )
 

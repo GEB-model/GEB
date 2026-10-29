@@ -939,11 +939,7 @@ class Reporter:
             fast_rmtree(self.report_folder)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
-        if (
-            self.model.mode == "w"
-            and "report" in self.model.config
-            and self.variables_to_report
-        ):
+        if self.model.mode == "w" and self.variables_to_report:
             self.is_activated = True
 
             to_delete: list[str] = []

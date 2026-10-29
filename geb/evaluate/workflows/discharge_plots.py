@@ -112,9 +112,7 @@ def plot_discharge(
     plt.close()
 
     if include_outflow_plots:
-        run_output_folder: Path = (
-            Path(self.model.config["general"]["output_folder"]) / run_name
-        )
+        run_output_folder: Path = Path(self.model.config["output_folder"]) / run_name
         report_folder: Path = run_output_folder / "report"
         routing_folder: Path = report_folder / "hydrology.routing"
         if not routing_folder.exists():
@@ -200,9 +198,9 @@ def plot_discharge_skill_scores(
     if set(plots) - {"maps", "boxplots", "upstream_area", "characteristics"}:
         raise ValueError(f"Unknown discharge plot groups: {plots}")
     if minimum_upstream_area_km2 is None:
-        minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
-            "discharge"
-        ]["minimum_upstream_area_km2"]
+        minimum_upstream_area_km2 = self.model.config["evaluation"]["discharge"][
+            "minimum_upstream_area_km2"
+        ]
     evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
         self.evaluate_discharge_output_folder, start_year, end_year
     )

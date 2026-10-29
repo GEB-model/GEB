@@ -29,4 +29,4 @@ def test_create_multi_basin_configs_uses_standard_config_file_names(
     assert model_config["inherits"] == "../../model.yml"
     assert build_config["inherits"] == "../../build.yml"
     assert update_config["inherits"] == "../../update.yml"
-    assert model_config["general"]["region"]["subbasin"] == [101, 102]
+    assert model_config["region"]["subbasin"] == [101, 102]
