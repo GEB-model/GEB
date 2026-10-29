@@ -1,4 +1,5 @@
 # dev
+- Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
 
 # v1.0.0b39
 - Cleaned model configuration. This requires manual updating of config if you use any custom configuration. Some works, but this was really needed for future-proofing.

@@ -19,6 +19,9 @@ from geb.geb_types import (
     TwoDArrayFloat32,
 )
 from geb.hazards.event import Event
+from geb.hazards.floods.workflows.initial_water_level import (
+    set_river_initial_water_level,
+)
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.routing import (
     get_discharge_per_river,
@@ -318,6 +321,7 @@ class Floods(Module):
 
         Raises:
             ValueError: If the forcing method is unknown.
+            ValueError: If subgrid is off, as the burned rivers are detected in the subgrid DEM.
         """
         # Save the flood depth to a zarr file
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
@@ -416,6 +420,17 @@ class Floods(Module):
 
         if simulation.sfincs_root_model.has_inflow:
             simulation.set_river_inflow(discharge_by_river=discharge_by_river)
+
+        if not self.config["subgrid"]:
+            raise ValueError(
+                "Filling the rivers at the start of SFINCS requires hazards.floods.subgrid: true."
+            )
+        self.model.logger.info(
+            set_river_initial_water_level(
+                simulation,
+                DEMs=self.DEM_config,
+            )
+        )
 
         return simulation
 
