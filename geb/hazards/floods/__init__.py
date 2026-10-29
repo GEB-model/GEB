@@ -291,7 +291,6 @@ class Floods(Module):
             low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
             coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
             coastal=coastal,
-            setup_river_outflow_boundary=not coastal,
             initial_water_level=initial_water_level,
             custom_rivers_to_burn=read_geom(
                 self.model.files["geom"]["routing/custom_rivers"]

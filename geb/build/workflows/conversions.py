@@ -246,9 +246,11 @@ def setup_donor_countries(
         dev_index.groupby("Code", as_index=False)["HDI"].mean().set_index("Code")
     )  # calculate mean HDI for each country
 
+    countries_with_data_set: set[str] = set(countries_with_data)
+
     # find potential donors
     potential_donors = global_countries.loc[
-        global_countries.index.isin(countries_with_data)
+        global_countries.index.isin(countries_with_data_set)
     ]
     potential_donors = potential_donors[
         potential_donors.index.isin(dev_index.index)
@@ -259,7 +261,7 @@ def setup_donor_countries(
     region_countries = alternative_countries.copy()
 
     # find countries in model domain that do not have data
-    countries_without_data = list(set(region_countries) - set(countries_with_data))
+    countries_without_data = list(set(region_countries) - countries_with_data_set)
 
     # empty dictionary to store farm size donor countries
     donor_country_dict = {}

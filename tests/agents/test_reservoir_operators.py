@@ -1,11 +1,16 @@
 """Unit tests for reservoir operator functions in the GEB agents module."""
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 
 from geb.agents.reservoir_operators import get_irrigation_reservoir_release
 
 from ..testconfig import output_folder
+
+output_folder_reservoir_operators: Path = output_folder / "reservoir_operators"
+output_folder_reservoir_operators.mkdir(exist_ok=True, parents=True)
 
 
 def _run_release_scenario(
@@ -328,5 +333,7 @@ def test_plot_irrigation_reservoir_release_sensitivity() -> None:
         "Irrigation reservoir release behaviour across scenarios", fontsize=14
     )
     figure.tight_layout()
-    figure.savefig(output_folder / "test_reservoir_operators_sensitivity.png")
+    figure.savefig(
+        output_folder_reservoir_operators / "test_reservoir_operators_sensitivity.png"
+    )
     plt.close(figure)

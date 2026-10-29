@@ -262,31 +262,32 @@ class Government(AgentBaseClass):
             "water_content_field_capacity_m",
             "water_content_wilting_point_m",
             "water_content_residual_m",
-            "saturated_hydraulic_conductivity_m_per_s",
+            "horizontal_saturated_hydraulic_conductivity_m_per_s",
+            "vertical_saturated_hydraulic_conductivity_m_per_s",
             "bubbling_pressure_m_positive",
             "lambda_pore_size_distribution",
             "solid_heat_capacity_J_per_m2_K",
         ):
             arr = getattr(hydrology.HRU.var, prop)
-            forest_mean = arr[:, forest_mask].mean(axis=1)
-            arr[:, suitability_HRU] = forest_mean[:, np.newaxis]
+            forest_mean = arr[forest_mask, :].mean(axis=0)
+            arr[suitability_HRU, :] = forest_mean[np.newaxis, :]
 
         water_sat = hydrology.HRU.var.water_content_saturated_m
         water_res = hydrology.HRU.var.water_content_residual_m
         wc = hydrology.HRU.var.water_content_m
 
         # Case 1: wc > new saturation — route excess to topwater (water conserved).
-        excess = np.maximum(0.0, wc[:, suitability_HRU] - water_sat[:, suitability_HRU])
-        wc[:, suitability_HRU] -= excess
-        hydrology.HRU.var.topwater_m[suitability_HRU] += excess.sum(axis=0)
+        excess = np.maximum(0.0, wc[suitability_HRU, :] - water_sat[suitability_HRU, :])
+        wc[suitability_HRU, :] -= excess
+        hydrology.HRU.var.topwater_m[suitability_HRU] += excess.sum(axis=1)
 
         # Case 2: wc < new residual — raise wc to residual, sourcing from topwater (water conserved).
         deficit = np.maximum(
-            0.0, water_res[:, suitability_HRU] - wc[:, suitability_HRU]
+            0.0, water_res[suitability_HRU, :] - wc[suitability_HRU, :]
         )
-        wc[:, suitability_HRU] += deficit
+        wc[suitability_HRU, :] += deficit
         topwater = hydrology.HRU.var.topwater_m[suitability_HRU]
-        drawn = np.minimum(deficit.sum(axis=0), topwater)
+        drawn = np.minimum(deficit.sum(axis=1), topwater)
         hydrology.HRU.var.topwater_m[suitability_HRU] -= drawn
 
         self.remove_farmers_from_converted_forest_areas(suitability_HRU)

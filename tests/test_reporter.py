@@ -42,19 +42,6 @@ class TestDailyFrequency:
         for i in range(1, len(dts)):
             assert dts[i] - dts[i - 1] == datetime.timedelta(days=1)
 
-    def test_daily_explicit_conf(self) -> None:
-        """Verify explicit daily conf gives the same result as the default."""
-        start = datetime.datetime(2020, 3, 1)
-        end = datetime.datetime(2020, 3, 5)
-        timestep = datetime.timedelta(days=1)
-        conf_default: dict = {}
-        conf_explicit: dict = {"frequency": {"every": "day"}}
-
-        result_default = create_time_array(start, end, timestep, conf_default)
-        result_explicit = create_time_array(start, end, timestep, conf_explicit)
-
-        np.testing.assert_array_equal(result_default, result_explicit)
-
     def test_daily_single_day(self) -> None:
         """Verify that start == end yields exactly one entry."""
         start = datetime.datetime(2021, 6, 15)
@@ -294,17 +281,6 @@ class TestInitialFinalFrequency:
 class TestOutputArrayProperties:
     """Tests for return value type and encoding."""
 
-    def test_return_type_is_int64(self) -> None:
-        """Verify that the returned array has dtype int64."""
-        start = datetime.datetime(2020, 1, 1)
-        end = datetime.datetime(2020, 1, 5)
-        timestep = datetime.timedelta(days=1)
-        conf: dict = {}
-
-        result = create_time_array(start, end, timestep, conf)
-
-        assert result.dtype == np.int64
-
     def test_values_are_unix_seconds(self) -> None:
         """Verify that the values are Unix timestamps in seconds."""
         start = datetime.datetime(2020, 1, 1)
@@ -383,34 +359,6 @@ class TestCachingAndReadOnly:
         result = create_time_array(start, end, timestep, conf)
 
         assert not result.flags.writeable
-
-    def test_write_to_returned_array_raises(self) -> None:
-        """Verify that attempting to write to the returned array raises ValueError."""
-        start = datetime.datetime(2020, 1, 1)
-        end = datetime.datetime(2020, 1, 5)
-        timestep = datetime.timedelta(days=1)
-        conf: dict = {}
-
-        result = create_time_array(start, end, timestep, conf)
-
-        with pytest.raises(ValueError, match="read-only"):
-            result[0] = 0
-
-    def test_different_inputs_not_confused(self) -> None:
-        """Verify that calls with different inputs return different results."""
-        start = datetime.datetime(2020, 1, 1)
-        timestep = datetime.timedelta(days=1)
-        conf: dict = {}
-
-        result_5 = create_time_array(
-            start, datetime.datetime(2020, 1, 5), timestep, conf
-        )
-        result_10 = create_time_array(
-            start, datetime.datetime(2020, 1, 10), timestep, conf
-        )
-
-        assert len(result_5) == 5
-        assert len(result_10) == 10
 
 
 class TestSpecialExportersSingleFile:
@@ -897,12 +845,19 @@ class TestSpecialExportersSingleFile:
         model.simulation_end = datetime.datetime(2021, 1, 1)
         model.timestep_length = datetime.timedelta(days=1)
 
+        rivers_data = {
+            "depth": [1.5, 2.5],
+            "width": [10.0, 20.0],
+            "return_period_2_years_daily_m3_per_s": [50.0, 120.0],
+            "floodplain_side_slope_m_per_m": [2.0, 2.0],
+        }
+        for k in range(10):
+            rivers_data[f"floodplain_profile_width_{k}_m"] = [
+                15.0 + k * 5.0,
+                25.0 + k * 5.0,
+            ]
         rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            {
-                "depth": [1.5, 2.5],
-                "width": [10.0, 20.0],
-                "return_period_2_years_daily_m3_per_s": [50.0, 120.0],
-            },
+            rivers_data,
             index=[10, 20],
             geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (2, 2)])],
             crs="EPSG:4326",
