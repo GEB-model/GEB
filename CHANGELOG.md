@@ -1,4 +1,5 @@
 # dev
+- Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
 
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.
