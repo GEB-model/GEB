@@ -1,4 +1,7 @@
 # dev
+- Bound floodplain temporary arrays to row blocks and load only the required DEM window, reducing peak memory without changing floodplain profiles.
+- Fail immediately on HTTP 401/403 downloads and allow cached FathomDEM archives without a download token.
+- Propagate failed automatic migrations and reject input versions newer than the running code, preventing silent version-marker downgrades.
 - Add GDW reservoirs. All HydroLAKES controlled lakes are modelled as reservoirs, and natural lakes are converted to reservoirs when an intersecting GDW Dam or Lake Control Dam has a matching or missing HydroLAKES ID.
 - Activate reservoirs from their GDW construction year; before then, their cells route water as rivers.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.

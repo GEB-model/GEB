@@ -8,50 +8,81 @@ import pytest
 from geb.build import version_updates
 
 
-@pytest.mark.parametrize("stored_version", ["1.0.0b38", "1.0.0b39", "1.0.0b40"])
+@pytest.mark.parametrize(
+    ("stored_version", "expected_methods", "expected_versions"),
+    [
+        (
+            "1.0.0b36",
+            [
+                "setup_hydrography",
+                "setup_coastal_water_levels",
+                "setup_hydrography",
+                "setup_floodplains",
+            ],
+            ["1.0.0b37", "1.0.0b38"],
+        ),
+        ("1.0.0b37", ["setup_hydrography", "setup_floodplains"], ["1.0.0b38"]),
+        ("1.0.0b38", [], []),
+    ],
+)
 def test_waterbody_input_migration(
-    monkeypatch: pytest.MonkeyPatch, stored_version: str
+    monkeypatch: pytest.MonkeyPatch,
+    stored_version: str,
+    expected_methods: list[str],
+    expected_versions: list[str],
 ) -> None:
-    """Rebuild merged routing inputs even when a branch already recorded b39.
+    """Apply only pending migrations while retaining package version b38.
 
     Args:
         monkeypatch: Fixture for fixing the target package version.
-        stored_version: Input version before the merged-code update.
+        stored_version: Input version before the update.
+        expected_methods: Build methods that must run, in order.
+        expected_versions: Successfully completed migration versions.
     """
-    monkeypatch.setattr(version_updates, "__version__", "1.0.0b40")
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b38")
     builder: Mock = Mock()
-    method_names: list[str] = [
-        "setup_hydrography",
-        "setup_coastal_water_levels",
-        "setup_retention_basins",
-        "setup_floodplains",
-        "setup_waterbodies",
-    ]
-    methods: dict[str, dict[str, str]] = {name: {} for name in method_names}
-    if stored_version != "1.0.0b40":
-        with pytest.raises(
-            RuntimeError, match="Rerun spinup, simulation, and evaluation"
-        ):
-            version_updates.get_and_maybe_do_version_updates(
-                stored_version,
-                logging.getLogger(__name__),
-                build_model=builder,
-                methods=methods,
-            )
-        assert builder.update.call_args_list == [
-            call({method_name: {}}) for method_name in method_names
+    methods: dict[str, dict[str, str]] = {
+        name: {}
+        for name in [
+            "setup_hydrography",
+            "setup_coastal_water_levels",
+            "setup_floodplains",
         ]
-        builder.set_version.assert_called_once_with("1.0.0b40")
-    else:
-        version_updates.get_and_maybe_do_version_updates(
-            stored_version,
-            logging.getLogger(__name__),
-            build_model=builder,
-            methods=methods,
-        )
-        builder.update.assert_not_called()
-        builder.set_version.assert_not_called()
+    }
+    version_updates.get_and_maybe_do_version_updates(
+        stored_version,
+        logging.getLogger(__name__),
+        build_model=builder,
+        methods=methods,
+    )
+    assert builder.update.call_args_list == [
+        call({name: {}}) for name in expected_methods
+    ]
+    assert builder.set_version.call_args_list == [
+        call(version) for version in expected_versions
+    ]
     builder.set_current_version.assert_called_once()
+
+
+@pytest.mark.parametrize("stored_version", ["1.0.0b39", "1.0.0b40"])
+def test_newer_inputs_are_not_downgraded(
+    monkeypatch: pytest.MonkeyPatch, stored_version: str
+) -> None:
+    """Preserve newer input markers until an explicit rebuild succeeds.
+
+    Args:
+        monkeypatch: Fixture for fixing the running package version.
+        stored_version: Input marker from a newer branch version.
+    """
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b38")
+    builder: Mock = Mock()
+    with pytest.raises(ValueError, match="Refusing to downgrade"):
+        version_updates.get_and_maybe_do_version_updates(
+            stored_version, logging.getLogger(__name__), build_model=builder, methods={}
+        )
+    builder.update.assert_not_called()
+    builder.set_version.assert_not_called()
+    builder.set_current_version.assert_not_called()
 
 
 @pytest.mark.parametrize("notice_first", [False, True])

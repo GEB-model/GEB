@@ -222,10 +222,76 @@ def _extract_1sec_subgrid(
     fathomdem_sub: npt.NDArray[np.float32] = np.full(
         target_shape, np.nan, dtype=np.float32
     )
-    fathomdem_sub[dst_r0:dst_r1, dst_c0:dst_c1] = elevation_1sec.values[
-        src_r0:src_r1, src_c0:src_c1
-    ]
+    # Load only the overlapping window, rather than the full cached DEM.
+    fathomdem_sub[dst_r0:dst_r1, dst_c0:dst_c1] = elevation_1sec.isel(
+        y=slice(src_r0, src_r1), x=slice(src_c0, src_c1)
+    ).to_numpy()
     return fathomdem_sub
+
+
+def _count_flooded_subpixels_per_reach(
+    elevation_1sec: npt.NDArray[np.float32],
+    drainage_elevation_3sec: npt.NDArray[np.float32],
+    reach_ids_3sec: npt.NDArray[np.uint32],
+    number_of_reaches: int,
+) -> npt.NDArray[np.int64]:
+    """Count flooded subpixels per river reach without expanding entire basin maps.
+
+    Process 256 drainage-grid rows at a time to limit temporary memory use.
+    The 1-arc-second elevation grid has three rows and columns for each
+    3-arc-second drainage cell. Input arrays are not modified.
+
+    Args:
+        elevation_1sec: Terrain elevations on the 1-arc-second grid (meters).
+        drainage_elevation_3sec: Nearest drainage elevations (meters).
+        reach_ids_3sec: Reach IDs from 1 through number_of_reaches; 0 is outside.
+        number_of_reaches: Number of river reaches.
+
+    Returns:
+        Flooded subpixel counts at each configured floodplain depth, per reach.
+
+    Raises:
+        ValueError: If grid shapes do not match the threefold refinement,
+            or the number of reaches is negative.
+    """
+    if number_of_reaches < 0:
+        raise ValueError("number_of_reaches must be non-negative.")
+    if drainage_elevation_3sec.shape != reach_ids_3sec.shape or (
+        elevation_1sec.shape != tuple(3 * size for size in reach_ids_3sec.shape)
+    ):
+        raise ValueError(
+            "Floodplain grids must have matching shapes at 3:1 refinement."
+        )
+
+    counts: npt.NDArray[np.int64] = np.zeros(
+        (len(FLOODPLAIN_PROFILE_DEPTHS), number_of_reaches), dtype=np.int64
+    )
+    row_start: int
+    for row_start in range(0, reach_ids_3sec.shape[0], 256):
+        row_end: int = min(row_start + 256, reach_ids_3sec.shape[0])
+        # Broadcast drainage elevations within each 3x3 cell instead of copying
+        # a full-resolution drainage map for the entire region.
+        terrain_block: npt.NDArray[np.float32] = elevation_1sec[
+            3 * row_start : 3 * row_end
+        ].reshape(row_end - row_start, 3, reach_ids_3sec.shape[1], 3)
+        height_above_drainage: npt.NDArray[np.float32] = np.maximum(
+            terrain_block - drainage_elevation_3sec[row_start:row_end, None, :, None],
+            np.float32(0.0),
+        )
+        reach_ids: npt.NDArray[np.uint32] = reach_ids_3sec[row_start:row_end].ravel()
+        depth_index: int
+        depth_m: float
+        for depth_index, depth_m in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
+            # Count the nine subpixels within each drainage cell, then sum by reach.
+            flooded_per_cell: npt.NDArray[np.int64] = np.count_nonzero(
+                height_above_drainage <= depth_m, axis=(1, 3)
+            )
+            counts[depth_index] += np.bincount(
+                reach_ids,
+                weights=flooded_per_cell.ravel(),
+                minlength=number_of_reaches + 1,
+            )[1:].astype(np.int64)
+    return counts
 
 
 def calculate_dem_floodplain_geometry(
@@ -303,17 +369,13 @@ def calculate_dem_floodplain_geometry(
         drain_high_res = np.zeros(upstream_area_high_res_m2.shape, dtype=bool)
         drain_high_res.ravel()[river_outflows_hd] = True
 
-    # Decompose into 3x3 blocks corresponding to 3 arc-second cells
-    blocks = (
-        fathomdem_sub.reshape(H_hd, 3, W_hd, 3)
-        .transpose(0, 2, 1, 3)
-        .reshape(H_hd, W_hd, 9)
-    )
+    # Reduce the 3x3 blocks directly, avoiding a full-size transposed copy.
+    blocks: npt.NDArray[np.float32] = fathomdem_sub.reshape(H_hd, 3, W_hd, 3)
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", category=RuntimeWarning, message="All-NaN slice"
         )
-        min_subpixels = np.nanmin(blocks, axis=2)
+        min_subpixels = np.nanmin(blocks, axis=(1, 3))
     elev_3sec = np.where(
         np.isnan(min_subpixels), elevation_high_res.values, min_subpixels
     )
@@ -325,13 +387,8 @@ def calculate_dem_floodplain_geometry(
     )
     drain_elev_3sec = elev_3sec - hand_3sec
 
-    # Expand datum and subbasins to 1 arc-second grid (3x3 integer refinement)
-    drain_elev_1sec = np.repeat(np.repeat(drain_elev_3sec, 3, axis=0), 3, axis=1)
-    hand_1sec = np.maximum(fathomdem_sub - drain_elev_1sec, np.float32(0.0))
-
     subbasin_ids = np.arange(1, river_cell_indices.size + 1, dtype=np.uint32)
     subbasins_hd = flow_raster_high_res.basins(idxs=river_outflows_hd, ids=subbasin_ids)
-    subbasins_1sec = np.repeat(np.repeat(subbasins_hd, 3, axis=0), 3, axis=1)
 
     # Convert 1 arc-second subpixel counts to reach-level floodplain areas (m²)
     cell_area_flat = cell_area_low_res.values.ravel()[river_cell_indices].astype(
@@ -340,19 +397,14 @@ def calculate_dem_floodplain_geometry(
     high_res_pixel_area = cell_area_flat / np.float32(ldd_scale_factor**2)
     subpixel_area = high_res_pixel_area / np.float32(9.0)
 
-    subbasins_flat = subbasins_1sec.ravel()
-    hand_flat = hand_1sec.ravel()
-    valid_pixel_mask = (subbasins_flat > 0) & ~np.isnan(hand_flat)
-
-    n_reaches: int = river_cell_indices.size
-    reach_profile_areas = np.zeros((n_levels, n_reaches), dtype=np.float32)
-
-    for k, d_k in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
-        mask_k = valid_pixel_mask & (hand_flat <= d_k)
-        counts_k = np.bincount(subbasins_flat[mask_k], minlength=n_reaches + 1)
-        reach_profile_areas[k] = (
-            counts_k[1 : n_reaches + 1].astype(np.float32) * subpixel_area
-        )
+    # Integer counts are accumulated before conversion, preserving the original
+    # areas independently of the number of row blocks.
+    reach_pixel_counts: npt.NDArray[np.int64] = _count_flooded_subpixels_per_reach(
+        fathomdem_sub, drain_elev_3sec, subbasins_hd, river_cell_indices.size
+    )
+    reach_profile_areas: npt.NDArray[np.float32] = (
+        reach_pixel_counts.astype(np.float32) * subpixel_area
+    )
 
     river_raster_flat = river_raster_low_res.ravel()
     unique_segments = np.unique(river_raster_flat[river_mask_flat])
