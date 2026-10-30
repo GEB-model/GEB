@@ -1261,8 +1261,8 @@ def test_set_and_clean(tmp_path: Path) -> None:
             f"start_time={updated_start_time.isoformat()}",
             f"end_time={updated_end_time.isoformat()}",
             "hazards.floods.simulate=false",
-            "report=null",
-            "report._discharge_stations+=true",
+            "report._discharge_stations=false",
+            "report.custom_module.custom_var+=true",
         ],
     )
 
@@ -1273,7 +1273,8 @@ def test_set_and_clean(tmp_path: Path) -> None:
     assert copied_config["start_time"] == updated_start_time
     assert copied_config["end_time"] == updated_end_time
     assert copied_config["hazards"]["floods"]["simulate"] is False
-    assert copied_config["report"] == {"_discharge_stations": True}
+    assert copied_config["report"]["_discharge_stations"] is False
+    assert copied_config["report"]["custom_module"]["custom_var"] is True
 
     clean_result = runner.invoke(
         cli,
@@ -1287,7 +1288,12 @@ def test_set_and_clean(tmp_path: Path) -> None:
 
     assert clean_result.exit_code == 0, clean_result.output
 
-    expected_remaining_files: set[str] = {"build.yml", "model.yml", "update.yml"}
+    expected_remaining_files: set[str] = {
+        "build.yml",
+        "model.yml",
+        "region.yml",
+        "update.yml",
+    }
     remaining_files: set[str] = {
         path.name for path in copied_model_directory.iterdir() if path.exists()
     }
@@ -1298,7 +1304,8 @@ def test_set_and_clean(tmp_path: Path) -> None:
     assert cleaned_config["start_time"] == updated_start_time
     assert cleaned_config["end_time"] == updated_end_time
     assert cleaned_config["hazards"]["floods"]["simulate"] is False
-    assert cleaned_config["report"] == {"_discharge_stations": True}
+    assert cleaned_config["report"]["_discharge_stations"] is False
+    assert cleaned_config["report"]["custom_module"]["custom_var"] is True
 
     for generated_directory_name in ("cache", "input", "logs", "output"):
         assert not (copied_model_directory / generated_directory_name).exists()
