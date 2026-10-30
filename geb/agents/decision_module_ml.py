@@ -401,6 +401,57 @@ class DecisionModuleML:
             config.get("random_seed", self.bundle.get("model_random_seed", 44))
         )
         self.selection_rng = np.random.default_rng(self.selection_random_seed)
+        # Optional rice-only gate overrides (crop ID 2). The exit gate replaces
+        # the trained persistence threshold for rice-origin decisions. The entry
+        # gate acts AFTER the trained gate for other origin crops, matching the
+        # offline one-step entry/exit sensitivity sweep.
+        # None: leave the corresponding trained/original behaviour unchanged.
+        # 0.0: disable the corresponding additional gate.
+        rice_exit_gate_threshold = config.get("rice_exit_gate_threshold", None)
+        self.rice_exit_gate_threshold = (
+            None
+            if rice_exit_gate_threshold is None
+            else float(rice_exit_gate_threshold)
+        )
+        if self.rice_exit_gate_threshold is not None and (
+            not np.isfinite(self.rice_exit_gate_threshold)
+            or not 0.0 <= self.rice_exit_gate_threshold <= 1.0
+        ):
+            raise ValueError(
+                "machine_learning.rice_exit_gate_threshold must be between 0 and 1 "
+                "or None to use the trained gate."
+            )
+        rice_entry_gate_threshold = config.get("rice_entry_gate_threshold", None)
+        self.rice_entry_gate_threshold = (
+            None
+            if rice_entry_gate_threshold is None
+            else float(rice_entry_gate_threshold)
+        )
+        if self.rice_entry_gate_threshold is not None and (
+            not np.isfinite(self.rice_entry_gate_threshold)
+            or not 0.0 <= self.rice_entry_gate_threshold <= 1.0
+        ):
+            raise ValueError(
+                "machine_learning.rice_entry_gate_threshold must be between 0 and 1 "
+                "or None to leave rice entry unchanged."
+            )
+        if (
+            self.rice_entry_gate_threshold is not None
+            and self.prediction_model != "hierarchical_random_forest_switch_gate"
+        ):
+            raise ValueError(
+                "machine_learning.rice_entry_gate_threshold requires "
+                "prediction_model: hierarchical_random_forest_switch_gate; "
+                "the historical calibration assumes the trained crop gate is "
+                "applied before restricting rice entry."
+            )
+        self.model.logger.info(
+            "Online rice gate thresholds: entry=%s (None=no extra gate), "
+            "exit=%s (None=trained persistence gate); prediction_model=%s.",
+            self.rice_entry_gate_threshold,
+            self.rice_exit_gate_threshold,
+            self.prediction_model,
+        )
         self.log_crop_counts = bool(config.get("log_crop_counts", False))
         cache_settings = config.get("historical_state_cache", {})
         if isinstance(cache_settings, bool):
@@ -1499,6 +1550,10 @@ class DecisionModuleML:
             "profile_runtime_timing",
             "historical_state_cache",
             "store_runtime_diagnostics",
+            # These options affect only post-spinup inference; historical replay is
+            # prescribed and remains identical when their values change.
+            "rice_entry_gate_threshold",
+            "rice_exit_gate_threshold",
         }
         history_settings = {k: v for k, v in self.config.items() if k not in excluded}
         digest.update(
@@ -4252,11 +4307,18 @@ class DecisionModuleML:
         current_crop_ids: ArrayInt32,
         feasible_classes: TwoDArrayBool,
     ) -> TwoDArrayFloat64:
-        """Apply the calibrated persistence gate to first-stage crop probability mass.
+        """Apply trained persistence plus optional rice exit and entry overrides.
+
+        The rice entry threshold is evaluated on the post-persistence marginal
+        P(rice), BEFORE absolute-date calendar feasibility renormalization.
+        When P(rice) is below the entry threshold for a non-rice origin, all
+        rice calendar classes are zeroed and the other crop classes renormalized.
+        When no feasible non-rice alternative has positive mass, skip suppression
+        instead of leaving the operational selector with no feasible calendar.
 
         Returns:
-            Calendar-class probabilities after applying the persistence gate, or the
-            original probabilities when the gate is not enabled for the prediction mode.
+            Calendar-class probabilities after applying the configured gates, or the
+            original probabilities when the trained gate is not enabled for the mode.
 
         Raises:
             ValueError: If the persistence-gate configuration or threshold is invalid,
@@ -4303,7 +4365,12 @@ class DecisionModuleML:
             same_crop_feasible_mass = float(
                 gated[row_index, same_crop & feasible_classes[row_index]].sum()
             )
-            if switch_probability < threshold and same_crop_feasible_mass > 0.0:
+            row_threshold = (
+                self.rice_exit_gate_threshold
+                if crop_id == 2 and self.rice_exit_gate_threshold is not None
+                else threshold
+            )
+            if switch_probability < row_threshold and same_crop_feasible_mass > 0.0:
                 gated[row_index, ~same_crop] = 0.0
                 total = float(gated[row_index].sum())
                 if not np.isfinite(total) or total <= 0.0:
@@ -4311,6 +4378,36 @@ class DecisionModuleML:
                         "The crop persistence gate removed all calendar probability mass."
                     )
                 gated[row_index] /= total
+
+        # Crop-specific ENTRY gate: only farmers NOT currently growing rice,
+        # including fallow origins. Other-origin persistence has already been
+        # evaluated above using the original trained threshold. The entry gate
+        # does not change rice-origin exit decisions or other-crop switches.
+        entry_threshold = self.rice_entry_gate_threshold
+        if entry_threshold is not None and entry_threshold > 0.0:
+            rice_classes = self.class_crop_values == 2
+            if np.any(rice_classes):
+                rice_probability = gated[:, rice_classes].sum(axis=1)
+                other_classes = ~rice_classes
+                feasible_other_probability = np.where(
+                    feasible_classes[:, other_classes],
+                    gated[:, other_classes],
+                    0.0,
+                ).sum(axis=1)
+                apply_entry_gate = (
+                    (current_crop_ids != 2)
+                    & (rice_probability < entry_threshold)
+                    & (feasible_other_probability > 0.0)
+                )
+                rows = np.flatnonzero(apply_entry_gate)
+                if rows.size:
+                    gated[np.ix_(rows, np.flatnonzero(rice_classes))] = 0.0
+                    remaining = gated[rows].sum(axis=1)
+                    if not np.all(np.isfinite(remaining) & (remaining > 0.0)):
+                        raise RuntimeError(
+                            "The rice entry gate removed all calendar probability mass."
+                        )
+                    gated[rows] /= remaining[:, None]
         return gated
 
     def _select_calendar_classes(
