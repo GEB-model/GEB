@@ -19,9 +19,6 @@ from geb.geb_types import (
     TwoDArrayFloat32,
 )
 from geb.hazards.event import Event
-from geb.hazards.floods.workflows.initial_water_level import (
-    set_river_initial_water_level,
-)
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.routing import (
     get_discharge_per_river,
@@ -420,12 +417,7 @@ class Floods(Module):
         if simulation.sfincs_root_model.has_inflow:
             simulation.set_river_inflow(discharge_by_river=discharge_by_river)
 
-        self.model.logger.info(
-            set_river_initial_water_level(
-                simulation,
-                DEMs=self.DEM_config,
-            )
-        )
+        simulation.set_river_initial_water_level()
 
         return simulation
 

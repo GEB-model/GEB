@@ -1,10 +1,10 @@
 # dev
-- Move region definition from `model.yml` into a separate `region.yml`, removing the circular dependency between model building and simulation configuration.
 
 # v1.0.0b39
 - Cleaned model configuration. This requires manual updating of config if you use any custom configuration. Some works, but this was really needed for future-proofing.
 - Added experimental "geb run --with some.config.parameter" to run model with a specific configuration without changing to the config on disk.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
+- Move region definition from `model.yml` into a separate `region.yml`, removing the circular dependency between model building and simulation configuration.
 
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.

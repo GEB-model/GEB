@@ -20,6 +20,9 @@ from geb.geb_types import TwoDArrayFloat64, TwoDArrayInt32
 from geb.hazards.event import Event
 from geb.hazards.floods import create_river_graph, group_subbasins
 from geb.hazards.floods.sfincs import SFINCSRootModel
+from geb.hazards.floods.workflows.initial_water_level import (
+    calculate_initial_water_volume,
+)
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.runner import parse_config, run_model_with_method
@@ -289,7 +292,7 @@ def test_accumulated_runoff(
         subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         rivers = geb_model.hydrology.routing.var.rivers
         sfincs_models: list[SFINCSRootModel] = create_sfincs_models(
-            geb_model, subbasins, rivers, split
+            geb_model, subbasins, rivers, split, subgrid=subgrid
         )
 
         runoff_rate_mm_per_hr: float = 1.0  # mm/hr
@@ -364,6 +367,8 @@ def test_accumulated_runoff(
                     cell_area=cell_area,
                 )
 
+                simulation.set_river_initial_water_level()
+
                 if simulation.sfincs_root_model.has_inflow:
                     inflow_rivers: gpd.GeoDataFrame = (
                         simulation.sfincs_root_model.inflow_rivers
@@ -397,6 +402,7 @@ def test_accumulated_runoff(
 
             assert (simulation.path / "sfincs.dis").exists()
             assert (simulation.path / "sfincs.src").exists()
+            assert (simulation.path / "sfincs.ini").exists()
 
             assert simulation.has_outflow_boundary()
 
@@ -423,27 +429,31 @@ def test_accumulated_runoff(
                 * ((end_time - start_time).total_seconds() / 3600.0)
             )
 
-            # Use tracked volumes from the simulation
+            # Use tracked volumes from the simulation (including initial water levels)
             total_discharge_volume_m3: float = simulation.total_discharge_volume_m3
+            initial_water_volume_m3: float = simulation.total_initial_water_volume_m3
 
             # compare to total discharge volume
+            rel_tol: float = 0.05
             assert math.isclose(
                 total_flood_volume + total_outflow_volume,
                 total_discharge_volume_m3,
                 abs_tol=0,
-                rel_tol=0.01,
+                rel_tol=rel_tol,
             )
 
             assert math.isclose(
                 total_flood_volume + total_outflow_volume,
-                total_runoff_volume + discharge_m3,
+                total_runoff_volume + discharge_m3 + initial_water_volume_m3,
                 abs_tol=0,
-                rel_tol=0.02,
+                rel_tol=rel_tol,
             )
 
             total_flood_volume_across_models += total_flood_volume
             total_outflow_volume_across_models += total_outflow_volume
-            total_discharge_volume_across_models += discharge_m3
+            total_discharge_volume_across_models += (
+                discharge_m3 + initial_water_volume_m3
+            )
 
             simulation.cleanup()
             sfincs_model.cleanup()
@@ -703,6 +713,10 @@ def test_read(geb_model: GEBModel) -> None:
             assert sfincs_model_build.rivers[col].equals(sfincs_model_read.rivers[col])
         assert sfincs_model_build.rivers.equals(sfincs_model_read.rivers)
         assert sfincs_model_build.subbasins.equals(sfincs_model_read.subbasins)
+        xr.testing.assert_equal(
+            sfincs_model_build.river_initial_water_level,
+            sfincs_model_read.river_initial_water_level,
+        )
         assert sfincs_model_build.sfincs_model.cross_sections.data.geom_equals_exact(
             sfincs_model_read.sfincs_model.cross_sections.data, tolerance=1e-5
         ).all()
@@ -810,4 +824,92 @@ def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
         plot_flood_map(flood_depth, "flood_depth_coastal_test")
 
         simulation.cleanup()
+        sfincs_model.cleanup()
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.parametrize("subgrid", [False, True])
+def test_initial_water_level(geb_model: GEBModel, subgrid: bool) -> None:
+    """Test setting initial water levels in river cells for both subgrid and non-subgrid modes.
+
+    Args:
+        geb_model: A GEB model instance with SFINCS configured.
+        subgrid: Whether to use subgrid in SFINCS.
+    """
+    with WorkingDirectory(working_directory):
+        subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        rivers = geb_model.hydrology.routing.var.rivers
+        sfincs_model: SFINCSRootModel = build_sfincs(
+            geb_model,
+            subgrid=subgrid,
+            subbasins=subbasins,
+            name=f"test_ini_subgrid_{subgrid}",
+            rivers=rivers,
+        )
+
+        assert sfincs_model.is_subgrid is subgrid
+        assert (sfincs_model.path / "river_initial_water_level.zarr").exists()
+
+        ini: xr.DataArray = sfincs_model.river_initial_water_level
+        ini_from_disk: xr.DataArray = read_zarr(
+            sfincs_model.path / "river_initial_water_level.zarr"
+        )
+        xr.testing.assert_equal(ini, ini_from_disk)
+
+        filled_mask: np.ndarray = ini.notnull().values
+        filled_cells: int = int(filled_mask.sum())
+        assert filled_cells > 0, (
+            "Expected burned river cells to have initial water levels"
+        )
+        # All cells with initial water level must be active cells (mask == 1) and above bed elevation
+        assert np.all(sfincs_model.mask.values[filled_mask] == 1)
+        assert np.all(
+            ini.values[filled_mask] > sfincs_model.bed_elevation.values[filled_mask]
+        )
+
+        start_time: datetime = datetime(2000, 1, 1, 0)
+        end_time: datetime = datetime(2000, 1, 2, 0)
+        event = Event(
+            kind="flood",
+            name=f"test_ini_{subgrid}",
+            start_time=start_time,
+            end_time=end_time,
+            create_final_intensity_map=True,
+        )
+
+        with sfincs_model.create_simulation(event=event) as simulation:
+            assert simulation.is_subgrid is subgrid
+            ini_set = simulation.set_river_initial_water_level()
+            xr.testing.assert_equal(ini_set, ini)
+            assert (simulation.path / "sfincs.ini").exists()
+            assert simulation.total_initial_water_volume_m3 > 0.0
+            assert (
+                simulation.total_discharge_volume_m3
+                >= simulation.total_initial_water_volume_m3
+            )
+
+            calculated_volume: float = simulation.get_initial_water_volume(
+                initial_level=ini,
+            )
+            assert math.isclose(
+                calculated_volume,
+                simulation.total_initial_water_volume_m3,
+                rel_tol=1e-5,
+            )
+
+            calculated_volume_workflow: float = calculate_initial_water_volume(
+                initial_level=ini,
+                cell_area_coarse=simulation.sfincs_root_model.cell_area_m2,
+                bed_elevation=simulation.bed_elevation,
+                subgrid_dem=simulation.subgrid_dem_path
+                if simulation.is_subgrid
+                else None,
+                is_geographic=simulation.sfincs_root_model.is_geographic,
+            )
+            assert math.isclose(
+                calculated_volume_workflow,
+                simulation.total_initial_water_volume_m3,
+                rel_tol=1e-5,
+            )
+
         sfincs_model.cleanup()

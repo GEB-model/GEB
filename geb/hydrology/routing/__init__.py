@@ -1917,9 +1917,6 @@ class Routing(Module):
 
             river_width = alpha * discharge^beta
 
-        for alpha a default value of 3.91 is used, and beta is set to 0.62 based on
-        default configuration parameters.
-
         Re-arranging for alpha gives:
 
             alpha = river_width / discharge^beta
@@ -1929,8 +1926,7 @@ class Routing(Module):
 
         Args:
             beta: The beta parameter for the kinematic wave routing.
-            default_alpha: The default alpha value to use for rivers without an observed average river width,
-                default is 3.91.
+            default_alpha: The default alpha value to use for rivers without an observed average river width.
 
         Returns:
             A tuple containing:
