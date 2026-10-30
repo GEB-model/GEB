@@ -22,6 +22,7 @@ from geb.runner import (
     OPTIMIZE_DEFAULT,
     PROFILE_RAM_DEFAULT,
     PROFILE_SPEED_DEFAULT,
+    REGION_DEFAULT,
     SKIP_DONE_DEFAULT,
     TIMING_DEFAULT,
     UPDATE_DEFAULT,
@@ -509,17 +510,27 @@ def exec(
 
 
 def click_build_options(
-    build_config: Path = BUILD_DEFAULT, build_config_help_extra: str | None = None
+    build_config: Path = BUILD_DEFAULT,
+    region: Path = REGION_DEFAULT,
+    build_config_help_extra: str | None = None,
 ) -> Any:
     """Decorator to add build options to a click command.
 
     Args:
         build_config: Default path to the build config file.
+        region: Default path to the region config file.
         build_config_help_extra: Extra help text for the build config option.
 
     Returns:
         Decorator function.
     """
+    build_config_help = (
+        f"Path of the model build configuration file. Defaults to '{build_config}'."
+    )
+    if build_config_help_extra:
+        build_config_help += f"""
+
+        {build_config_help_extra}"""
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         """Decorator function to add build options to a click command.
@@ -530,13 +541,6 @@ def click_build_options(
         Returns:
             Decorated function.
         """
-        build_config_help = (
-            f"Path of the model build configuration file. Defaults to '{build_config}'."
-        )
-        if build_config_help_extra:
-            build_config_help += f"""
-
-            {build_config_help_extra}"""
 
         @universal_options
         @click.option(
@@ -545,6 +549,13 @@ def click_build_options(
             type=click.Path(path_type=Path),
             default=Path(build_config),
             help=build_config_help,
+        )
+        @click.option(
+            "--region",
+            "-r",
+            type=click.Path(path_type=Path),
+            default=Path(region),
+            help=f"Path of the model region configuration file. Defaults to '{region}'.",
         )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -584,6 +595,13 @@ def click_build_options(
     help="Path of the model update configuration file.",
 )
 @click.option(
+    "--region",
+    "-r",
+    type=click.Path(path_type=Path),
+    default=Path(REGION_DEFAULT),
+    help=f"Path of the model region configuration file. Defaults to '{REGION_DEFAULT}'.",
+)
+@click.option(
     "--from-example",
     default="geul",
     help="Name of the example to use as a base for the model. Defaults to 'geul'.",
@@ -592,7 +610,7 @@ def click_build_options(
     "--basin-id",
     default=None,
     type=str,
-    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file. Cannot be used together with --ISO3.",
+    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the region file. Cannot be used together with --ISO3.",
 )
 @click.option(
     "--ISO3",
@@ -605,7 +623,7 @@ def click_build_options(
     "--overwrite",
     is_flag=True,
     default=False,
-    help="If set, overwrite existing config and build config files.",
+    help="If set, overwrite existing config, build config, and region files.",
 )
 def init(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model."""

@@ -49,6 +49,7 @@ WORKING_DIRECTORY_DEFAULT: Path = Path(".")
 CONFIG_DEFAULT: Path = Path("model.yml")
 UPDATE_DEFAULT: Path = Path("update.yml")
 BUILD_DEFAULT: Path = Path("build.yml")
+REGION_DEFAULT: Path = Path("region.yml")
 PROFILE_SPEED_DEFAULT: bool = False
 PROFILE_RAM_DEFAULT: bool = False
 CORES_DEFAULT: int | None = None
@@ -917,26 +918,35 @@ def get_model_builder_class(custom_model: None | str) -> type:
 
 
 def get_builder(
-    config: Path | dict[str, Any],
+    config: Path | dict[str, Any] | None,
     logger: logging.Logger,
     custom_model: str | None,
+    input_folder: Path | str | None = None,
 ) -> GEBModelBuild:
     """Get model builder.
 
     Args:
-        config: Path to the model configuration file.
+        config: Path to the model configuration file, dictionary, or None.
         logger: Logger instance to pass to the model builder.
         custom_model: Name of the custom model to use. If None, the default GEBModelBuild is used.
             custom_models are available in the geb.build.custom_models module.
+        input_folder: Optional explicit input folder path. If not provided, it is read
+            from config (if available and existing) or defaults to 'input'.
 
     Returns:
         Instance of the model builder.
     """
-    config = parse_config(config, schema=Config)
-    input_folder = Path(config["input_folder"])
+    resolved_input_folder: Path
+    if input_folder is not None:
+        resolved_input_folder = Path(input_folder)
+    elif config is not None and (isinstance(config, dict) or Path(config).exists()):
+        config_parsed: dict[str, Any] = parse_config(config, schema=Config)
+        resolved_input_folder = Path(config_parsed["input_folder"])
+    else:
+        resolved_input_folder = Path("input")
 
     arguments = {
-        "root": input_folder,
+        "root": resolved_input_folder,
         "logger": logger,
     }
 
@@ -946,11 +956,12 @@ def get_builder(
 
 
 def init_fn(
-    config: str | Path,
-    build_config: str | Path,
-    update_config: str | Path,
-    working_directory: str | Path,
-    from_example: str,
+    config: str | Path = CONFIG_DEFAULT,
+    build_config: str | Path = BUILD_DEFAULT,
+    update_config: str | Path = UPDATE_DEFAULT,
+    region: str | Path = REGION_DEFAULT,
+    working_directory: str | Path = WORKING_DIRECTORY_DEFAULT,
+    from_example: str = "geul",
     basin_id: str | None = None,
     ISO3: str | None = None,
     overwrite: bool = False,
@@ -967,6 +978,7 @@ def init_fn(
         config: Path to the model configuration file to create.
         build_config: Path to the model build configuration file to create.
         update_config: Path to the model update configuration file to create.
+        region: Path to the model region configuration file to create.
         working_directory: Working directory for the model.
         from_example: Name of the example to use as a base for the model.
         basin_id: Basin ID(s) to use for the model. Can be a comma-separated list of integers.
@@ -989,30 +1001,36 @@ def init_fn(
     if basin_id is not None and ISO3 is not None:
         raise ValueError("Cannot use --basin-id and --ISO3 together.")
 
-    config: Path = Path(config)
-    build_config: Path = Path(build_config)
-    update_config: Path = Path(update_config)
-    working_directory: Path = Path(working_directory)
+    config_path: Path = Path(config)
+    build_config_path: Path = Path(build_config)
+    update_config_path: Path = Path(update_config)
+    region_path: Path = Path(region)
+    working_directory_path: Path = Path(working_directory)
 
-    if not working_directory.exists():
-        working_directory.mkdir(parents=True, exist_ok=True)
+    if not working_directory_path.exists():
+        working_directory_path.mkdir(parents=True, exist_ok=True)
 
     def init_operation(logger: logging.Logger, **kwargs: Any) -> None:
         logger.info("Initializing model from example '%s'.", from_example)
 
-        if config.exists() and not overwrite:
+        if config_path.exists() and not overwrite:
             raise FileExistsError(
-                f"Config file {config} already exists. Please remove it or use a different name, or use --overwrite."
+                f"Config file {config_path} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
-        if build_config.exists() and not overwrite:
+        if build_config_path.exists() and not overwrite:
             raise FileExistsError(
-                f"Build config file {build_config} already exists. Please remove it or use a different name, or use --overwrite."
+                f"Build config file {build_config_path} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
-        if update_config.exists() and not overwrite:
+        if update_config_path.exists() and not overwrite:
             raise FileExistsError(
-                f"Update config file {update_config} already exists. Please remove it or use a different name, or use --overwrite."
+                f"Update config file {update_config_path} already exists. Please remove it or use a different name, or use --overwrite."
+            )
+
+        if region_path.exists() and not overwrite:
+            raise FileExistsError(
+                f"Region config file {region_path} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
         example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
@@ -1026,6 +1044,7 @@ def init_fn(
             Loader=DetectDuplicateKeysYamlLoader,
         )
 
+        region_dict: dict[str, Any]
         if basin_id is not None:
             # Allow passing a comma-separated list of integers
             if "," in basin_id:
@@ -1035,42 +1054,57 @@ def init_fn(
             else:
                 basin_ids: int = int(basin_id)
 
-            if "region" in config_dict:
-                config_dict["region"]["subbasin"] = basin_ids
-            else:
-                config_dict["region"] = {"subbasin": basin_ids}
+            region_dict = {"subbasin": basin_ids}
         elif ISO3 is not None:
-            region_dict: dict[str, Any] = {
+            region_dict = {
                 "geom": {
                     "source": "GADM_level1",
                     "key": ISO3,
                     "column": "GID_0",
                 }
             }
-            config_dict["region"] = region_dict
         else:
-            # if the default region is given, also copy the data folder with specific data for that
-            shutil.copytree(
-                example_folder / "data",
-                working_directory / "data",
-                dirs_exist_ok=True,
-            )
+            if (example_folder / REGION_DEFAULT).exists():
+                region_dict = yaml.load(
+                    open(example_folder / REGION_DEFAULT, "r"),
+                    Loader=DetectDuplicateKeysYamlLoader,
+                )
+            elif "region" in config_dict:
+                region_dict = config_dict["region"]
+            else:
+                region_dict = {}
 
-        with open(config, "w") as f:
+            # if the default region is given, also copy the data folder with specific data for that
+            if (example_folder / "data").exists():
+                shutil.copytree(
+                    example_folder / "data",
+                    working_directory_path / "data",
+                    dirs_exist_ok=True,
+                )
+
+        # Write region.yml
+        with open(region_path, "w") as f:
+            yaml.dump(region_dict, f, default_flow_style=False, sort_keys=False)
+
+        # Ensure model.yml does not contain 'region'
+        config_dict.pop("region", None)
+
+        with open(config_path, "w") as f:
             # do not sort keys, to keep the order of the config file
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
-        shutil.copy(example_folder / BUILD_DEFAULT, build_config)
-        shutil.copy(example_folder / UPDATE_DEFAULT, update_config)
+        shutil.copy(example_folder / BUILD_DEFAULT, build_config_path)
+        shutil.copy(example_folder / UPDATE_DEFAULT, update_config_path)
 
         logger.info(
-            "Initialized model files: %s, %s, %s",
-            config,
-            build_config,
-            update_config,
+            "Initialized model files: %s, %s, %s, %s",
+            config_path,
+            build_config_path,
+            update_config_path,
+            region_path,
         )
 
-    with WorkingDirectory(working_directory):
+    with WorkingDirectory(working_directory_path):
         _run_with_optional_profiling(
             profile_speed,
             profile_ram,
@@ -1146,6 +1180,7 @@ def build_fn(
     data_catalog: Path = DATA_CATALOG_DEFAULT,
     config: Path | dict[str, Any] = CONFIG_DEFAULT,
     build_config: Path | dict[str, Any] = BUILD_DEFAULT,
+    region: Path | dict[str, Any] = REGION_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     continue_: bool = False,
     debug_method: str | None = None,
@@ -1154,6 +1189,7 @@ def build_fn(
     optimize: bool = OPTIMIZE_DEFAULT,
     timing: bool = TIMING_DEFAULT,
     cores: int | None = CORES_DEFAULT,
+    **kwargs: Any,
 ) -> None:
     """Build model.
 
@@ -1161,6 +1197,7 @@ def build_fn(
         data_catalog: Path to the data catalog file.
         config: Path to the model configuration file.
         build_config: Path to the model build configuration file.
+        region: Path to the model region configuration file, or a region dictionary.
         working_directory: Working directory for the model.
         continue_: Continue previous build if it was interrupted or failed.
         debug_method: Filter the build to only run this method and its dependencies.
@@ -1169,6 +1206,7 @@ def build_fn(
         optimize: If True, run the build in optimized mode.
         timing: If True, run the build with timing.
         cores: Number of cores to restrict the build to.
+        **kwargs: Additional keyword arguments.
     """
     _restart_if_needed(optimize=optimize, cores=cores)
 
@@ -1219,9 +1257,17 @@ def build_fn(
         else:
             check_required_methods: bool = True
 
+        region_dict: dict[str, Any]
+        if isinstance(region, (str, Path)):
+            region_dict = parse_config(region)
+        elif isinstance(region, dict):
+            region_dict = region
+        else:
+            raise ValueError(f"Invalid region argument: {region}")
+
         model.build(
             methods=methods,
-            region=parse_config(config, schema=Config)["region"],
+            region=region_dict,
             continue_=continue_,
             check_required_methods=check_required_methods,
         )
@@ -1540,7 +1586,7 @@ def share_fn(
             folders.append("cache")
         if include_output:
             folders.append("output")
-        files: list = [CONFIG_DEFAULT, BUILD_DEFAULT]
+        files: list = [CONFIG_DEFAULT, BUILD_DEFAULT, REGION_DEFAULT]
         optional_files: list = [UPDATE_DEFAULT, DATA_CATALOG_DEFAULT]
         optional_folders: list = ["data"]
         zip_filename: str = f"{name}.zip"
@@ -1636,7 +1682,7 @@ def clean_fn(
     if not model_dir.is_dir():
         raise FileNotFoundError(f"Model directory not found: {model_dir}")
 
-    files_to_keep: set[str] = {"model.yml", "build.yml", "update.yml"}
+    files_to_keep: set[str] = {"model.yml", "build.yml", "update.yml", "region.yml"}
 
     # Detect whether this is a multi-basin or single model.
     if any(

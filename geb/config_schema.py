@@ -16,11 +16,32 @@ class ForecastsConfig(BaseModel):
     ] = Field(..., description="Forecast processing option.")
 
 
+class OutflowConfig(BaseModel):
+    """Configuration for outflow point."""
+
+    lat: float = Field(..., description="Latitude of the outflow point.")
+    lon: float = Field(..., description="Longitude of the outflow point.")
+
+
+class GeomConfig(BaseModel):
+    """Configuration for geometry-based region."""
+
+    source: str = Field(..., description="Source dataset in the data catalog.")
+    key: str = Field(..., description="Key or value to match in the column.")
+    column: str = Field(..., description="Column name in the geometry dataset.")
+
+
 class RegionConfig(BaseModel):
     """Configuration for region."""
 
     subbasin: int | list[int] | None = Field(
         None, description="Subbasin ID or list of subbasin IDs."
+    )
+    outflow: OutflowConfig | None = Field(
+        None, description="Outflow coordinate defining the basin."
+    )
+    geom: GeomConfig | None = Field(
+        None, description="Geometry-based region definition."
     )
 
 
@@ -1002,7 +1023,6 @@ class Config(BaseModel):
     loglevel: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         ..., description="Logging level."
     )
-    region: RegionConfig | None = Field(None, description="Region configuration.")
 
     forecasts: ForecastsConfig = Field(..., description="Forecasts configuration.")
     hazards: HazardsConfig = Field(..., description="Hazards configuration.")

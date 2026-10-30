@@ -14,18 +14,7 @@ if TYPE_CHECKING:
 
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b39": [
-        "[manual] Move 'start_time', 'end_time', 'spinup_time', 'input_folder', 'output_folder', 'spinup_name', 'simulation_root', and 'name' from 'general' to the top level of 'model.yml'. Their placement under 'general' is deprecated.",
-        "[manual] Move 'region' from 'general.region' to top-level 'region' in 'model.yml'.",
-        "[manual] Move 'simulate_forest' from 'general.simulate_forest' to 'hydrology.simulate_forest'.",
-        "[manual] Move 'forecasts' from 'general.forecasts' to the top level of 'model.yml' as 'forecasts'.",
-        "[manual] Move 'hydrological_year_start_month' from 'general' to 'hydrology.hydrological_year_start_month'.",
-        "[manual] Move parameters from the 'parameters' section to their respective model sections ('hydrology.landsurface', 'hydrology.groundwater', 'hydrology.routing', 'hydrology.runoff_concentrator', and 'agents.reservoir_operators'). The 'parameters' block is deprecated.",
-        "[manual] Flatten 'hydrology.routing.river_width' and 'river_depth' parameters, removing the 'parameters:' subsection.",
-        "[manual] Rename 'agent_settings' to 'agents' in 'model.yml'. 'agent_settings' is deprecated.",
-        "[manual] Rename 'agents.farmers' to 'agents.crop_farmers' in 'model.yml'. 'agents.farmers' is deprecated.",
-        "[manual] Move 'erosion' from 'hazards.erosion' to 'hydrology.erosion'.",
-        "[manual] Remove 'logging' section from 'model.yml' and use top-level 'loglevel' instead. 'logging' is deprecated.",
-        "[manual] Move 'evaluation' from 'hydrology.evaluation' to the top level of 'model.yml' as 'evaluation'.",
+        "[manual] Fully replace your model config with the new format as shown in the examples. Also define the study region in a separate 'region.yml' instead of 'model.yml'.",
     ],
     "1.0.0b38": [
         "[update-method;setup_hydrography]",

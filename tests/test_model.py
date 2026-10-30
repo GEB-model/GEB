@@ -80,6 +80,7 @@ def test_init(clean_working_directory: bool) -> None:
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()
         assert Path("update.yml").exists()
+        assert Path("region.yml").exists()
 
         # should raise an error if the folder already exists
         with pytest.raises(FileExistsError):
@@ -124,6 +125,7 @@ def test_init_coastal(clean_working_directory: bool) -> None:
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()
         assert Path("update.yml").exists()
+        assert Path("region.yml").exists()
 
         # should raise an error if the folder already exists
         with pytest.raises(FileExistsError):

@@ -5,6 +5,7 @@ config override and id options work correctly.
 """
 
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -116,3 +117,24 @@ def test_normalize_config_id_derivation() -> None:
     with_override = normalize_config(config_b, explicit_overrides=explicit)
     assert with_override["spinup_name"] == "custom_spinup"
     assert with_override["name"] == "run_scenario_b"
+
+
+def test_init_creates_region_file(tmp_path: Path) -> None:
+    """Test that geb init creates region.yml and model.yml without region."""
+    from geb.runner import init_fn, read_params
+
+    init_fn(
+        working_directory=tmp_path,
+        basin_id="23011134",
+    )
+
+    assert (tmp_path / "model.yml").exists()
+    assert (tmp_path / "region.yml").exists()
+    assert (tmp_path / "build.yml").exists()
+    assert (tmp_path / "update.yml").exists()
+
+    region_cfg: dict[str, Any] = read_params(tmp_path / "region.yml")
+    assert region_cfg["subbasin"] == 23011134
+
+    model_cfg: dict[str, Any] = read_params(tmp_path / "model.yml")
+    assert "region" not in model_cfg

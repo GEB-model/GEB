@@ -22,55 +22,48 @@ geb init --help
 
 ### Study region
 
-The `model.yml`-file specifies the configuration of the model, including the location of the model. An example of the `model.yml`-file is given in the examples folder in the GEB repository. Please refer to the yaml-section `general:region`. Examples are given below.
+The `region.yml`-file specifies the spatial extent and location of the model domain for `geb build`. Examples are given below.
 
 #### Subbasin
 
 The subbasin option allows you to define your study region based on a hydrological basin. When using this option, the following parameter is required:
 
-- `subbasin`: The subbasin ID of the model. This is the ID of the subbasin in the [MERIT-BASINS dataset](https://www.reachhydro.org/home/params/merit-basins) (version MERIT-Hydro v0.7/v1.0). This can be either a single subbasin or list of subbasins. All upstream basins are automatically included in the model, so only the most downstream subbasin of a specific catchments needs to be specified.
+- `subbasin`: The subbasin ID of the model. This is the ID of the subbasin in the [MERIT-BASINS dataset](https://www.reachhydro.org/home/params/merit-basins) (version MERIT-Hydro v0.7/v1.0). This can be either a single subbasin or list of subbasins. All upstream basins are automatically included in the model, so only the most downstream subbasin of a specific catchment needs to be specified.
 
 There is a very nice viewer to select the right basin [here](https://cw3e.ucsd.edu/hydro/merit_rivers/merit_rivers_carto.html). You will need the "COMID".
 
-``` yaml
-general:
-  region:
-    subbasin: 23011134
+```yaml
+subbasin: 23011134
 ```
 
 or
 
-``` yaml
-general:
-  region:
-    subbasin:
-    - 23011134
-    - 23011135
-    - 23011136
+```yaml
+subbasin:
+  - 23011134
+  - 23011135
+  - 23011136
 ```
 
 #### geom
 
 The name of a dataset specified in the `data_catalog.yml` (e.g., GADM_level0) or any other region or path that can be loaded in geopandas. Using the column and key parameters, a subset of data can be specified, for example:
 
-``` yaml
-general:
-  geom: 
-    source: GADM_level0
-    column: GID_0
-    key: FRA
+```yaml
+geom: 
+  source: GADM_level0
+  column: GID_0
+  key: FRA
 ```
 
 #### outflow
 
 The outflow option allows you to define your study region based on a specific outflow point using lat, lon coordinates:
 
-``` yaml
-general:
-  region:
-    outflow:
-      lat: 48.8566
-      lon: 2.3522
+```yaml
+outflow:
+  lat: 48.8566
+  lon: 2.3522
 ```
 
 ## GEB build

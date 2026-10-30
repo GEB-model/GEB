@@ -1985,6 +1985,9 @@ class SFINCSSimulation:
     inflow_was_set: bool
     sfincs_model: SfincsModel
     sfincs_root_model: SFINCSRootModel
+    total_runoff_volume_m3: float
+    total_discharge_volume_m3: float
+    total_initial_water_volume_m3: float
 
     def __init__(
         self,
@@ -2073,6 +2076,7 @@ class SFINCSSimulation:
         # Track total volumes added via forcings (for water balance debugging)
         self.total_runoff_volume_m3: float = 0.0
         self.total_discharge_volume_m3: float = 0.0
+        self.total_initial_water_volume_m3: float = 0.0
 
         self.set_river_outflow_boundary_condition()
 
@@ -2082,7 +2086,8 @@ class SFINCSSimulation:
         """Print all forcing volumes for debugging the water balance."""
         msg: str = (
             f"SFINCS Forcing volumes: runoff={int(self.total_runoff_volume_m3)} m3, "
-            f"discharge={int(self.total_discharge_volume_m3)} m3"
+            f"discharge={int(self.total_discharge_volume_m3)} m3, "
+            f"initial_water={int(self.total_initial_water_volume_m3)} m3"
         )
         self.logger.info(msg)
 
@@ -2600,22 +2605,46 @@ class SFINCSSimulation:
 
         mask: xr.DataArray = self.sfincs_model.mask.data["mask"]
 
-        # Calculate cell area based on the model's CRS
+        pixels_per_cell_y: int = flood_depth.shape[0] // mask.shape[0]
+        pixels_per_cell_x: int = flood_depth.shape[1] // mask.shape[1]
+        active_mask: np.ndarray = np.repeat(
+            np.repeat(mask.values == 1, pixels_per_cell_y, axis=0),
+            pixels_per_cell_x,
+            axis=1,
+        )
+        height, width = flood_depth.shape
         if self.sfincs_model.crs.is_geographic:
-            cell_area: xr.DataArray = xr.full_like(mask, np.nan, dtype=np.float32)
-            height, width = cell_area.shape
-            cell_area.values = calculate_cell_area_m2(
-                cell_area.rio.transform(), height, width
+            cell_area: np.ndarray = calculate_cell_area_m2(
+                flood_depth.rio.transform(), height, width
             )
         else:
-            cell_area = xr.full_like(
-                mask,
-                math.prod(mask.rio.resolution()),
+            cell_area = np.full(
+                (height, width),
+                abs(math.prod(flood_depth.rio.resolution())),
                 dtype=np.float32,
             )
+        depth_vals: np.ndarray = np.where(
+            active_mask, np.nan_to_num(flood_depth.values, nan=0.0), 0.0
+        )
+        return float(np.sum(depth_vals * cell_area))
 
-        # Only include active cells (mask == 1), excluding water-level boundary cells (mask == 2).
-        return (flood_depth.where(mask == 1) * cell_area).sum().item()
+    def set_river_initial_water_level(
+        self,
+        DEMs: list[dict[str, Any]],
+    ) -> str:
+        """Set SFINCS initial water levels from the unburned DEM in river cells.
+
+        Args:
+            DEMs: DEMs used to build the SFINCS model, as configured for the hydrodynamic model.
+
+        Returns:
+            A short summary for the SFINCS log.
+        """
+        from geb.hazards.floods.workflows.initial_water_level import (
+            set_river_initial_water_level,
+        )
+
+        return set_river_initial_water_level(simulation=self, DEMs=DEMs)
 
     def get_outflow_volume(self) -> float:
         """Compute the net water volume that flowed out across the boundary observation lines.

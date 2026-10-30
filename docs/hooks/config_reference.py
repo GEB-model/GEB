@@ -248,7 +248,6 @@ def generate_reference_markdown() -> str:
         "output_folder",
         "simulation_root",
         "loglevel",
-        "region",
         "calibration",
     ]
     general_table: str = build_table(
@@ -341,7 +340,7 @@ def generate_reference_markdown() -> str:
 
     sections: str = f"""### General settings
 
-Root-level simulation settings that define run identifiers, time periods, directories, logging, and region of interest.
+Root-level simulation settings that define run identifiers, time periods, directories, and logging.
 
 {general_table}
 

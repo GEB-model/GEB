@@ -12,9 +12,6 @@ inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
 start_time: 2000-01-01
 end_time: 2023-12-30
 spinup_time: 1980-01-01
-
-region:
-  subbasin: 23011134
 ```
 
 ??? example "View complete baseline `reasonable_default_config.yml`"
