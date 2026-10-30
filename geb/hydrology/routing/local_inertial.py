@@ -926,7 +926,6 @@ class LocalInertial:
         ArrayFloat64,
         ArrayFloat32,
         ArrayFloat32,
-        ArrayFloat64,
         ArrayFloat32,
         ArrayFloat64,
         ArrayFloat32,

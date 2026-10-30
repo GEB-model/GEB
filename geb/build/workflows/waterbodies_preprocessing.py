@@ -318,6 +318,8 @@ def snap_waterbody_points(
         Skipped GDW IDs and their reasons. Skipped reservoirs are removed in place.
     """
     skipped: dict[int, str] = {}
+    # Locate the dam's nearest river cell first, then reject occupied cells below.
+    # Searching only free cells could move a dam past an existing lake or reservoir.
     row_index: int
     reservoir: pd.Series
     for row_index, reservoir in waterbodies.loc[
@@ -328,6 +330,7 @@ def snap_waterbody_points(
             rivers=rivers,
             upstream_area_grid=upstream_area_grid,
             upstream_area_subgrid=upstream_area_subgrid,
+            waterbody_id_grid=None,
         )
         if snapped is None:
             skipped[int(reservoir.gdw_id)] = "could_not_snap"

@@ -81,8 +81,14 @@ def test_add_reservoir(capacity: float, has_polygon: bool, dam_type: str) -> Non
 
 
 @pytest.mark.parametrize("case", ["valid", "occupied", "distant"])
-def test_snap_reservoir(case: str) -> None:
-    """Skip occupied or distant cells and keep processing other reservoirs."""
+@pytest.mark.parametrize("dask_backed", [False, True])
+def test_snap_reservoir(case: str, dask_backed: bool) -> None:
+    """Skip occupied or distant cells with eager and Dask-backed drainage areas.
+
+    Args:
+        case: Whether the first reservoir has a valid, occupied, or distant cell.
+        dask_backed: Whether drainage areas are lazily loaded, as in regional builds.
+    """
     waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {"waterbody_id": [GDW_ID_OFFSET + 42, GDW_ID_OFFSET + 43], "gdw_id": [42, 43]},
         geometry=[Point(1 if case == "distant" else 0.01, 0.01), Point(0, -0.1)],
@@ -107,6 +113,8 @@ def test_snap_reservoir(case: str) -> None:
     )
     if case == "occupied":
         waterbody_id.values[0, 0] = 1
+    if dask_backed:
+        upstream_area = upstream_area.chunk({"y": 1, "x": 1})
     skipped: dict[int, str] = snap_waterbody_points(
         waterbodies, waterbody_id, rivers, upstream_area, upstream_area
     )

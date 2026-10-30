@@ -103,15 +103,27 @@ def get_discharge_per_river(
 
     outflow_table.columns = outflow_table.columns.astype(str)
 
+    # Saved names do not change when reservoir construction removes river cells.
+    reports_by_river: dict[str, list[str]] = {}
+    report_name: str
+    for report_name in outflow_table.columns:
+        reports_by_river.setdefault(report_name.split("_", 1)[0], []).append(
+            report_name
+        )
+
     discharge_data: dict[int, pd.Series] = {}
+    river_id: int
     for river_id in rivers.index:
-        assert isinstance(river_id, int)
-        xys: list[tuple[int, int]] = get_river_representative_xys(river_id, all_rivers)
-        if len(xys) == 1:
-            discharge_data[river_id] = outflow_table[str(river_id)]
+        river_name: str = str(river_id)
+        if river_name not in reports_by_river:
+            raise KeyError(f"No recorded discharge for river {river_id}")
+        if river_name in outflow_table.columns:
+            discharge_data[river_id] = outflow_table[river_name]
         else:
-            reach_keys: list[str] = [f"{river_id}_{i}" for i in range(len(xys))]
-            discharge_data[river_id] = outflow_table[reach_keys].sum(axis=1)
+            # Add upstream branches at each timestamp, keeping missing values missing.
+            discharge_data[river_id] = outflow_table[reports_by_river[river_name]].sum(
+                axis=1, skipna=False
+            )
 
     if not discharge_data:
         return pd.DataFrame()
@@ -1563,6 +1575,7 @@ class Routing(Module):
         # non-river overland cells (river_ids == -1) use kinematic wave routing:
         self.use_kinematic = self.var.river_ids == -1
         use_kinematic: ArrayBool = self.use_kinematic
+        self._river_cell_indices = np.flatnonzero(~use_kinematic).astype(np.int32)
 
         # Floodplain geometry beyond bankfull channel:
         raw_profile_widths: TwoDArrayFloat32 = np.nan_to_num(
@@ -1662,11 +1675,12 @@ class Routing(Module):
                 avg_outflow=average_discharge,
             )
             self.hydrology.waterbodies.var.outflow_height = waterbody_outflow_height
-            self.hydrology.waterbodies.lake_storage = waterbody_outflow_height[
-                self.hydrology.waterbodies.is_lake
-            ].astype(np.float64) * self.hydrology.waterbodies.var.lake_area[
-                self.hydrology.waterbodies.is_lake
-            ].astype(np.float64)
+            if self.model.in_spinup and initialize_storage:
+                self.hydrology.waterbodies.lake_storage = waterbody_outflow_height[
+                    self.hydrology.waterbodies.is_lake
+                ].astype(np.float64) * self.hydrology.waterbodies.var.lake_area[
+                    self.hydrology.waterbodies.is_lake
+                ].astype(np.float64)
         else:
             self._wb_cell_mask = np.zeros_like(self.var.river_ids, dtype=bool)
             self._wb_cell_indices = np.zeros(0, dtype=np.int32)
@@ -1691,6 +1705,13 @@ class Routing(Module):
         else:
             self._reservoir_indices = np.zeros(0, dtype=np.int32)
 
+        # The solver needs consecutive IDs; future reservoirs retain stable model IDs.
+        self._routing_waterbody_indices: ArrayInt32 = np.unique(self._active_wb_cells)
+        routing_waterbody_ids: ArrayInt32 = self.grid.var.waterbody_ids.copy()
+        routing_waterbody_ids[self._wb_cell_mask] = np.searchsorted(
+            self._routing_waterbody_indices, self._active_wb_cells
+        ).astype(np.int32)
+
         self.router = LocalInertial(
             dt=3600,
             river_network=self.river_network,
@@ -1710,10 +1731,18 @@ class Routing(Module):
             shape_exponent=shape_exponent,
             bankfull_depth_m=bankfull_depth_m,
             floodplain_side_slope_m_per_m=self.floodplain_side_slope_m_per_m,
-            waterbody_lake_area=self.hydrology.waterbodies.var.lake_area,
-            waterbody_lake_factor=waterbody_lake_factor,
-            waterbody_outflow_height=waterbody_outflow_height,
-            waterbody_outflow_bed_elev=waterbody_outflow_bed_elev,
+            waterbody_lake_area=self.hydrology.waterbodies.var.lake_area[
+                self._routing_waterbody_indices
+            ],
+            waterbody_lake_factor=waterbody_lake_factor[
+                self._routing_waterbody_indices
+            ],
+            waterbody_outflow_height=waterbody_outflow_height[
+                self._routing_waterbody_indices
+            ],
+            waterbody_outflow_bed_elev=waterbody_outflow_bed_elev[
+                self._routing_waterbody_indices
+            ],
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
@@ -1767,17 +1796,6 @@ class Routing(Module):
             ],
             in_spinup=self.model.in_spinup and initialize_storage,
         )
-
-        riverbed_conductivity_multiplier: np.float32 = np.float32(
-            self.config["riverbed_hydraulic_conductivity_multiplier"]
-        )
-        groundwater_conductivity_m_per_s: np.ndarray = (
-            self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0]
-            / np.float32(86400.0)
-        )
-        self._riverbed_hydraulic_conductivity_m_per_s[:] = (
-            groundwater_conductivity_m_per_s * riverbed_conductivity_multiplier
-        ).astype(np.float32)
 
         riverbed_conductivity_multiplier: np.float32 = np.float32(
             self.config["riverbed_hydraulic_conductivity_multiplier"]
@@ -2279,6 +2297,12 @@ class Routing(Module):
                 potential_transmission_loss_m3=self._potential_transmission_loss_buffer_m3,
             )
 
+            # Route only active waterbodies, then scatter results to stable model IDs.
+            routed_outflow_m3: ArrayFloat32 = outflow_per_waterbody_m3[
+                self._routing_waterbody_indices
+            ]
+            routed_waterbody_storage_m3: ArrayFloat64
+            routed_waterbody_inflow_m3: ArrayFloat32
             (
                 self.var.discharge_in_rivers_m3_s_substep,
                 self.var.river_storage_m3,
@@ -2297,8 +2321,10 @@ class Routing(Module):
                 sideflow_m3=self._side_flow_buffer_m3,
                 evaporation_m3=self._potential_river_evaporation_buffer_m3,
                 transmission_loss_m3=self._potential_transmission_loss_buffer_m3,
-                waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
-                outflow_per_waterbody_m3=outflow_per_waterbody_m3,
+                waterbody_storage_m3=self.hydrology.waterbodies.var.storage[
+                    self._routing_waterbody_indices
+                ],
+                outflow_per_waterbody_m3=routed_outflow_m3,
                 retention_storage_m3=self.var.retention_basin_storage_m3,
                 retention_activation_threshold_m3_s=self.retention_activation_threshold_m3_s,
             )
@@ -2327,6 +2353,16 @@ class Routing(Module):
                     )
                 assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
 
+            # Future reservoirs need river-flow history before their first release.
+            future_reservoirs: ArrayBool = ~self.hydrology.waterbodies.is_active
+            waterbody_inflow_m3[future_reservoirs] = (
+                self.var.discharge_in_rivers_m3_s_substep[
+                    self.hydrology.waterbodies.var.waterbody_outflow_linear_mapping[
+                        future_reservoirs
+                    ]
+                ]
+                * np.float32(3600)
+            )
             # the reservoir operators need to track the inflow to the reservoirs
             if len(self._reservoir_indices) > 0:
                 self.model.agents.reservoir_operators.track_inflow(

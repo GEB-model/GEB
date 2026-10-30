@@ -1,9 +1,12 @@
 """Tests for hydrography module."""
 
 import logging
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 from affine import Affine
@@ -335,15 +338,45 @@ def test_setup_floodplains_method() -> None:
         Hydrography.setup_floodplains(mock_model)
 
 
-def test_extract_1sec_subgrid() -> None:
-    """Test _extract_1sec_subgrid subgrid alignment and error handling."""
-    dx3, dy3 = 3.0 / 3600.0, -3.0 / 3600.0
-    dx1, dy1 = 1.0 / 3600.0, -1.0 / 3600.0
+AR6_YEARS: np.ndarray = np.arange(2020, 2151, 10)
+STATIONS_FILE: str = "geom/gtsm/stations.parquet"
 
-    x3 = 10.0 + (np.arange(4) + 0.5) * dx3
-    y3 = 50.0 + (np.arange(4) + 0.5) * dy3
-    da3 = xr.DataArray(
-        np.zeros((4, 4), dtype=np.float32), coords={"y": y3, "x": x3}, dims=("y", "x")
+
+def make_ar6_dataset(
+    lon_deg: list[float],
+    lat_deg: list[float],
+    slope_m_per_year: list[float],
+    years: np.ndarray = AR6_YEARS,
+    transpose: bool = False,
+) -> xr.Dataset:
+    """Create a synthetic AR6 dataset with linear sea level change per location.
+
+    The adapter already expresses sea level change in m relative to 2020, so the
+    synthetic values are 0 in 2020.
+
+    Args:
+        lon_deg: Longitude of each AR6 location (degrees).
+        lat_deg: Latitude of each AR6 location (degrees).
+        slope_m_per_year: Sea level change rate of each location (m/year).
+        years: Years in the dataset.
+        transpose: Whether to store the variable as (years, locations).
+
+    Returns:
+        Dataset mimicking the structure of the AR6 data read by the data catalog.
+    """
+    slope: np.ndarray = np.asarray(slope_m_per_year, dtype=float)[:, None]
+    values_m: np.ndarray = slope * (years[None, :] - 2020)
+    dims: tuple[str, str] = ("locations", "years")
+    if transpose:
+        values_m = values_m.T
+        dims = ("years", "locations")
+    return xr.Dataset(
+        data_vars={"sea_level_change": (dims, values_m)},
+        coords={
+            "years": years,
+            "lon": ("locations", np.asarray(lon_deg, dtype=float)),
+            "lat": ("locations", np.asarray(lat_deg, dtype=float)),
+        },
     )
 
 
@@ -390,60 +423,11 @@ def run_setup_sea_level_projections_ar6(
         mock_hydrography, projection_quantile=projection_quantile
     )
 
-    extracted = _extract_1sec_subgrid(da1, da3)
-    assert extracted.shape == (12, 12)
-    assert not np.isnan(extracted).any()
-
-    # Exact 3:1 shape without coords
-    da3_nocoords = xr.DataArray(np.zeros((4, 4), dtype=np.float32))
-    da1_nocoords = xr.DataArray(np.ones((12, 12), dtype=np.float32))
-    assert _extract_1sec_subgrid(da1_nocoords, da3_nocoords).shape == (12, 12)
-
-    # Incompatible shape raises ValueError
-    da_incompatible = xr.DataArray(np.zeros((5, 5), dtype=np.float32))
-    with pytest.raises(ValueError, match="Unable to align elevation_1sec"):
-        _extract_1sec_subgrid(da_incompatible, da3_nocoords)
-
-
-def test_setup_floodplains_method() -> None:
-    """Test setup_floodplains build method on Hydrography class."""
-    elev_vals = np.array(
-        [
-            [12.0, 5.0, 5.0, 12.0],
-            [11.0, 4.0, 4.0, 11.0],
-            [10.0, 3.0, 3.0, 10.0],
-            [9.0, 2.0, 2.0, 9.0],
-        ],
-        dtype=np.float32,
-    )
-    d8_vals = np.array(
-        [
-            [4, 4, 4, 16],
-            [4, 4, 4, 16],
-            [4, 4, 4, 16],
-            [0, 0, 0, 0],
-        ],
-        dtype=np.uint8,
-    )
-    transform = Affine(0.01, 0.0, 0.0, 0.0, -0.01, 0.0)
-    coords = {"y": [0.0, -0.01, -0.02, -0.03], "x": [0.0, 0.01, 0.02, 0.03]}
-
-    elev_high_res = xr.DataArray(elev_vals, coords=coords, dims=("y", "x"))
-    elev_high_res.rio.write_transform(transform, inplace=True)
-
-    d8_da = xr.DataArray(d8_vals, coords=coords, dims=("y", "x"))
-    d8_da.attrs["_FillValue"] = 255
-    d8_da.rio.write_transform(transform, inplace=True)
-
-    import pyflwdir
-
-    flw = pyflwdir.from_array(d8_vals, ftype="d8", transform=transform)
-    ups_vals = flw.upstream_area(unit="m2").astype(np.float32)
-    ups_da = xr.DataArray(ups_vals, coords=coords, dims=("y", "x"))
-
-    elev_1sec = xr.DataArray(
-        np.repeat(np.repeat(elev_vals, 3, axis=0), 3, axis=1),
-        dims=("y", "x"),
+    mock_hydrography.set_table.assert_called_once()
+    table: pd.DataFrame = mock_hydrography.set_table.call_args.args[0]
+    assert (
+        mock_hydrography.set_table.call_args.kwargs["name"]
+        == "water_levels/sea_level_rise"
     )
 
     # Annual values on 1 January of 2000-2100; re-index by year to simplify assertions.
@@ -627,19 +611,4 @@ def test_setup_sea_level_projections_ar6_handles_transposed_variable(
         monkeypatch,
     )
 
-    saved_grids: dict[str, xr.DataArray] = {}
-    mock_model.set_grid.side_effect = lambda da, name: saved_grids.setdefault(name, da)
-
-    Hydrography.setup_floodplains(mock_model)
-
-    assert "routing/floodplain_side_slope_m_per_m" in saved_grids
-    assert "routing/floodplain_profile_widths_m" in saved_grids
-    slope_res = saved_grids["routing/floodplain_side_slope_m_per_m"]
-    profile_res = saved_grids["routing/floodplain_profile_widths_m"]
-    assert slope_res.shape == (2, 2)
-    assert profile_res.shape == (10, 2, 2)
-
-    # Missing DEM raises KeyError
-    del mock_model.other["DEM/fathomdem"]
-    with pytest.raises(KeyError, match="DEM 'fathomdem' not found"):
-        Hydrography.setup_floodplains(mock_model)
+    pd.testing.assert_frame_equal(table_regular, table_transposed)

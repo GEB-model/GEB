@@ -306,6 +306,7 @@ def create_discharge_dashboard(
     output_filename: str = "discharge_evaluation_map.html",
     include_return_period_plots: bool = True,
     run_name: str = "default",
+    reservoir_period: tuple[int, int, int] | None = None,
 ) -> dict[str, str]:
     """Create only the discharge evaluation dashboard.
 
@@ -332,6 +333,8 @@ def create_discharge_dashboard(
         include_return_period_plots: Whether to calculate and plot return-period
             curves in station popups. Defaults to True.
         run_name: Simulation run name shown on the dashboard. Defaults to "default".
+        reservoir_period: Spinup start, simulation start, and simulation end years.
+            If omitted, reservoirs share a single map layer.
 
     Returns:
         Dictionary with the created dashboard path.
@@ -486,6 +489,7 @@ def write_discharge_dashboard(
     run_output_folder: Path | None = None,
     run_name: str | None = None,
     completion_date: str | datetime.datetime | None = None,
+    reservoir_period: tuple[int, int, int] | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -522,6 +526,8 @@ def write_discharge_dashboard(
         completion_date: Optional completion timestamp string or datetime
             shown on the dashboard and in the legend. If omitted, read from
             ``run_output_folder / done.txt``.
+        reservoir_period: Spinup start, simulation start, and simulation end years.
+            If omitted, reservoirs share a single map layer.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
@@ -822,7 +828,9 @@ def write_discharge_dashboard(
 
     waterbody_layers: list[folium.FeatureGroup] = []
     if waterbodies is not None and not waterbodies.empty:
-        waterbody_layers = _add_waterbody_layers(discharge_map, waterbodies)
+        waterbody_layers = _add_waterbody_layers(
+            discharge_map, waterbodies, reservoir_period=reservoir_period
+        )
 
     basemaps_data: list[dict[str, Any]] = [
         {
@@ -2532,21 +2540,21 @@ def _add_river_layers(
 def _add_waterbody_layers(
     discharge_map: folium.Map,
     waterbodies: gpd.GeoDataFrame,
+    reservoir_period: tuple[int, int, int] | None = None,
 ) -> list[folium.FeatureGroup]:
-    """Add lake and reservoir point layers to the discharge map.
+    """Show lakes and distinguish reservoirs by construction period.
 
     Args:
         discharge_map: Folium map receiving waterbody layers.
         waterbodies: Waterbody GeoDataFrame with polygon geometries and
-            ``waterbody_type`` identifiers. Lakes and reservoirs are shown.
+            ``waterbody_type`` identifiers and GDW construction years.
+        reservoir_period: Spinup start, simulation start, and simulation end years.
+            Without these years, reservoirs share one layer.
 
     Returns:
         List of created lake and reservoir feature group layers.
     """
-    waterbody_layers: dict[int, folium.FeatureGroup] = {
-        waterbody_type: folium.FeatureGroup(name=style["label"] + "s", show=False)
-        for waterbody_type, style in _WATERBODY_STYLE.items()
-    }
+    waterbody_layers: dict[str, folium.FeatureGroup] = {}
     waterbody_types: pd.Series = waterbodies["waterbody_type"].astype(int)
     mask: pd.Series = waterbody_types.isin(
         [LAKE_WATERBODY_TYPE, RESERVOIR_WATERBODY_TYPE, CONTROL_LAKE_WATERBODY_TYPE]
@@ -2564,6 +2572,31 @@ def _add_waterbody_layers(
             else RESERVOIR_WATERBODY_TYPE
         )
         waterbody_style: dict[str, str] = _WATERBODY_STYLE[resolved_type]
+
+        layer_name: str = waterbody_style["label"] + "s"
+        color: str = waterbody_style["color"]
+        construction_year: float = waterbody_row.get("gdw_construction_year", np.nan)
+        construction_status: str | None = None
+        if resolved_type == RESERVOIR_WATERBODY_TYPE and reservoir_period is not None:
+            spinup_year, start_year, end_year = reservoir_period
+            if pd.isna(construction_year) or construction_year <= 0:
+                construction_status = "construction year unknown"
+            elif construction_year < spinup_year:
+                construction_status = "existing before spinup"
+            elif construction_year < start_year:
+                construction_status = "constructed during spinup"
+                color = "#8B5CF6"
+            elif construction_year <= end_year:
+                construction_status = "constructed during simulation"
+                color = "#E11D48"
+            else:
+                construction_status = "constructed after simulation"
+                color = "#94A3B8"
+            layer_name = f"Reservoirs · {construction_status}"
+        if layer_name not in waterbody_layers:
+            waterbody_layers[layer_name] = folium.FeatureGroup(
+                name=layer_name, show=False
+            )
 
         centroid = waterbody_row.geometry.centroid
         area_m2: float | None = (
@@ -2585,8 +2618,8 @@ def _add_waterbody_layers(
                 popup_lines.append(f"Construction year: {int(construction_year)}<br>")
             else:
                 popup_lines.append("Construction year: unknown<br>")
-            if reservoir_period is not None:
-                popup_lines.append(f"{layer_name.split(' · ', 1)[1].capitalize()}<br>")
+            if construction_status is not None:
+                popup_lines.append(f"{construction_status.capitalize()}<br>")
         if area_m2 is not None:
             popup_lines.append(
                 f"Area: <span data-geb-area-m2='{area_m2}'></span> km²<br>"
@@ -2607,14 +2640,11 @@ def _add_waterbody_layers(
             popup=folium.Popup("".join(popup_lines), max_width=200),
             tooltip=f"{waterbody_style['label']} {waterbody_row.get('waterbody_id', '')}",
             z_index=500,
-        ).add_to(waterbody_layers[resolved_type])
+        ).add_to(waterbody_layers[layer_name])
 
-    added_layers: list[folium.FeatureGroup] = []
     for waterbody_layer in waterbody_layers.values():
-        if len(waterbody_layer._children) > 0:
-            waterbody_layer.add_to(discharge_map)
-            added_layers.append(waterbody_layer)
-    return added_layers
+        waterbody_layer.add_to(discharge_map)
+    return list(waterbody_layers.values())
 
 
 def _build_snapping_station(

@@ -40,11 +40,16 @@ def test_construction_with_incoming_solver(existing_lake: bool) -> None:
         "retention_basins": {"release_threshold_factor": 1.0},
         "river_depth": {"parameters": {"shape_exponent": 0.5}},
         "max_threads": 1,
+        "riverbed_hydraulic_conductivity_multiplier": 0.1,
     }
     grid: Mock = Mock(compressed_size=4)
     grid.var.river_length = np.full(4, 1000.0, dtype=np.float32)
     grid.var.river_mannings = np.full(4, 0.03, dtype=np.float32)
     grid.var.cell_area = np.full(4, 1e6, dtype=np.float32)
+    grid.var.groundwater_hydraulic_conductivity_m_per_day = np.zeros(
+        (1, 4), dtype=np.float32
+    )
+    grid.var.heads = np.zeros((1, 4), dtype=np.float32)
     grid.load2d.side_effect = lambda path: (
         np.array([30, 20, 10, 0], dtype=np.float32)
         if path == "bed"
@@ -101,6 +106,8 @@ def test_construction_with_incoming_solver(existing_lake: bool) -> None:
     routing.var.discharge_m3_s = np.zeros(4, dtype=np.float32)
     routing.var.river_width_alpha = np.ones(4, dtype=np.float32)
     routing.var.river_width_beta = np.full(4, 0.5, dtype=np.float32)
+    routing.var.river_transmission_loss_m3 = np.zeros(4, dtype=np.float32)
+    routing.fix_river_geometry_after_spinup = True
     routing.var.river_storage_alpha = np.ones(4, dtype=np.float32)
     routing.var.river_storage_beta = np.full(4, 0.6, dtype=np.float32)
     routing.retention_max_storage_m3 = np.zeros(0, dtype=np.float32)
@@ -112,8 +119,12 @@ def test_construction_with_incoming_solver(existing_lake: bool) -> None:
         0, dtype=np.float32
     )
     for name in [
-        "_pot_evap_buf",
-        "_side_flow_buf",
+        "_potential_river_evaporation_buffer_m3",
+        "_side_flow_buffer_m3",
+        "_potential_transmission_loss_buffer_m3",
+        "_groundwater_head_top_layer_m",
+        "_wetted_channel_area_buffer_m2",
+        "_riverbed_hydraulic_conductivity_m_per_s",
         "_over_abstraction_daily",
         "_evaporation_in_rivers_m3",
     ]:
@@ -161,7 +172,10 @@ def test_construction_with_incoming_solver(existing_lake: bool) -> None:
         waterbodies.var.storage.sum() + routing.var.river_storage_m3.sum()
     )
     model.current_time = datetime(2000, 1, 1)
+    lake_storage_before_activation: float = float(waterbodies.var.storage[1])
     waterbodies.step()
+    if existing_lake:
+        assert waterbodies.var.storage[1] == lake_storage_before_activation
     assert np.isclose(
         waterbodies.var.storage.sum() + routing.var.river_storage_m3.sum(),
         before_construction,
@@ -174,3 +188,24 @@ def test_construction_with_incoming_solver(existing_lake: bool) -> None:
         before_construction,
         atol=0.01,
     )
+
+    # A second construction year must also rebuild the topology without losing water.
+    if not existing_lake:
+        model.current_time = datetime(2001, 1, 1)
+        before_second_construction: float = float(
+            waterbodies.var.storage.sum() + routing.var.river_storage_m3.sum()
+        )
+        waterbodies.step()
+        assert routing.router.n_wb == 2
+        np.testing.assert_array_equal(routing._routing_waterbody_indices, [0, 1])
+        assert np.isclose(
+            waterbodies.var.storage.sum() + routing.var.river_storage_m3.sum(),
+            before_second_construction,
+            atol=0.01,
+        )
+        _, loss, _ = routing.step(zeros, zeros[0], zeros[0], zeros)
+        assert np.isclose(
+            waterbodies.var.storage.sum() + routing.var.river_storage_m3.sum() + loss,
+            before_second_construction,
+            atol=0.01,
+        )

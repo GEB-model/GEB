@@ -193,7 +193,7 @@ def snap_point_to_river_network(
     rivers: gpd.GeoDataFrame,
     upstream_area_grid: xr.DataArray,
     upstream_area_subgrid: xr.DataArray,
-    waterbody_id_grid: xr.DataArray,
+    waterbody_id_grid: xr.DataArray | None,
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
     max_spatial_difference_degrees: float = 0.1,
@@ -211,8 +211,9 @@ def snap_point_to_river_network(
         rivers: GeoDataFrame of river segments. Must contain 'uparea_m2' and 'hydrography_xy'.
         upstream_area_grid: Low-resolution upstream area grid.
         upstream_area_subgrid: High-resolution upstream area subgrid.
-        waterbody_id_grid: Grid of waterbody IDs used to avoid snapping to cells
-            inside lakes or reservoirs.
+        waterbody_id_grid: Grid of waterbody IDs used to avoid snapping inside
+            lakes or reservoirs. None considers all river cells so the caller
+            can reject occupied locations after snapping.
         upstream_area_m2: Optional target upstream area for matching (m2).
         max_uparea_difference_ratio: Max allowed difference ratio for upstream area.
         max_spatial_difference_degrees: Max allowed spatial distance in degrees.
@@ -263,12 +264,15 @@ def snap_point_to_river_network(
     # river point, and that is part of the same river segment.
     # hydrography_xy contains the list of (x,y) coordinates in the low-res grid that belong to the river segment.
     hydrography_xy = best_river_segment.hydrography_xy
-    wb_values: np.ndarray = waterbody_id_grid.values
+    waterbody_values: np.ndarray | None = (
+        waterbody_id_grid.to_numpy() if waterbody_id_grid is not None else None
+    )
     river_points_and_xy = []
     for xy in hydrography_xy:
-        wb_val = wb_values[xy[1], xy[0]]
-        if wb_val != -1 and not np.isnan(wb_val):
-            continue
+        if waterbody_values is not None:
+            waterbody_value: float = waterbody_values[xy[1], xy[0]]
+            if waterbody_value != -1 and not np.isnan(waterbody_value):
+                continue
         river_points_and_xy.append(
             (
                 shapely.geometry.Point(
@@ -303,9 +307,12 @@ def snap_point_to_river_network(
         snapped_grid_pixel_xy=closest_river_point_and_xy[1],
         geb_uparea_subgrid=(river_cell_in_subgrid.item()),
         geb_uparea_grid=(
+            # Grid inputs loaded from Zarr may still be Dask-backed.
             upstream_area_grid.isel(
                 x=closest_river_point_and_xy[1][0], y=closest_river_point_and_xy[1][1]
-            ).item()
+            )
+            .compute()
+            .item()
         ),
         distance_degrees=best_river_segment.station_distance,
         closest_river_segment=best_river_segment,

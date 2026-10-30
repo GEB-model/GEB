@@ -8,41 +8,48 @@ import pytest
 from geb.build import version_updates
 
 
-@pytest.mark.parametrize("stored_version", ["1.0.0b36", "1.0.0b37", "1.0.0b38"])
+@pytest.mark.parametrize("stored_version", ["1.0.0b38", "1.0.0b39", "1.0.0b40"])
 def test_waterbody_input_migration(
     monkeypatch: pytest.MonkeyPatch, stored_version: str
 ) -> None:
-    """Apply the b37 routing migration only to inputs older than b37.
+    """Rebuild merged routing inputs even when a branch already recorded b39.
 
     Args:
         monkeypatch: Fixture for fixing the target package version.
-        stored_version: Input version before the combined update.
-
+        stored_version: Input version before the merged-code update.
     """
-    monkeypatch.setattr(version_updates, "__version__", "1.0.0b39")
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b40")
     builder: Mock = Mock()
     method_names: list[str] = [
-        "setup_gtsm_station_data",
         "setup_hydrography",
+        "setup_coastal_water_levels",
+        "setup_retention_basins",
         "setup_floodplains",
         "setup_waterbodies",
     ]
     methods: dict[str, dict[str, str]] = {name: {} for name in method_names}
-    version_updates.get_and_maybe_do_version_updates(
-        stored_version,
-        logging.getLogger(__name__),
-        build_model=builder,
-        methods=methods,
-    )
-    expected: list[object] = (
-        [call({method_name: {}}) for method_name in method_names]
-        if stored_version == "1.0.0b36"
-        else []
-    )
-    assert builder.update.call_args_list == expected
-    if stored_version == "1.0.0b36":
-        builder.set_version.assert_called_once_with("1.0.0b37")
+    if stored_version != "1.0.0b40":
+        with pytest.raises(
+            RuntimeError, match="Rerun spinup, simulation, and evaluation"
+        ):
+            version_updates.get_and_maybe_do_version_updates(
+                stored_version,
+                logging.getLogger(__name__),
+                build_model=builder,
+                methods=methods,
+            )
+        assert builder.update.call_args_list == [
+            call({method_name: {}}) for method_name in method_names
+        ]
+        builder.set_version.assert_called_once_with("1.0.0b40")
     else:
+        version_updates.get_and_maybe_do_version_updates(
+            stored_version,
+            logging.getLogger(__name__),
+            build_model=builder,
+            methods=methods,
+        )
+        builder.update.assert_not_called()
         builder.set_version.assert_not_called()
     builder.set_current_version.assert_called_once()
 
@@ -77,5 +84,4 @@ def test_failed_migration_raises_without_advancing_version(
         )
     builder.set_version.assert_not_called()
     builder.set_current_version.assert_not_called()
-    if not notice_first:
-        assert caught.value.__cause__ is failure
+    assert caught.value.__cause__ is failure
