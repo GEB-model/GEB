@@ -35,6 +35,8 @@ class GroundWater(BuildModelBase):
             Uses the coverage fractions supplied by the karst map adapter.
             Fills a NumPy array before assigning it to the output grid so that
             updates also persist when the input mask is Dask-backed.
+            Reprojects polygons to an equal-area coordinate system, then repairs
+            invalid geometry once before dissolving polygons by coverage fraction.
             Saves ``groundwater/karst_fraction`` (0–1), with NaN in inactive cells.
 
         Raises:
@@ -55,8 +57,12 @@ class GroundWater(BuildModelBase):
             bounds[0] : bounds[2], bounds[1] : bounds[3]
         ].copy()
         if not karst_polygons.empty:
+            # Repair after projection to handle both cached source defects and
+            # projection-induced self-intersections before geometric operations.
+            karst_polygons = karst_polygons.to_crs(6933)
+            karst_polygons.geometry = karst_polygons.geometry.make_valid()
             # Merge polygons with the same fraction to avoid counting overlap twice.
-            karst_polygons = karst_polygons.dissolve(by="karst_fraction").to_crs(6933)
+            karst_polygons = karst_polygons.dissolve(by="karst_fraction")
             rows: np.ndarray
             columns: np.ndarray
             rows, columns = np.where(~mask_values)
