@@ -193,12 +193,12 @@ class RiverWidthParameters(BaseModel):
     """Parameters for river width calculation."""
 
     default_alpha: float = Field(
-        3.91,
-        description="Default alpha parameter for bankfull width = alpha * Q^beta (Bjerklie et al. 2003).",
+        7.2,
+        description="Default alpha parameter for bankfull width = alpha * Q^beta.",
     )
     beta: float = Field(
-        0.62,
-        description="Beta parameter for bankfull width = alpha * Q^beta (Bjerklie et al. 2003).",
+        0.5,
+        description="Beta parameter for bankfull width = alpha * Q^beta.",
     )
 
 
@@ -213,29 +213,21 @@ class RiverWidthConfig(BaseModel):
 class RiverDepthParameters(BaseModel):
     """Parameters for river depth calculation."""
 
-    c: float = Field(
-        description="Power law coefficient c for mean channel depth = c * Q^d * S^e."
-    )
-    d: float = Field(
-        description="Power law discharge exponent d for mean channel depth = c * Q^d * S^e."
-    )
-    e: float = Field(
-        description="Power law slope exponent e for mean channel depth = c * Q^d * S^e (Bjerklie et al. 2005)."
-    )
     min_depth_m: float = Field(
+        0.1,
         ge=0.0,
         description="Minimum allowable bankfull depth (m).",
     )
     shape_exponent: float = Field(
+        0.5,
         gt=0.0,
         description="Power-law cross-sectional shape exponent r (0.5 for parabolic channel).",
     )
     use_observed_width_as_bankfull: bool = Field(
         True,
         description=(
-            "Whether to use observed channel width directly as bankfull width and scale depth "
-            "accordingly using baseline expected channel width. If False, reverts to previous "
-            "machinery using reach-specific alpha for expected width."
+            "Whether to use observed channel width directly as bankfull width. If False, "
+            "reverts to using reach-specific alpha for expected width."
         ),
     )
 
@@ -252,7 +244,7 @@ class RetentionBasinsConfig(BaseModel):
     """Configuration for retention basins in routing."""
 
     release_threshold_factor: float = Field(
-        0.2,
+        0.85,
         description="Factor to multiply the activation threshold by to get the release threshold.",
     )
     activation_threshold_return_period_years: float = Field(
@@ -277,16 +269,20 @@ class RoutingConfig(BaseModel):
             "available physical cores, and Slurm allocation."
         ),
     )
-    minimum_river_slope_m_per_m: float = Field(
-        1e-4,
-        gt=0.0,
+    fix_river_geometry_after_spinup: bool = Field(
+        True,
         description=(
-            "Minimum channel slope used to parameterize kinematic-wave routing (m/m)."
+            "Whether to keep river geometry (channel width and depth) fixed after spinup. "
+            "If True, river geometry is only updated during the spinup period and remains fixed during the run."
         ),
     )
-    retention_basin_release_threshold_factor: float = Field(
-        0.9,
-        description="Factor to multiply the activation threshold by to get the release threshold.",
+    riverbed_hydraulic_conductivity_multiplier: float = Field(
+        0.1,
+        ge=0.0,
+        description=(
+            "Multiplier applied to underlying aquifer hydraulic conductivity "
+            "to calculate streambed infiltration conductivity."
+        ),
     )
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
@@ -328,18 +324,6 @@ class KarstConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description="Fraction of runoff and interflow captured on karst land below the swallowing ceiling (0–1).",
-    )
-    max_runoff_capture_m_per_day: float | None = Field(
-        None,
-        gt=0.0,
-        allow_inf_nan=False,
-        description="Maximum daily runoff and interflow depth captured on karst land (m/day), or None for unlimited.",
-    )
-    max_storage_m: float | None = Field(
-        None,
-        gt=0.0,
-        allow_inf_nan=False,
-        description="Maximum water depth held in karst delay storage (m), or None for unlimited. Excess storage overflows to river discharge.",
     )
     release_time_days: float = Field(
         gt=0.0,
@@ -851,6 +835,10 @@ class ParametersConfig(BaseModel):
     interflow_multiplier: float = Field(description="Interflow multiplier.")
     variable_runoff_shape_beta_multiplier: float = Field(
         description="Scale factor for the variable runoff shape parameter beta."
+    )
+    runoff_concentration_factor: float = Field(
+        gt=0.0,
+        description="Multiplier for slope-dependent overland runoff concentration time using the Kerby (1959) overland flow method.",
     )
 
 

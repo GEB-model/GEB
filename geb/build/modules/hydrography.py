@@ -21,7 +21,7 @@ from pyflwdir import FlwdirRaster
 from rasterio.enums import MergeAlg
 from scipy import interpolate
 from scipy.ndimage import value_indices
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
 from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import DataCatalog
@@ -162,60 +162,70 @@ def _extract_1sec_subgrid(
         2D float32 array of shape (3 * H_hd, 3 * W_hd) containing 1 arc-second elevations.
 
     Raises:
-        ValueError: If elevation_1sec cannot be aligned or does not have expected shape.
+        ValueError: If elevation_1sec or elevation_high_res is missing coordinates,
+            has degenerate coordinate dimensions, or does not overlap spatially.
     """
+    if "x" not in elevation_1sec.coords or "y" not in elevation_1sec.coords:
+        raise ValueError(
+            "elevation_1sec is missing 'x' or 'y' coordinates required for subgrid alignment."
+        )
+    if "x" not in elevation_high_res.coords or "y" not in elevation_high_res.coords:
+        raise ValueError(
+            "elevation_high_res is missing 'x' or 'y' coordinates required for subgrid alignment."
+        )
+
+    x3: npt.NDArray[np.floating] = elevation_high_res.x.values
+    y3: npt.NDArray[np.floating] = elevation_high_res.y.values
+    x1: npt.NDArray[np.floating] = elevation_1sec.x.values
+    y1: npt.NDArray[np.floating] = elevation_1sec.y.values
+
+    if x1.size <= 1 or y1.size <= 1:
+        raise ValueError(
+            f"elevation_1sec coordinate arrays must have length > 1, got x={x1.size}, y={y1.size}."
+        )
+
+    dx1: float = float(x1[1] - x1[0])
+    dy1: float = float(y1[1] - y1[0])
+
+    if dx1 == 0.0 or dy1 == 0.0:
+        raise ValueError("elevation_1sec coordinate spacing must be non-zero.")
+
     H_hd: int = int(elevation_high_res.shape[0])
     W_hd: int = int(elevation_high_res.shape[1])
     target_shape: tuple[int, int] = (3 * H_hd, 3 * W_hd)
 
-    if elevation_1sec.shape == target_shape and (
-        "x" not in elevation_1sec.coords or "x" not in elevation_high_res.coords
-    ):
-        return elevation_1sec.values.astype(np.float32)
+    c_center: npt.NDArray[np.int_] = np.round((x3 - x1[0]) / dx1).astype(int)
+    r_center: npt.NDArray[np.int_] = np.round((y3 - y1[0]) / dy1).astype(int)
 
-    if "x" in elevation_1sec.coords and "x" in elevation_high_res.coords:
-        x3 = elevation_high_res.x.values
-        y3 = elevation_high_res.y.values
-        x1 = elevation_1sec.x.values
-        y1 = elevation_1sec.y.values
+    c_start: int = int(c_center[0] - 1)
+    c_end: int = int(c_center[-1] + 2)
+    r_start: int = int(r_center[0] - 1)
+    r_end: int = int(r_center[-1] + 2)
 
-        if x1.size > 1 and y1.size > 1:
-            dx1: float = float(x1[1] - x1[0])
-            dy1: float = float(y1[1] - y1[0])
+    src_r0: int = max(0, r_start)
+    src_r1: int = min(int(elevation_1sec.shape[0]), r_end)
+    src_c0: int = max(0, c_start)
+    src_c1: int = min(int(elevation_1sec.shape[1]), c_end)
 
-            c_center = np.round((x3 - x1[0]) / dx1).astype(int)
-            r_center = np.round((y3 - y1[0]) / dy1).astype(int)
+    if src_r1 <= src_r0 or src_c1 <= src_c0:
+        raise ValueError(
+            "elevation_1sec does not overlap with elevation_high_res. "
+            f"elevation_1sec extent: x=[{float(x1[0])}, {float(x1[-1])}], y=[{float(y1[0])}, {float(y1[-1])}]; "
+            f"elevation_high_res extent: x=[{float(x3[0])}, {float(x3[-1])}], y=[{float(y3[0])}, {float(y3[-1])}]."
+        )
 
-            c_start: int = int(c_center[0] - 1)
-            c_end: int = int(c_center[-1] + 2)
-            r_start: int = int(r_center[0] - 1)
-            r_end: int = int(r_center[-1] + 2)
+    dst_r0: int = src_r0 - r_start
+    dst_r1: int = src_r1 - r_start
+    dst_c0: int = src_c0 - c_start
+    dst_c1: int = src_c1 - c_start
 
-            fathomdem_sub = np.full(target_shape, np.nan, dtype=np.float32)
-
-            src_r0: int = max(0, r_start)
-            src_r1: int = min(int(elevation_1sec.shape[0]), r_end)
-            src_c0: int = max(0, c_start)
-            src_c1: int = min(int(elevation_1sec.shape[1]), c_end)
-
-            dst_r0: int = src_r0 - r_start
-            dst_r1: int = src_r1 - r_start
-            dst_c0: int = src_c0 - c_start
-            dst_c1: int = src_c1 - c_start
-
-            if src_r1 > src_r0 and src_c1 > src_c0:
-                fathomdem_sub[dst_r0:dst_r1, dst_c0:dst_c1] = elevation_1sec.values[
-                    src_r0:src_r1, src_c0:src_c1
-                ]
-            return fathomdem_sub
-
-    if elevation_1sec.shape == target_shape:
-        return elevation_1sec.values.astype(np.float32)
-
-    raise ValueError(
-        f"Unable to align elevation_1sec of shape {elevation_1sec.shape} with "
-        f"elevation_high_res of shape {elevation_high_res.shape}."
+    fathomdem_sub: npt.NDArray[np.float32] = np.full(
+        target_shape, np.nan, dtype=np.float32
     )
+    fathomdem_sub[dst_r0:dst_r1, dst_c0:dst_c1] = elevation_1sec.values[
+        src_r0:src_r1, src_c0:src_c1
+    ]
+    return fathomdem_sub
 
 
 def calculate_dem_floodplain_geometry(
@@ -380,19 +390,16 @@ def calculate_dem_floodplain_geometry(
                 profile_widths_data[k - 1, segment_mask],
             )
 
-        # Valley side slope z beyond 5.0m: compare level 9 (5.0m) to level 6 (2.0m)
-        w_top: float = float(profile_widths_data[9, segment_mask][0])
-        w_mid: float = float(profile_widths_data[6, segment_mask][0])
-        dw: float = max((w_top - w_mid) * 0.5, 0.0)
-        dh: float = 3.0
-        if dw > 0.0:
-            seg_side_slope = np.clip(
-                np.float32(dw / dh),
-                np.float32(0.5),
-                np.float32(100.0),
-            )
-        else:
-            seg_side_slope = np.float32(2.0)
+        # Valley side slope z beyond maximum profile depth:
+        # Linearly extend the slope from the final profile interval without artificial fallbacks or clipping.
+        # When width does not expand in the final interval, z = 0.0 (vertical continuation of the top width).
+        w_top: float = float(profile_widths_data[-1, segment_mask][0])
+        w_prev: float = float(profile_widths_data[-2, segment_mask][0])
+        dh: float = float(FLOODPLAIN_PROFILE_DEPTHS[-1] - FLOODPLAIN_PROFILE_DEPTHS[-2])
+        dw: float = max((w_top - w_prev) * 0.5, 0.0)
+        seg_side_slope: np.float32 = (
+            np.float32(dw / dh) if dh > 0.0 and np.isfinite(dw) else np.float32(0.0)
+        )
 
         floodplain_side_slope_m_per_m_data[segment_mask] = seg_side_slope
 
@@ -2076,32 +2083,32 @@ class Hydrography(BuildModelBase):
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_geom(waterbodies, name="waterbodies/waterbody_data")
 
-    def setup_gtsm_water_levels(self) -> None:
-        """Sets up the GTSM hydrographs for station within the model bounds."""
-        gtsm_data_region, stations = self.data_catalog.fetch(
+    def setup_total_water_levels(self) -> None:
+        """Sets up the coastal water levels for within the model bounds."""
+        water_level_data_region, stations = self.data_catalog.fetch(
             "gtsm_timeseries", variable="total_water_level"
         ).read(bounds=self.bounds, variable="total_water_level")
         self.set_other(
-            gtsm_data_region,
-            name="gtsm/waterlevels",
+            water_level_data_region,
+            name="water_levels/total_water_levels",
             filters=gtsm_filters,
             shards={"stations": 100},
         )
-        self.set_geom(stations, name="gtsm/stations")
-        self.logger.info("GTSM station waterlevels and geometries set")
+        self.set_geom(stations, name="water_levels/stations")
+        self.logger.info("Water level stations and total water levels set")
 
-    def setup_gtsm_surge_levels(self) -> None:
-        """Sets up the GTSM hydrographs for station within the model bounds."""
-        gtsm_data_region, _ = self.data_catalog.fetch(
+    def setup_surge_levels(self) -> None:
+        """Sets up the storm surge residual hydrographs for station within the model bounds."""
+        surge_data_region, _ = self.data_catalog.fetch(
             "gtsm_timeseries", variable="storm_surge_residual"
         ).read(bounds=self.bounds, variable="storm_surge_residual")
         self.set_other(
-            gtsm_data_region,
-            name="gtsm/surge",
+            surge_data_region,
+            name="water_levels/surge",
             filters=gtsm_filters,
             shards={"stations": 100},
         )
-        self.logger.info("GTSM station surge levels set")
+        self.logger.info("Water level surge levels set")
 
     def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
@@ -2110,7 +2117,7 @@ class Hydrography(BuildModelBase):
         coast_rp = self.data_catalog.fetch("coast_rp").read()
 
         stations = gpd.read_parquet(
-            os.path.join("input", self.files["geom"]["gtsm/stations"])
+            os.path.join("input", self.files["geom"]["water_levels/stations"])
         )
         # remove stations that are not in coast_rp index
         stations = stations[stations.index.astype(int).isin(coast_rp.index)]
@@ -2119,26 +2126,29 @@ class Hydrography(BuildModelBase):
         self.set_table(coast_rp, name="coast_rp")
 
         # also set stations (only those that are in coast_rp)
-        self.set_geom(stations, "gtsm/stations_coast_rp")
+        self.set_geom(stations, "water_levels/stations_coast_rp")
 
-    def setup_sea_level_projections(self, scenario: int, percentile: float) -> None:
+    def setup_sea_level_projections(self, projection_quantile: float) -> None:
         """Sets up the AR6 sea level projections for the model.
 
-        For each GTSM station the nearest AR6 location (great-circle distance) is
+        For each water level station the nearest sea level projection location (great-circle distance) is
         selected. Its projected sea level change is expressed relative to 2020 and
         interpolated (and linearly extrapolated) to annual values for 2000-2100.
 
         Args:
-            scenario: SSP scenario identifier used to select the AR6 file (e.g., 245).
-            percentile: AR6 quantile to select (fraction between 0 and 1).
+            projection_quantile: AR6 quantile to select (fraction between 0 and 1). Default is 0.5 (median projection).
         """
-        self.logger.info("Setting up sea level rise data")
+        # get the scenario from the model configuration
+        scenario = self.ssp_rcp
+        self.logger.info(
+            f"Setting up sea level rise data for scenario {scenario}, using {projection_quantile} quantile of AR6 projections"
+        )
         sea_level_change_m: xr.Dataset = self.data_catalog.fetch("ar6").read(
-            scenario, percentile
+            scenario, projection_quantile
         )
 
-        gtsm_stations: gpd.GeoDataFrame = gpd.read_parquet(
-            os.path.join("input", self.files["geom"]["gtsm/stations"])
+        stations: gpd.GeoDataFrame = gpd.read_parquet(
+            os.path.join("input", self.files["geom"]["water_levels/stations"])
         )
 
         lon_deg: npt.NDArray[np.floating] = sea_level_change_m["lon"].values
@@ -2170,7 +2180,7 @@ class Hydrography(BuildModelBase):
         # with great-circle distance, so a KD-tree on 3D unit vectors gives the same
         # nearest neighbour as the Haversine distance, without an
         # (n_stations x n_locations) distance matrix.
-        tree: cKDTree = cKDTree(
+        tree: KDTree = KDTree(
             to_unit_vectors(
                 lon_deg,
                 lat_deg,
@@ -2178,8 +2188,8 @@ class Hydrography(BuildModelBase):
         )
         _, nearest_valid_index = tree.query(
             to_unit_vectors(
-                gtsm_stations.geometry.x.to_numpy(),
-                gtsm_stations.geometry.y.to_numpy(),
+                stations.geometry.x.to_numpy(),
+                stations.geometry.y.to_numpy(),
             )
         )
         nearest_location_indices: npt.NDArray[np.intp] = nearest_valid_index
@@ -2216,27 +2226,27 @@ class Hydrography(BuildModelBase):
         sea_level_rise_stations: pd.DataFrame = pd.DataFrame(
             data=interpolated_values.T,
             index=pd.to_datetime([f"{year}-01-01" for year in target_years]),
-            columns=gtsm_stations.index,
+            columns=stations.index,
         )
         self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
 
-    @build_method(required=True)
-    def setup_gtsm_station_data(self, scenario: int, percentile: float) -> None:
-        """Set up COAST-RP and GTSM station data for the model.
+    @build_method(depends_on=["set_ssp"], required=True)
+    def setup_coastal_water_levels(self, projection_quantile: float = 0.5) -> None:
+        """Set up water levels and station data for the model.
 
         Args:
-            scenario: SSP scenario identifier used for AR6 projections (for example, 245).
-            percentile: AR6 projection quantile as a fraction between 0 and 1.
+            projection_quantile: Sea level rise projection quantile as a fraction between 0 and 1. Default is 0.5 (median projection).
         """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
-            self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
+            self.logger.info(
+                "No coastal basins found, skipping coastal water levels setup"
+            )
             return
-
-        # Continue with GTSM setup
-        # self.setup_gtsm_water_levels()
-        # self.setup_gtsm_surge_levels()
-        # self.setup_coast_rp()
-        self.setup_sea_level_projections(scenario, percentile)
+        # Continue with coastal water levels setup
+        self.setup_total_water_levels()
+        self.setup_surge_levels()
+        self.setup_coast_rp()
+        self.setup_sea_level_projections(projection_quantile)
 
     @build_method(required=False)
     def setup_inflow(
@@ -2355,12 +2365,14 @@ class Hydrography(BuildModelBase):
         retention_basins: Path | None = None,
         max_storage_m3_to_min_shreve_stream_order_function: str | None = None,
         create_plots: bool = False,
+        dominant_river_search_radius_m: float = 2000.0,
     ) -> None:
         """Setup retention basins.
 
         There can only be a maximum of one retention basin per river pixel. When a retention
-        basin is already occupied, the retention basin being set up will be assigned to the next downstream river
-        pixel that is not occupied by another retention basin.
+        basin is already occupied or falls inside a lake/reservoir, the retention basin being set up
+        will be assigned to the next downstream river pixel that is not occupied and not in a waterbody.
+        Within dominant_river_search_radius_m, basins prioritize the dominant river (largest upstream area).
 
         Args:
             retention_basins: A vector file that can be read by geopandas containing the retention basins,
@@ -2370,6 +2382,7 @@ class Hydrography(BuildModelBase):
                 returns the minimum Shreve stream order of the river pixel to which the retention basin can be snapped. If none, all retention basins will be snapped
                 to the nearest river pixel regardless of its Shreve stream order.
             create_plots: Whether to create plots of the retention basins and their snapped locations on the river network.
+            dominant_river_search_radius_m: Radius in meters within which to search for the dominant river (defaults to 2000m).
 
         Raises:
             ValueError: If a retention basin cannot be snapped to the river network.
@@ -2424,12 +2437,24 @@ class Hydrography(BuildModelBase):
 
             rivers = self.geom["routing/rivers"]
 
-            retention_basin_data = []
-
             upstream_area_grid = self.grid["routing/upstream_area_m2"].compute()
             upstream_area_subgrid = self.other[
                 "drainage/original_d8_upstream_area_m2"
             ].compute()
+
+            waterbody_id_grid: xr.DataArray = self.grid[
+                "waterbodies/waterbody_id"
+            ].compute()
+
+            wb_values: np.ndarray = waterbody_id_grid.values
+
+            has_river_ids = "routing/river_ids" in self.grid
+            if has_river_ids:
+                river_ids_grid = self.grid["routing/river_ids"].compute().values
+            else:
+                river_ids_grid = None
+
+            retention_basin_data = []
 
             ldd = self.grid["routing/ldd"]
             flow_direction_raster = pyflwdir.from_array(
@@ -2450,7 +2475,7 @@ class Hydrography(BuildModelBase):
                     retention_basin["retention_max_storage_m3"] = 0.0
 
                 # the centroid of the retention basin may not fall exactly on the river network,
-                # so we snap it to the nearest river pixel using the snap_point_to_river_network function
+                # so we snap it to the river network, prioritizing the dominant river within 2 km
                 if max_storage_m3_to_min_shreve_stream_order_function is not None:
                     rivers_with_min_shreve_order = rivers[
                         rivers["shreve_stream_order"]
@@ -2467,7 +2492,9 @@ class Hydrography(BuildModelBase):
                     rivers=rivers_with_min_shreve_order,
                     upstream_area_grid=upstream_area_grid,
                     upstream_area_subgrid=upstream_area_subgrid,
+                    waterbody_id_grid=waterbody_id_grid,
                     max_spatial_difference_degrees=180,
+                    dominant_river_buffer_m=dominant_river_search_radius_m,
                 )
                 if snapped_data is None:
                     raise ValueError(
@@ -2475,13 +2502,21 @@ class Hydrography(BuildModelBase):
                     )
                 snapped_grid_pixel_xy = snapped_data.snapped_grid_pixel_xy
 
+                def is_invalid_cell(col: int, row: int) -> bool:
+                    if retention_basin_ids.values[row, col] != -1:
+                        return True
+                    wb_val = wb_values[row, col]
+                    if wb_val != -1 and not np.isnan(wb_val):
+                        return True
+                    if river_ids_grid is not None:
+                        if river_ids_grid[row, col] == -1:
+                            return True
+                    return False
+
                 # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
                 search_steps = 0
-                while (
-                    retention_basin_ids.values[
-                        snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
-                    ]
-                    != -1
+                while is_invalid_cell(
+                    snapped_grid_pixel_xy[0], snapped_grid_pixel_xy[1]
                 ):
                     assigned_retention_basin_id = retention_basin_ids.values[
                         snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
@@ -2491,7 +2526,7 @@ class Hydrography(BuildModelBase):
                     ]
                     if downstream_index == -1:
                         raise ValueError(
-                            f"Retention basin ID {retention_basin['ID']} at location {centroid} snaps to a river pixel that is already assigned to retention basin ID {assigned_retention_basin_id}. No unassigned downstream river pixel was found because the downstream index is -1."
+                            f"Retention basin ID {retention_basin['ID']} at location {centroid} snaps to an occupied or invalid (waterbody/non-river) pixel. No valid unassigned downstream river pixel was found because downstream index is -1."
                         )
 
                     # Follow the downstream river path until we find an unassigned pixel.
@@ -2499,7 +2534,7 @@ class Hydrography(BuildModelBase):
                         downstream_index, retention_basin_ids.shape
                     )
                     self.logger.warning(
-                        f"Retention basin ID {retention_basin['ID']} snapped to an occupied river pixel assigned to retention basin ID {assigned_retention_basin_id}; searching downstream at step {search_steps + 1} from ({snapped_grid_pixel_xy[0]}, {snapped_grid_pixel_xy[1]}) to ({downstream_col}, {downstream_row})."
+                        f"Retention basin ID {retention_basin['ID']} snapped to an occupied or waterbody pixel (assigned RB: {assigned_retention_basin_id}); searching downstream at step {search_steps + 1} from ({snapped_grid_pixel_xy[0]}, {snapped_grid_pixel_xy[1]}) to ({downstream_col}, {downstream_row})."
                     )
                     snapped_grid_pixel_xy = np.array([downstream_col, downstream_row])
                     search_steps += 1

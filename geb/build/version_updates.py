@@ -7,17 +7,19 @@ from typing import TYPE_CHECKING, Any
 
 from packaging.version import Version
 
-from geb import __version__
+from geb.version import __version__
 
 if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "1.0.0b37": [
-        "[update-method;setup_gtsm_station_data]",
+    "1.0.0b38": [
         "[update-method;setup_hydrography]",
         "[update-method;setup_floodplains]",
-        "[update-method;setup_waterbodies]",
+    ],
+    "1.0.0b37": [
+        "[update-method;setup_hydrography]",
+        "[update-method;setup_coastal_water_levels]",
     ],
     "1.0.0b36": [
         "[update-method;setup_karst]",
@@ -239,10 +241,10 @@ def get_and_maybe_do_version_updates(
                     succesfull_version_updates.append(update_version)
                     build_model.set_version(update_version)
 
-    except Exception as e:
+    except Exception:
         error_occurred = True
         if build_model is not None:
-            logger.exception(f"An error occurred while performing version updates.")
+            logger.exception("An error occurred while performing version updates.")
             if succesfull_version_updates:
                 logger.error(
                     f"Version updates for versions {', '.join(succesfull_version_updates)} were performed successfully, but the update for version {update_version} failed. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."

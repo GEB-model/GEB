@@ -1394,7 +1394,7 @@ class Store:
         if stored_version is None:
             raise RuntimeError(
                 f"Model version is not available from the store at {path}. "
-                "Spinup needs to be run again, then rerun spinup and simulation."
+                "Spinup needs to be run again before running simulation."
             )
 
         current_version: Version = Version(__version__)
@@ -1403,8 +1403,8 @@ class Store:
         if current_version > stored_version_parsed:
             raise RuntimeError(
                 f"The store at {path} was created with an older model version ({stored_version}) "
-                f"than the current model version ({__version__}). Spinup needs to be run again, "
-                "then rerun spinup and simulation."
+                f"than the current model version ({__version__}). Spinup needs to be run again "
+                "before running simulation."
             )
         elif current_version < stored_version_parsed:
             raise RuntimeError(

@@ -14,6 +14,13 @@ if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
+# Maximum daily surface runoff and interflow depth captured by karst depressions and dry valleys (m/day, 25 mm/day).
+MAX_RUNOFF_CAPTURE_M_PER_DAY: np.float32 = np.float32(0.025)
+
+# Maximum water depth stored in karst aquifer delay storage (m, 50 mm). Excess overflows to stream discharge.
+MAX_STORAGE_M: np.float64 = np.float64(0.05)
+
+
 class Karst(Module):
     """Load karst coverage and release stored water gradually."""
 
@@ -68,6 +75,7 @@ class Karst(Module):
         Notes:
             Updates the input arrays in place to remove captured water. Sealed
             land and open water contribute no karst recharge. Hillslope runoff
+<<<<<<< HEAD
             and interflow are captured up to max_runoff_capture_m_per_day, with
             excess overflowing to surface stream routes. The store follows
             dS/dt = inflow - S/K, with constant inflow over the daily step.
@@ -75,6 +83,14 @@ class Karst(Module):
             capacity ceiling overflows to surface discharge. K is the release
             time in days; after K dry days, exp(-1) of the initial storage remains
             (about 36.8%).
+=======
+            and interflow are captured up to MAX_RUNOFF_CAPTURE_M_PER_DAY, with
+            excess overflowing to surface stream routes. The store follows
+            dS/dt = inflow - S/K, with constant inflow over the daily step.
+            Any stored water exceeding MAX_STORAGE_M overflows to surface
+            discharge. K is the release time in days; after K dry days,
+            exp(-1) of the initial storage remains (about 36.8%).
+>>>>>>> 34d5edc8a1e65b714f257331e1a942d1f9022b2d
 
         Args:
             runoff_m: Hourly runoff depths (m), per HRU.
@@ -100,6 +116,7 @@ class Karst(Module):
         base_capture_fraction: np.float32 = np.float32(
             self.model.config["hydrology"]["karst"]["capture_fraction"]
         )
+<<<<<<< HEAD
         max_capture_m: float | None = self.model.config["hydrology"]["karst"][
             "max_runoff_capture_m_per_day"
         ]
@@ -121,6 +138,23 @@ class Karst(Module):
             )
         else:
             surface_capture_fraction = karst_presence * base_capture_fraction
+=======
+        # Swallow up to MAX_RUNOFF_CAPTURE_M_PER_DAY into karst features.
+        potential_capture_m: ArrayFloat32 = (
+            np.minimum(
+                total_surface_flow_m * base_capture_fraction,
+                MAX_RUNOFF_CAPTURE_M_PER_DAY,
+            )
+            * karst_presence
+        )
+        # Effective capture fraction scales with the swallowing capacity ceiling.
+        surface_capture_fraction: ArrayFloat32 = np.divide(
+            potential_capture_m,
+            total_surface_flow_m,
+            out=np.zeros_like(potential_capture_m),
+            where=total_surface_flow_m > np.float32(0.0),
+        )
+>>>>>>> 34d5edc8a1e65b714f257331e1a942d1f9022b2d
 
         captured_runoff_m: ArrayFloat32 = (
             total_surface_flow_m * surface_capture_fraction
@@ -155,6 +189,7 @@ class Karst(Module):
         # Retain water that was captured but has not yet drained to groundwater.
         storage_m += inflow_m - recharge_m
 
+<<<<<<< HEAD
         # If a storage capacity ceiling is configured, release excess water as overflow to river discharge.
         max_storage_m: float | None = self.model.config["hydrology"]["karst"][
             "max_storage_m"
@@ -166,5 +201,10 @@ class Karst(Module):
             storage_m -= overflow_m
         else:
             overflow_m = np.zeros_like(storage_m)
+=======
+        # Release excess water exceeding MAX_STORAGE_M as overflow to river discharge.
+        overflow_m: ArrayFloat64 = np.maximum(storage_m - MAX_STORAGE_M, 0.0)
+        storage_m -= overflow_m
+>>>>>>> 34d5edc8a1e65b714f257331e1a942d1f9022b2d
 
         return recharge_m, captured_runoff_m, captured_soil_m, overflow_m

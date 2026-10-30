@@ -60,6 +60,7 @@ def test_confluence_normal_conditions_zero_limiting() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -128,6 +129,7 @@ def test_confluence_extreme_symmetric_flash_flood() -> None:
         river_storage_m3=storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -136,7 +138,7 @@ def test_confluence_extreme_symmetric_flash_flood() -> None:
 
     q_out: np.ndarray = step_result[0]
     storage_out: np.ndarray = step_result[1]
-    outflow_pits: float = float(step_result[6])
+    outflow_pits: float = float(step_result[7])
 
     assert np.all(np.isfinite(q_out))
     assert np.all(np.isfinite(storage_out))
@@ -211,6 +213,7 @@ def test_confluence_steep_mountain_drop_with_flat_river() -> None:
         river_storage_m3=storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -219,7 +222,7 @@ def test_confluence_steep_mountain_drop_with_flat_river() -> None:
 
     q_out: np.ndarray = step_result[0]
     storage_out: np.ndarray = step_result[1]
-    outflow_pits: float = float(step_result[6])
+    outflow_pits: float = float(step_result[7])
 
     assert np.all(np.isfinite(q_out))
     assert np.all(np.isfinite(storage_out))
@@ -297,6 +300,7 @@ def test_confluence_3_way_tributary_extreme_surge() -> None:
         river_storage_m3=storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -305,7 +309,7 @@ def test_confluence_3_way_tributary_extreme_surge() -> None:
 
     q_out: np.ndarray = step_result[0]
     storage_out: np.ndarray = step_result[1]
-    outflow_pits: float = float(step_result[6])
+    outflow_pits: float = float(step_result[7])
 
     assert np.all(np.isfinite(q_out))
     assert np.all(np.isfinite(storage_out))
@@ -382,6 +386,7 @@ def test_confluence_downstream_backwater_choke() -> None:
         river_storage_m3=storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
@@ -390,7 +395,7 @@ def test_confluence_downstream_backwater_choke() -> None:
 
     q_out: np.ndarray = step_result[0]
     storage_out: np.ndarray = step_result[1]
-    outflow_pits: float = float(step_result[6])
+    outflow_pits: float = float(step_result[7])
 
     assert np.all(np.isfinite(q_out))
     assert np.all(np.isfinite(storage_out))
@@ -478,13 +483,14 @@ def test_confluence_full_storm_hydrograph_exact_mass_balance() -> None:
             river_storage_m3=storage,
             sideflow_m3=sideflow,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
             waterbody_storage_m3=np.zeros(0, dtype=np.float64),
             outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(0, dtype=np.float32),
             retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
         )
         discharge, storage = step_result[0], step_result[1]
-        cum_outflow += float(step_result[6])
+        cum_outflow += float(step_result[7])
 
         assert np.all(np.isfinite(discharge))
         assert np.all(np.isfinite(storage))

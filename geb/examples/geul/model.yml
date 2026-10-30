@@ -48,6 +48,7 @@ parameters:
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0
   variable_runoff_shape_beta_multiplier: 1.0
+  runoff_concentration_factor: 1.0
 
 report:
   hydrology.landsurface:

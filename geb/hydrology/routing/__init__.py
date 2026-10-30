@@ -32,12 +32,22 @@ from geb.workflows import balance_check
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom, read_table
 
-from .geometry import NUM_FLOODPLAIN_LEVELS, estimate_outflow_height, get_lake_factor
+from .geometry import (
+    NUM_FLOODPLAIN_LEVELS,
+    compute_hydraulic_geometry_width,
+    compute_top_width_from_depth,
+    estimate_outflow_height,
+    get_lake_factor,
+)
 from .kinematic import update_node_kinematic as update_node_kinematic
 from .local_inertial import LocalInertial as LocalInertial
+from .solver import solve_steady_backwater_network
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
+
+
+MINIMUM_KINEMATIC_SLOPE_M_PER_M: np.float32 = np.float32(1e-4)
 
 
 def get_discharge_per_river(
@@ -93,27 +103,15 @@ def get_discharge_per_river(
 
     outflow_table.columns = outflow_table.columns.astype(str)
 
-    # Saved names do not change when reservoir construction removes river cells.
-    reports_by_river: dict[str, list[str]] = {}
-    report_name: str
-    for report_name in outflow_table.columns:
-        reports_by_river.setdefault(report_name.split("_", 1)[0], []).append(
-            report_name
-        )
-
     discharge_data: dict[int, pd.Series] = {}
-    river_id: int
     for river_id in rivers.index:
-        river_name: str = str(river_id)
-        if river_name not in reports_by_river:
-            raise KeyError(f"No recorded discharge for river {river_id}")
-        if river_name in outflow_table.columns:
-            discharge_data[river_id] = outflow_table[river_name]
+        assert isinstance(river_id, int)
+        xys: list[tuple[int, int]] = get_river_representative_xys(river_id, all_rivers)
+        if len(xys) == 1:
+            discharge_data[river_id] = outflow_table[str(river_id)]
         else:
-            # Add upstream branches at each timestamp, keeping missing values missing.
-            discharge_data[river_id] = outflow_table[reports_by_river[river_name]].sum(
-                axis=1, skipna=False
-            )
+            reach_keys: list[str] = [f"{river_id}_{i}" for i in range(len(xys))]
+            discharge_data[river_id] = outflow_table[reach_keys].sum(axis=1)
 
     if not discharge_data:
         return pd.DataFrame()
@@ -162,61 +160,171 @@ def get_river_width(
     return alpha * np.abs(discharge_m3_s) ** beta
 
 
-def get_channel_ratio(
-    river_width: ArrayFloat32,
-    river_length: ArrayFloat32,
-    cell_area: ArrayFloat32,
-) -> ArrayFloat32:
-    """Calculate the ratio of the river channel area to the cell area.
+@njit(fastmath=True, parallel=True)
+def calculate_wetted_channel_area(
+    use_kinematic: ArrayBool,
+    water_stage_m: ArrayFloat32,
+    bed_elevation_m: ArrayFloat32,
+    bankfull_width_m: ArrayFloat32,
+    bankfull_depth_m: ArrayFloat32,
+    shape_exponent: ArrayFloat32,
+    floodplain_profile_widths_m: TwoDArrayFloat32,
+    floodplain_side_slope_m_per_m: ArrayFloat32,
+    river_width_alpha: ArrayFloat32,
+    river_width_beta: ArrayFloat32,
+    discharge_m3_s: ArrayFloat32,
+    river_length_m: ArrayFloat32,
+    cell_area_m2: ArrayFloat32,
+    is_waterbody: ArrayBool,
+    wetted_channel_area_m2: ArrayFloat32,
+) -> None:
+    """Calculates wetted channel area for all river reaches across the grid in parallel without allocations.
+
+    Differentiates between local inertial and kinematic routing reaches:
+    - Local Inertial: Top width is determined from simulated water surface elevation relative
+      to channel bed and cross-sectional geometry (in-bank power-law profile and overbank multi-level
+      floodplain profile widths via compute_top_width_from_depth).
+    - Kinematic: Top width is determined from instantaneous discharge using the hydraulic
+      geometry power law w = alpha * |Q|^beta via compute_hydraulic_geometry_width.
 
     Args:
-        river_width: The width of the river in each cell, in meters.
-        river_length: The length of the river in each cell, in meters.
-        cell_area: The area of each cell, in square meters.
-
-    Returns:
-        A 1D array with the ratio of the river channel area to the cell area.
+        use_kinematic: Boolean mask identifying kinematic wave reaches (True) vs local inertial reaches (False).
+        water_stage_m: River water surface elevation array (meters).
+        bed_elevation_m: Channel bed elevation array (meters).
+        bankfull_width_m: Main channel bankfull width array (meters).
+        bankfull_depth_m: Bankfull channel depth before floodplain spilling occurs (meters).
+        shape_exponent: Power-law cross-sectional shape exponent array (dimensionless).
+        floodplain_profile_widths_m: 2D array of 10-point cross-sectional top widths at fixed depth levels (meters).
+        floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
+        river_width_alpha: Channel width coefficient array for hydraulic geometry power law.
+        river_width_beta: Channel width exponent array for hydraulic geometry power law.
+        discharge_m3_s: Instantaneous discharge array (m³/s).
+        river_length_m: Channel length per grid cell (meters).
+        cell_area_m2: Planform area per grid cell (m²).
+        is_waterbody: Boolean mask identifying lake/waterbody cells.
+        wetted_channel_area_m2: Pre-allocated output array receiving wetted channel area (m²).
     """
-    channel_ratio: ArrayFloat32 = np.minimum(
-        1.0,
-        river_width * river_length / cell_area,
-    )
+    n: int = use_kinematic.shape[0]
+    for i in prange(n):
+        if is_waterbody[i] or river_length_m[i] <= np.float32(0.0):
+            wetted_channel_area_m2[i] = np.float32(0.0)
+            continue
 
-    assert not np.isnan(channel_ratio).any()
-    return channel_ratio
+        if use_kinematic[i]:
+            # Kinematic wave reaches derive channel width from instantaneous discharge
+            top_width_m: np.float32 = compute_hydraulic_geometry_width(
+                discharge_m3_s=discharge_m3_s[i],
+                alpha=river_width_alpha[i],
+                beta=river_width_beta[i],
+            )
+        else:
+            # Local inertial reaches derive channel width from simulated depth and cross section geometry
+            water_depth_m: np.float32 = water_stage_m[i] - bed_elevation_m[i]
+            top_width_m = compute_top_width_from_depth(
+                water_depth_m=water_depth_m,
+                bankfull_depth_m=bankfull_depth_m[i],
+                bankfull_width_m=bankfull_width_m[i],
+                shape_exponent=shape_exponent[i],
+                floodplain_widths=floodplain_profile_widths_m[i],
+                side_slope_z=floodplain_side_slope_m_per_m[i],
+            )
+
+        wetted_channel_area_m2[i] = min(
+            cell_area_m2[i], top_width_m * river_length_m[i]
+        )
 
 
 @njit(fastmath=True, parallel=True)
-def _compute_potential_river_evaporation(
-    alpha: ArrayFloat32,
-    beta: ArrayFloat32,
-    discharge_m3_s: ArrayFloat32,
-    river_length: ArrayFloat32,
-    cell_area: ArrayFloat32,
-    is_wb: ArrayBool,
-    ref_et: ArrayFloat32,
-    out: ArrayFloat32,
+def calculate_potential_river_evaporation(
+    reference_evapotranspiration_m: ArrayFloat32,
+    wetted_channel_area_m2: ArrayFloat32,
+    potential_evaporation_m3: ArrayFloat32,
 ) -> None:
-    """Computes potential evaporation in river reaches across the grid in parallel without allocations.
+    """Calculates potential river evaporation from wetted channel surface area in parallel without allocations.
 
     Args:
-        alpha: Channel width coefficient array.
-        beta: Channel width exponent array.
-        discharge_m3_s: Instantaneous discharge array (m³/s).
-        river_length: Channel length per cell (meters).
-        cell_area: Planform area per grid cell (m²).
-        is_wb: Boolean mask of lake/waterbody cells.
-        ref_et: Reference evapotranspiration rate array for water per cell (meters).
-        out: Pre-allocated output array receiving potential evaporation volume (m³).
+        reference_evapotranspiration_m: Reference evapotranspiration rate array for open water (meters).
+        wetted_channel_area_m2: Planform wetted channel surface area array (m²).
+        potential_evaporation_m3: Pre-allocated output array receiving potential evaporation volume (m³).
     """
-    n: int = alpha.shape[0]
+    n: int = wetted_channel_area_m2.shape[0]
     for i in prange(n):
-        if is_wb[i]:
-            out[i] = np.float32(0.0)
+        potential_evaporation_m3[i] = (
+            reference_evapotranspiration_m[i] * wetted_channel_area_m2[i]
+        )
+
+
+@njit(fastmath=True, parallel=True)
+def calculate_potential_river_transmission_loss(
+    wetted_channel_area_m2: ArrayFloat32,
+    riverbed_hydraulic_conductivity_m_s: ArrayFloat32,
+    bed_elevation_m: ArrayFloat32,
+    water_stage_m: ArrayFloat32,
+    groundwater_head_m: ArrayFloat32,
+    timestep_s: np.float32,
+    potential_transmission_loss_m3: ArrayFloat32,
+) -> None:
+    """Calculates potential transmission loss in river reaches.
+
+    Calculates Darcy seepage through the riverbed colmation layer driven by channel water
+    stage and unconfined groundwater table elevation.
+
+    Approach:
+        1. Wetted Channel Area: Planform wetted channel area A_channel is precomputed based on
+           routing geometry (in-bank power-law and floodplain profile widths for local inertial;
+           hydraulic geometry for kinematic reaches).
+        2. Hydraulic Gradient:
+           - Gaining reach (groundwater_head >= water_stage): The groundwater table is at or above
+             the river water surface, so transmission loss ceases (hydraulic_gradient = 0.0).
+             Baseflow entering the river is handled separately by the groundwater module.
+           - Perched / disconnected reach (groundwater_head <= bed_elevation): The groundwater table
+             drops below the riverbed, forming an unsaturated zone beneath the channel. Seepage reaches
+             a gravity-driven maximum under unit hydraulic gradient (hydraulic_gradient = 1.0).
+           - Connected losing reach (bed_elevation < groundwater_head < water_stage): The river and
+             unconfined aquifer are hydraulically connected, with downward gradient scaled by the active
+             water depth: hydraulic_gradient = (water_stage - groundwater_head) / max(water_stage - bed_elevation, 0.01).
+        3. Seepage Volume: Potential volumetric seepage over timestep dt is
+           V = k_bed * hydraulic_gradient * A_channel * dt. Realized loss is subsequently constrained
+           by available stream storage within the routing solver.
+
+    Args:
+        wetted_channel_area_m2: Planform wetted channel surface area array (m²).
+        riverbed_hydraulic_conductivity_m_s: Riverbed hydraulic conductivity array (m/s).
+        bed_elevation_m: Channel bed elevation array (meters).
+        water_stage_m: River water stage elevation array (meters).
+        groundwater_head_m: Groundwater head array for topmost aquifer layer (meters).
+        timestep_s: Routing step duration (seconds).
+        potential_transmission_loss_m3: Pre-allocated output array receiving potential transmission loss volume (m³).
+    """
+    n: int = wetted_channel_area_m2.shape[0]
+    for i in prange(n):
+        wetted_area: np.float32 = wetted_channel_area_m2[i]
+        if wetted_area <= np.float32(0.0):
+            potential_transmission_loss_m3[i] = np.float32(0.0)
+            continue
+
+        hydraulic_conductivity: np.float32 = riverbed_hydraulic_conductivity_m_s[i]
+        if hydraulic_conductivity <= np.float32(0.0):
+            potential_transmission_loss_m3[i] = np.float32(0.0)
+            continue
+
+        water_stage: np.float32 = water_stage_m[i]
+        bed_elevation: np.float32 = bed_elevation_m[i]
+        gw_head: np.float32 = groundwater_head_m[i]
+
+        if gw_head >= water_stage:
+            hydraulic_gradient: np.float32 = np.float32(0.0)
+        elif gw_head <= bed_elevation:
+            hydraulic_gradient = np.float32(1.0)
         else:
-            w: np.float32 = alpha[i] * (np.abs(discharge_m3_s[i]) ** beta[i])
-            channel_area: np.float32 = min(cell_area[i], w * river_length[i])
-            out[i] = ref_et[i] * channel_area
+            water_depth_m: np.float32 = max(
+                water_stage - bed_elevation, np.float32(0.01)
+            )
+            hydraulic_gradient = (water_stage - gw_head) / water_depth_m
+
+        potential_transmission_loss_m3[i] = (
+            hydraulic_conductivity * hydraulic_gradient * wetted_area * timestep_s
+        )
 
 
 @njit(fastmath=True)
@@ -229,7 +337,7 @@ def _accumulate_waterbody_runoff_and_evaporation(
     lake_area: ArrayFloat32,
     wb_storage: ArrayFloat64,
     return_flow_m3_to_wb: ArrayFloat32,
-    wb_pot_evap_buf: ArrayFloat32,
+    wb_potential_river_evaporation_buffer_m3: ArrayFloat32,
     wb_act_evap_buf: ArrayFloat32,
 ) -> None:
     """Accumulates lateral runoff and computes evaporation for waterbodies in-place without allocations.
@@ -243,7 +351,7 @@ def _accumulate_waterbody_runoff_and_evaporation(
         lake_area: Surface area per waterbody (m²).
         wb_storage: Waterbody storage array in m³ (modified in-place).
         return_flow_m3_to_wb: Prescribed return flow volume per waterbody (m³).
-        wb_pot_evap_buf: Reusable buffer for intermediate potential evaporation (m³).
+        wb_potential_river_evaporation_buffer_m3: Reusable buffer for intermediate potential evaporation (m³).
         wb_act_evap_buf: Reusable buffer for output actual evaporation (m³).
     """
     n_active: int = active_wb_cells.shape[0]
@@ -252,19 +360,20 @@ def _accumulate_waterbody_runoff_and_evaporation(
     for w in range(n_wb):
         if w < return_flow_m3_to_wb.shape[0]:
             wb_storage[w] += return_flow_m3_to_wb[w]
-        wb_pot_evap_buf[w] = np.float32(0.0)
+        wb_potential_river_evaporation_buffer_m3[w] = np.float32(0.0)
 
     for k in range(n_active):
         w_id: int = active_wb_cells[k]
         c_idx: int = wb_cell_indices[k]
         wb_storage[w_id] += side_flow[c_idx]
         side_flow[c_idx] = np.float32(0.0)
-        wb_pot_evap_buf[w_id] += ref_et[c_idx]
+        wb_potential_river_evaporation_buffer_m3[w_id] += ref_et[c_idx]
 
     for w in range(n_wb):
         if wb_cell_counts[w] > 0:
             pot_evap: np.float64 = (
-                np.float64(wb_pot_evap_buf[w]) / np.float64(wb_cell_counts[w])
+                np.float64(wb_potential_river_evaporation_buffer_m3[w])
+                / np.float64(wb_cell_counts[w])
             ) * np.float64(lake_area[w])
             act_evap: np.float64 = min(pot_evap, wb_storage[w])
             wb_storage[w] -= act_evap
@@ -396,6 +505,7 @@ class RoutingVariables(Bucket):
     river_storage_beta: ArrayFloat32
     river_width_alpha: ArrayFloat32
     river_width_beta: ArrayFloat32
+    river_transmission_loss_m3: ArrayFloat32
 
 
 def select_active_rivers(
@@ -538,6 +648,8 @@ class Routing(Module):
     inflow: dict[tuple[int, int], ArrayFloat32]
     floodplain_profile_widths_m: TwoDArrayFloat32
     floodplain_side_slope_m_per_m: ArrayFloat32
+    use_kinematic: ArrayBool
+    shape_exponent: ArrayFloat32
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the Routing module.
@@ -552,6 +664,9 @@ class Routing(Module):
         super().__init__(model)
 
         self.config = model.config["hydrology"]["routing"]
+        self.fix_river_geometry_after_spinup: bool = bool(
+            self.config["fix_river_geometry_after_spinup"]
+        )
 
         self.default_missing_channel_width: float = 0.5  # 0.5 is based on assumption here, but could be improved: https://pubs.usgs.gov/publication/wri854004
         self.default_minimum_discharge_m3_per_s: float = 0.01
@@ -573,6 +688,15 @@ class Routing(Module):
         self.river_network: pyflwdir.FlwdirRaster = create_river_network(
             ldd_uncompressed=ldd_uncompressed, mask=mask, transform=self.grid.transform
         )
+        self.river_network.order_cells(method="walk")
+        mapper: ArrayInt32 = np.full(self.river_network.size + 1, -1, dtype=np.int32)
+        indices_init: ArrayInt64 = np.arange(self.river_network.size, dtype=np.int32)[
+            self.river_network.mask
+        ]
+        mapper[indices_init] = np.arange(indices_init.size, dtype=np.int32)
+        self._compressed_routing_seq: ArrayInt32 = mapper[self.river_network.idxs_seq]
+        unmasked_ds: ArrayInt32 = self.river_network.idxs_ds[indices_init]
+        self._compressed_ds: ArrayInt32 = mapper[unmasked_ds]
 
         self.basin_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["routing/basin_ids"], compress=False
@@ -599,17 +723,17 @@ class Routing(Module):
         # initialize static retention arrays
         self.retention_max_storage_m3 = self.retention_basin_data[
             "retention_max_storage_m3"
-        ].to_numpy(dtype=np.float32)
+        ].to_numpy(dtype=np.float32, copy=True)
         if np.isnan(self.retention_max_storage_m3).any():
             self.model.logger.warning(
                 "Retention basin data contains NaN values in 'retention_max_storage_m3'. "
                 "These will be treated as 0.0 m3. Please check your input data."
             )
-        self.retention_max_storage_m3[np.isnan(self.retention_max_storage_m3)] = 0.0
+            self.retention_max_storage_m3[np.isnan(self.retention_max_storage_m3)] = 0.0
 
         self.controlled_retention = self.retention_basin_data[
             "controlled_retention"
-        ].to_numpy(dtype=bool)
+        ].to_numpy(dtype=bool, copy=True)
 
         self.retention_activation_threshold_m3_s = np.full(
             len(self.retention_basin_data), np.inf, dtype=np.float32
@@ -634,16 +758,31 @@ class Routing(Module):
             self._retention_cell_basin_ids = np.zeros(0, dtype=np.int32)
 
         # Initialize reusable buffers to avoid heap allocations in hourly step()
-        self._pot_evap_buf: ArrayFloat32 = self.grid.full_compressed(
-            0, dtype=np.float32
+        self._potential_river_evaporation_buffer_m3: ArrayFloat32 = (
+            self.grid.full_compressed(0, dtype=np.float32)
         )
-        self._side_flow_buf: ArrayFloat32 = self.grid.full_compressed(
+        self._side_flow_buffer_m3: ArrayFloat32 = self.grid.full_compressed(
             0, dtype=np.float32
         )
         self._over_abstraction_daily: ArrayFloat32 = self.grid.full_compressed(
             0, dtype=np.float32
         )
         self._evaporation_in_rivers_m3: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        self._potential_transmission_loss_buffer_m3: ArrayFloat32 = (
+            self.grid.full_compressed(0, dtype=np.float32)
+        )
+        self._groundwater_head_top_layer_m: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        self._wetted_channel_area_buffer_m2: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        self._riverbed_hydraulic_conductivity_m_per_s: ArrayFloat32 = (
+            self.grid.full_compressed(0, dtype=np.float32)
+        )
+        self.var.river_transmission_loss_m3 = self.grid.full_compressed(
             0, dtype=np.float32
         )
         self._pot_evap_ret_buf: ArrayFloat32 = np.zeros(
@@ -657,7 +796,9 @@ class Routing(Module):
         self._wb_cell_indices: ArrayInt32 = np.zeros(0, dtype=np.int32)
         self._active_wb_cells: ArrayInt32 = np.zeros(0, dtype=np.int32)
         self._wb_cell_counts: ArrayInt32 = np.zeros(0, dtype=np.int32)
-        self._wb_pot_evap_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
+        self._wb_potential_river_evaporation_buffer_m3: ArrayFloat32 = np.zeros(
+            0, dtype=np.float32
+        )
         self._wb_act_evap_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
         self._wb_outflow_rate_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
         self._reservoir_indices: ArrayInt32 = np.zeros(0, dtype=np.int32)
@@ -863,6 +1004,11 @@ class Routing(Module):
         widths across all grid cells belonging to each river reach, assigning reach-average values directly
         to self.var.rivers.
 
+        Notes:
+            During model execution, channel geometry is updated dynamically during the spinup period.
+            When fix_river_geometry_after_spinup is True (the default), river geometry is kept
+            fixed after spinup and this method is not called during the run period.
+
         Args:
             width_grid: Bankfull channel width per routing grid cell (meters).
             depth_grid: Bankfull channel depth per routing grid cell (meters).
@@ -877,17 +1023,15 @@ class Routing(Module):
         valid_mannings: ArrayFloat32 = manning_grid[valid_river_cell_mask]
 
         raw_slope: ArrayFloat32 = self.grid.var.river_slope_m_per_m
-        matched_slope: ArrayFloat32 = (
-            raw_slope
-            if raw_slope.shape == valid_river_cell_mask.shape
-            else raw_slope[: len(valid_river_cell_mask)]
+        assert raw_slope.shape == valid_river_cell_mask.shape, (
+            f"river_slope_m_per_m shape {raw_slope.shape} does not match routing grid {valid_river_cell_mask.shape}"
         )
         grid_dict: dict[str, Any] = {
             "river_id": valid_reach_ids,
             "width": valid_widths,
             "depth": valid_depths,
             "manning": valid_mannings,
-            "slope": matched_slope[valid_river_cell_mask],
+            "slope": raw_slope[valid_river_cell_mask],
             "river_width_alpha": self.var.river_width_alpha[valid_river_cell_mask],
             "river_width_beta": self.var.river_width_beta[valid_river_cell_mask],
         }
@@ -915,14 +1059,6 @@ class Routing(Module):
         self.var.rivers.loc[reach_means.index, cols] = reach_means[cols].astype(
             np.float64
         )
-
-        self.var.rivers.loc[
-            reach_means.index, ["river_depth_c", "river_depth_d", "river_depth_e"]
-        ] = [
-            float(self.config["river_depth"]["parameters"]["c"]),
-            float(self.config["river_depth"]["parameters"]["d"]),
-            float(self.config["river_depth"]["parameters"]["e"]),
-        ]
 
         has_observed_cell: ArrayBool = ~np.isnan(
             self.var.observed_average_river_width[valid_river_cell_mask]
@@ -952,14 +1088,15 @@ class Routing(Module):
         """Estimate bankfull discharge and hydraulic geometry for rivers not represented in grid.
 
         Traverses unrepresented river reaches in topological order (using Shreve stream order)
-        and calculates bankfull discharge, river width parameters (alpha, beta), depth parameters
-        (c, d), and Manning roughness based on their upstream river network. Width and depth are
-        estimated using downstream hydraulic geometry and assigned directly to self.var.rivers.
+        and calculates bankfull discharge, river width parameters (alpha, beta), and Manning
+        roughness based on their upstream river network. Width is estimated using downstream
+        hydraulic geometry and depth is derived via Manning normal depth inversion:
+            h_bf = (r + 1) * (n * Q_bf / (W * sqrt(S)))^0.6
         Reaches without upstream rivers are not assigned geometry and retain NaN.
 
         Notes:
             Bankfull discharge is the sum of upstream bankfull discharges (m3/s).
-            Parameters (alpha, beta, c, d, manning) are combined using discharge-weighted
+            Parameters (alpha, beta, manning) are combined using discharge-weighted
             averaging across upstream segments, which ensures scaling consistency.
         """
         unrepresented_mask: pd.Series = ~self.var.rivers["represented_in_grid"]
@@ -967,16 +1104,10 @@ class Routing(Module):
             return
 
         depth_params: dict[str, Any] = self.config["river_depth"]["parameters"]
-        width_params: dict[str, Any] = self.config["river_width"]["parameters"]
-        default_alpha: float = float(width_params["default_alpha"])
-        default_beta: float = float(width_params["beta"])
         min_depth_m: float = float(depth_params["min_depth_m"])
         default_missing_width: float = float(self.default_missing_channel_width)
         shape_exponent: float = float(depth_params["shape_exponent"])
         shape_factor: float = shape_exponent + 1.0
-        use_observed_width_as_bankfull: bool = bool(
-            depth_params["use_observed_width_as_bankfull"]
-        )
 
         rivers: gpd.GeoDataFrame = self.var.rivers
 
@@ -1032,10 +1163,9 @@ class Routing(Module):
                 (weights * valid_up["river_width_alpha"]).sum()
             )
             combined_beta: float = float((weights * valid_up["river_width_beta"]).sum())
-            combined_c: float = float((weights * valid_up["river_depth_c"]).sum())
-            combined_d: float = float((weights * valid_up["river_depth_d"]).sum())
-            combined_e: float = float((weights * valid_up["river_depth_e"]).sum())
-            combined_manning: float = float((weights * valid_up["manning"]).sum())
+            combined_manning: float = max(
+                float((weights * valid_up["manning"]).sum()), 0.01
+            )
 
             # Calibrated bankfull discharge for deriving geometry
             bankfull_q: float = raw_summed_q * float(self.bankfull_discharge_multiplier)
@@ -1075,31 +1205,23 @@ class Routing(Module):
                 f"Estimated width for reach {reach_id} must be strictly positive."
             )
 
-            w_expected: float = (
-                default_alpha * (bankfull_q**default_beta)
-                if use_observed_width_as_bankfull
-                else combined_alpha * (bankfull_q**combined_beta)
+            reach_slope_raw: Any = (
+                rivers.loc[reach_id, "slope"] if "slope" in rivers.columns else np.nan
             )
-            slope_val: float = (
-                float(valid_up["slope"].mean())
-                if "slope" in valid_up and valid_up["slope"].notnull().any()
-                else float(self.config["minimum_river_slope_m_per_m"])
-            )
-            eff_slope: float = max(slope_val, 3e-5)
-            slope_factor: float = eff_slope**combined_e
-            expected_mean_channel_depth: float = (
-                combined_c * (bankfull_q**combined_d) * slope_factor
-            )
-            continuity_ratio: float = (
-                w_expected / estimated_width
-                if is_observed and w_expected > 0.0
-                else 1.0
-            )
-            continuity_mean_channel_depth: float = (
-                continuity_ratio * expected_mean_channel_depth
-            )
+            if pd.notnull(reach_slope_raw) and float(reach_slope_raw) > 0.0:
+                slope_val: float = float(reach_slope_raw)
+            elif "slope" in valid_up and valid_up["slope"].notnull().any():
+                slope_val = float(valid_up["slope"].mean())
+            else:
+                slope_val = float(MINIMUM_KINEMATIC_SLOPE_M_PER_M)
+
+            eff_slope: float = max(slope_val, float(MINIMUM_KINEMATIC_SLOPE_M_PER_M))
+            mean_channel_depth: float = (
+                (combined_manning * bankfull_q)
+                / (estimated_width * float(np.sqrt(eff_slope)))
+            ) ** 0.6
             estimated_depth: float = max(
-                shape_factor * continuity_mean_channel_depth,
+                shape_factor * mean_channel_depth,
                 min_depth_m,
             )
 
@@ -1117,9 +1239,6 @@ class Routing(Module):
                     "manning",
                     "river_width_alpha",
                     "river_width_beta",
-                    "river_depth_c",
-                    "river_depth_d",
-                    "river_depth_e",
                     "return_period_2_years_daily_m3_per_s",
                     "width_is_observed",
                 ],
@@ -1129,9 +1248,6 @@ class Routing(Module):
                 float(combined_manning),
                 float(alpha_to_assign),
                 float(combined_beta),
-                float(combined_c),
-                float(combined_d),
-                float(combined_e),
                 float(raw_summed_q),
                 bool(is_observed),
             ]
@@ -1260,48 +1376,20 @@ class Routing(Module):
         bankfull_top_width_m: ArrayFloat32,
         use_simulated_bankfull_q: bool,
     ) -> ArrayFloat32:
-        """Calculate bankfull channel depth across the routing grid using hydraulic continuity.
+        """Calculate bankfull channel depth across the routing grid.
 
-        Derives bankfull depth (meters) based on the coupled hydraulic geometry of Bjerklie et al. (2003)
-        (doi:10.1016/S0022-1694(03)00129-X), which models mean channel depth as a joint power law of
-        bankfull discharge and reach slope:
-            h_mean_expected = c * Q^d * max(S, S_min)^e
-        where default c=0.15, d=0.21, e=-0.20.
-
-        Coupled derivation of width and depth from Bjerklie et al. (2003):
-            1. Bankfull Width (Table 3):
-               Single-variate regression across USGS streamgages yields:
-                   Q = 0.11 * W^1.62  =>  W = 3.91 * Q^0.62 (default_alpha = 3.91, beta = 0.62)
-            2. Bankfull Depth (Eq. 17 & Table 4):
-               The universal discharge relation is:
-                   Q = 7.22 * W^1.02 * Y^1.74 * S^0.35
-               Substituting Bjerklie width W = 3.91 * Q^0.62:
-                   Q = 7.22 * (3.91 * Q^0.62)^1.02 * Y^1.74 * S^0.35 = 28.94 * Q^0.632 * Y^1.74 * S^0.35
-                   Y^1.74 = (1 / 28.94) * Q^0.368 * S^(-0.35) = 0.03455 * Q^0.368 * S^(-0.35)
-                   Y = (0.03455)^(1 / 1.74) * Q^(0.368 / 1.74) * S^(-0.35 / 1.74) = 0.15 * Q^0.21 * S^(-0.20)
-               This coupled formulation ensures that channel conveyance reproduces the universal discharge equation
-               without cross-sectional distortion in both steep and flat rivers.
+        Solves the 1D steady-state local inertial momentum equation (Standard Step Method)
+        along the river network for local inertial reaches (river_ids != -1) from downstream
+        boundary controls (ocean, lake, or terminal sinks) upstream to headwaters, capturing M1
+        backwater deepening and relaxing to Manning normal depth on steep reaches:
+            h_norm = (r + 1) * (n * Q / (W * sqrt(S)))^0.6
+        For kinematic wave reaches (river_ids == -1), bankfull depth is directly calculated via
+        Manning's normal depth inversion, which matches the kinematic wave conveyance equation.
 
         When use_simulated_bankfull_q is True, simulated 2-year flood discharge Q_2 (from
         self.var.rivers['return_period_2_years_daily_m3_per_s']) is mapped to grid cells.
         When False (e.g. during the first year of simulation or during spinup), empirical
-        width inversion is used.
-
-        Notes:
-            Under continuity, expected channel dimensions follow downstream hydraulic geometry:
-                W_expected = alpha * Q^beta
-                h_mean_expected = c * Q^d * max(S, S_min)^e
-            When use_observed_width_as_bankfull is True (default), W_expected is computed using baseline
-            default parameters (default_alpha, beta), and mean channel depth scales inversely with actual width
-            (W_actual) whenever width is observed or constrained by the floodplain (W_actual < W_expected):
-                h_mean_continuity = (W_expected / W_actual) * h_mean_expected.
-            When use_observed_width_as_bankfull is False, reverts to previous machinery where W_expected
-            is computed using reach-specific river_width_alpha.
-            For a parabolic channel cross-section (shape_exponent r = 0.5), maximum centerline
-            bankfull depth is related to mean depth by:
-                h_centerline = (r + 1) * h_mean = 1.5 * h_mean.
-            This ensures that bankfull cross-sectional area A_bf = (1 / (r + 1)) * W_actual * h_centerline = W_actual * h_mean
-            accurately reproduces the expected bankfull flow area from hydraulic geometry.
+        width inversion proxy is used.
 
         Args:
             bankfull_top_width_m: Bankfull top channel width per cell (meters).
@@ -1313,16 +1401,14 @@ class Routing(Module):
 
         Raises:
             ValueError: If use_simulated_bankfull_q is True but
-                'return_period_2_years_daily_m3_per_s' contains null values in self.var.rivers.
+                'return_period_2_years_daily_m3_per_s' contains null values in self.var.rivers,
+                or if calculated bankfull depth exceeds 250 m.
         """
         width_params: dict[str, Any] = self.config["river_width"]["parameters"]
         default_alpha: np.float32 = np.float32(width_params["default_alpha"])
         default_beta: np.float32 = np.float32(width_params["beta"])
 
         depth_params: dict[str, Any] = self.config["river_depth"]["parameters"]
-        depth_c: np.float32 = np.float32(depth_params["c"])
-        depth_d: np.float32 = np.float32(depth_params["d"])
-        depth_e: np.float32 = np.float32(depth_params["e"])
         min_depth_m: np.float32 = np.float32(depth_params["min_depth_m"])
         shape_exponent_val: np.float32 = np.float32(depth_params["shape_exponent"])
         use_observed_width_as_bankfull: bool = bool(
@@ -1341,8 +1427,8 @@ class Routing(Module):
         else:
             width_alpha: ArrayFloat32 = self.var.river_width_alpha
             width_beta: ArrayFloat32 = self.var.river_width_beta
-            alpha: ArrayFloat32 = np.maximum(width_alpha, np.float32(1.0))
-            beta: ArrayFloat32 = np.maximum(width_beta, np.float32(0.1))
+            alpha = np.maximum(width_alpha, np.float32(1.0))
+            beta = np.maximum(width_beta, np.float32(0.1))
             q_proxy = (bankfull_top_width_m / alpha) ** (np.float32(1.0) / beta)
 
         if use_simulated_bankfull_q:
@@ -1373,56 +1459,28 @@ class Routing(Module):
         # Hence maximum centerline depth is h_bf = (r + 1) * h_mean (factor of 1.5 for a parabolic channel r = 0.5):
         shape_factor: np.float32 = shape_exponent_val + np.float32(1.0)
 
-        w_expected: ArrayFloat32 = (
-            default_alpha * (bankfull_discharge_m3_s**default_beta)
-            if use_observed_width_as_bankfull or alpha is None or beta is None
-            else alpha * (bankfull_discharge_m3_s**beta)
+        bed_elevation: ArrayFloat32 = self.grid.load2d(
+            self.model.files["grid"]["routing/bankfull_river_elevation_m"]
         )
+        if self.hydrology.waterbodies.n > 0:
+            bed_elevation = self.hydrology.waterbodies.flatten_waterbody_elevations(
+                bed_elevation
+            )
 
-        raw_slope_grid: ArrayFloat32 = self.grid.var.river_slope_m_per_m
-        effective_slope: ArrayFloat32 = np.maximum(
-            (
-                raw_slope_grid
-                if raw_slope_grid.shape == bankfull_discharge_m3_s.shape
-                else raw_slope_grid[: len(bankfull_discharge_m3_s)]
-            ),
-            np.float32(3e-5),
+        is_kinematic: ArrayBool = self.var.river_ids == -1
+        bankfull_depth_m: ArrayFloat32 = solve_steady_backwater_network(
+            compressed_seq=self._compressed_routing_seq,
+            compressed_ds=self._compressed_ds,
+            discharge=bankfull_discharge_m3_s,
+            width=bankfull_top_width_m,
+            bed_elevation=bed_elevation,
+            reach_length=self.grid.var.river_length,
+            manning_n=self.grid.var.river_mannings,
+            shape_exponent=shape_exponent_val,
+            min_depth_m=min_depth_m,
+            is_kinematic=is_kinematic,
+            min_kinematic_slope_m_per_m=MINIMUM_KINEMATIC_SLOPE_M_PER_M,
         )
-        slope_factor: ArrayFloat32 = effective_slope**depth_e
-        expected_mean_channel_depth_m: ArrayFloat32 = (
-            depth_c
-            * (np.maximum(bankfull_discharge_m3_s, np.float32(0.0)) ** depth_d)
-            * slope_factor
-        )
-
-        # Determine which cells have observed channel width:
-        is_observed: ArrayBool = ~np.isnan(self.var.observed_average_river_width) & (
-            self.var.river_ids != -1
-        )
-
-        # Scale depth via hydraulic continuity: h_mean = (W_expected / W_actual) * expected_mean_channel_depth.
-        # When an observed channel width is available, or when channel width is constrained by the
-        # floodplain width (bankfull_top_width_m < w_expected), mean depth scales inversely with width
-        # to preserve bankfull flow conveyance area A_bf = W * h_mean.
-        # For unconstrained channels without observed width, W_actual == W_expected, so the ratio is 1.0.
-        is_scaled: ArrayBool = (is_observed | (bankfull_top_width_m < w_expected)) & (
-            self.var.river_ids != -1
-        )
-
-        continuity_ratio: ArrayFloat32 = np.where(
-            is_scaled,
-            (w_expected / np.maximum(bankfull_top_width_m, np.float32(1e-3))).astype(
-                np.float32
-            ),
-            np.float32(1.0),
-        )
-
-        continuity_mean_channel_depth_m: ArrayFloat32 = (
-            continuity_ratio * expected_mean_channel_depth_m
-        )
-        bankfull_depth_m: ArrayFloat32 = np.maximum(
-            shape_factor * continuity_mean_channel_depth_m, min_depth_m
-        ).astype(np.float32)
 
         # The Congo River is the deepest river in the world, with maximum recorded depths
         # reaching ~220 m (and up to ~250 m in canyon sections). Calculated bankfull channel
@@ -1461,15 +1519,12 @@ class Routing(Module):
                 f"  - Observed average river width: {observed_width_m}",
                 f"  - Bankfull discharge (Q): {float(bankfull_discharge_m3_s[max_idx]):.2f} m3/s",
                 f"  - Discharge proxy (Q_proxy): {float(q_proxy[max_idx]):.2f} m3/s",
-                f"  - Expected top width (W_expected): {float(w_expected[max_idx]):.2f} m",
-                f"  - Continuity ratio (W_expected / W_actual): {float(continuity_ratio[max_idx]):.4f}",
-                f"  - Expected mean depth (c * Q^d): {float(expected_mean_channel_depth_m[max_idx]):.2f} m",
-                f"  - Continuity mean depth: {float(continuity_mean_channel_depth_m[max_idx]):.2f} m",
+                f"  - Bed elevation: {float(bed_elevation[max_idx]):.2f} m",
+                f"  - Reach length: {float(self.grid.var.river_length[max_idx]):.2f} m",
+                f"  - Manning n: {float(self.grid.var.river_mannings[max_idx]):.4f}",
                 f"  - Shape factor (r + 1): {float(shape_factor):.2f}",
                 f"  - Width alpha: {alpha_val:.2f}",
                 f"  - Width beta: {beta_val:.2f}",
-                f"  - Depth c: {float(depth_c):.4f}",
-                f"  - Depth d: {float(depth_d):.4f}",
                 f"  - Bankfull discharge multiplier: {float(self.bankfull_discharge_multiplier):.2f}",
                 f"  - Min depth: {float(min_depth_m):.2f} m",
                 f"  - Shape exponent (r): {float(shape_exponent_val):.2f}",
@@ -1506,10 +1561,8 @@ class Routing(Module):
 
         # All cells with a valid river ID (river_ids != -1) use local inertial routing, even if steep;
         # non-river overland cells (river_ids == -1) use kinematic wave routing:
-        self._river_cell_indices = np.flatnonzero(self.var.river_ids != -1).astype(
-            np.int32
-        )
-        use_kinematic: ArrayBool = self.var.river_ids == -1
+        self.use_kinematic = self.var.river_ids == -1
+        use_kinematic: ArrayBool = self.use_kinematic
 
         # Floodplain geometry beyond bankfull channel:
         raw_profile_widths: TwoDArrayFloat32 = np.nan_to_num(
@@ -1543,9 +1596,10 @@ class Routing(Module):
         shape_exponent_val: np.float32 = np.float32(
             self.config["river_depth"]["parameters"]["shape_exponent"]
         )
-        shape_exponent: ArrayFloat32 = np.full(
+        self.shape_exponent = np.full(
             self.var.river_ids.shape, shape_exponent_val, dtype=np.float32
         )
+        shape_exponent: ArrayFloat32 = self.shape_exponent
 
         bankfull_depth_m: ArrayFloat32 = self.calculate_bankfull_depth(
             bankfull_top_width_m=bankfull_top_width_m,
@@ -1608,12 +1662,11 @@ class Routing(Module):
                 avg_outflow=average_discharge,
             )
             self.hydrology.waterbodies.var.outflow_height = waterbody_outflow_height
-            if self.model.in_spinup and initialize_storage:
-                self.hydrology.waterbodies.lake_storage = waterbody_outflow_height[
-                    self.hydrology.waterbodies.is_lake
-                ].astype(np.float64) * self.hydrology.waterbodies.var.lake_area[
-                    self.hydrology.waterbodies.is_lake
-                ].astype(np.float64)
+            self.hydrology.waterbodies.lake_storage = waterbody_outflow_height[
+                self.hydrology.waterbodies.is_lake
+            ].astype(np.float64) * self.hydrology.waterbodies.var.lake_area[
+                self.hydrology.waterbodies.is_lake
+            ].astype(np.float64)
         else:
             self._wb_cell_mask = np.zeros_like(self.var.river_ids, dtype=bool)
             self._wb_cell_indices = np.zeros(0, dtype=np.int32)
@@ -1624,7 +1677,9 @@ class Routing(Module):
             waterbody_outflow_height = np.zeros(0, dtype=np.float32)
 
         self._not_wb_cell_mask: ArrayBool = ~self._wb_cell_mask
-        self._wb_pot_evap_buf = np.zeros(self.hydrology.waterbodies.n, dtype=np.float32)
+        self._wb_potential_river_evaporation_buffer_m3 = np.zeros(
+            self.hydrology.waterbodies.n, dtype=np.float32
+        )
         self._wb_act_evap_buf = np.zeros(self.hydrology.waterbodies.n, dtype=np.float32)
         self._wb_outflow_rate_buf = np.zeros(
             self.hydrology.waterbodies.n, dtype=np.float32
@@ -1635,13 +1690,6 @@ class Routing(Module):
             ].astype(np.int32)
         else:
             self._reservoir_indices = np.zeros(0, dtype=np.int32)
-
-        # The solver needs consecutive IDs; keep future reservoirs in the model state.
-        self._routing_waterbody_indices: ArrayInt32 = np.unique(self._active_wb_cells)
-        routing_waterbody_ids: ArrayInt32 = self.grid.var.waterbody_ids.copy()
-        routing_waterbody_ids[self._wb_cell_mask] = np.searchsorted(
-            self._routing_waterbody_indices, self._active_wb_cells
-        ).astype(np.int32)
 
         self.router = LocalInertial(
             dt=3600,
@@ -1662,18 +1710,10 @@ class Routing(Module):
             shape_exponent=shape_exponent,
             bankfull_depth_m=bankfull_depth_m,
             floodplain_side_slope_m_per_m=self.floodplain_side_slope_m_per_m,
-            waterbody_lake_area=self.hydrology.waterbodies.var.lake_area[
-                self._routing_waterbody_indices
-            ],
-            waterbody_lake_factor=waterbody_lake_factor[
-                self._routing_waterbody_indices
-            ],
-            waterbody_outflow_height=waterbody_outflow_height[
-                self._routing_waterbody_indices
-            ],
-            waterbody_outflow_bed_elev=waterbody_outflow_bed_elev[
-                self._routing_waterbody_indices
-            ],
+            waterbody_lake_area=self.hydrology.waterbodies.var.lake_area,
+            waterbody_lake_factor=waterbody_lake_factor,
+            waterbody_outflow_height=waterbody_outflow_height,
+            waterbody_outflow_bed_elev=waterbody_outflow_bed_elev,
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
@@ -1728,6 +1768,28 @@ class Routing(Module):
             in_spinup=self.model.in_spinup and initialize_storage,
         )
 
+        riverbed_conductivity_multiplier: np.float32 = np.float32(
+            self.config["riverbed_hydraulic_conductivity_multiplier"]
+        )
+        groundwater_conductivity_m_per_s: np.ndarray = (
+            self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0]
+            / np.float32(86400.0)
+        )
+        self._riverbed_hydraulic_conductivity_m_per_s[:] = (
+            groundwater_conductivity_m_per_s * riverbed_conductivity_multiplier
+        ).astype(np.float32)
+
+        riverbed_conductivity_multiplier: np.float32 = np.float32(
+            self.config["riverbed_hydraulic_conductivity_multiplier"]
+        )
+        groundwater_conductivity_m_per_s: np.ndarray = (
+            self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0]
+            / np.float32(86400.0)
+        )
+        self._riverbed_hydraulic_conductivity_m_per_s[:] = (
+            groundwater_conductivity_m_per_s * riverbed_conductivity_multiplier
+        ).astype(np.float32)
+
     def spinup(self) -> None:
         """Initialize routing variables during model spinup.
 
@@ -1748,6 +1810,9 @@ class Routing(Module):
         )
         self.var.rivers["return_period_2_years_daily_m3_per_s"] = np.nan
         self.var.active_rivers = self.get_active_rivers()
+        self._river_cell_indices = np.flatnonzero(self.var.river_ids != -1).astype(
+            np.int32
+        )
 
         self.grid.var.upstream_area = self.grid.load2d(
             self.model.files["grid"]["routing/upstream_area_m2"]
@@ -1778,9 +1843,6 @@ class Routing(Module):
         )
 
         # Channel gradient (fraction, dy/dx) derived dynamically from DEM bed elevation drop
-        minimum_river_slope: np.float32 = np.float32(
-            self.config["minimum_river_slope_m_per_m"]
-        )
         bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
             self.model.files["grid"]["routing/bankfull_river_elevation_m"]
         )
@@ -1806,10 +1868,10 @@ class Routing(Module):
         slope: ArrayFloat32 = np.where(
             has_ds,
             bed_drop / self.grid.var.river_length,
-            minimum_river_slope,
+            MINIMUM_KINEMATIC_SLOPE_M_PER_M,
         )
         self.grid.var.river_slope_m_per_m = np.maximum(
-            slope, minimum_river_slope
+            slope, MINIMUM_KINEMATIC_SLOPE_M_PER_M
         ).astype(np.float32)
         assert np.all(self.grid.var.river_slope_m_per_m > np.float32(0.0)), (
             "All river slopes must be strictly positive."
@@ -1897,6 +1959,21 @@ class Routing(Module):
             len(self.retention_basin_data), dtype=np.float32
         )
 
+        self.var.river_transmission_loss_m3 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+
+        riverbed_conductivity_multiplier: np.float32 = np.float32(
+            self.config["riverbed_hydraulic_conductivity_multiplier"]
+        )
+        groundwater_conductivity_m_per_s: np.ndarray = (
+            self.grid.var.groundwater_hydraulic_conductivity_m_per_day[0]
+            / np.float32(86400.0)
+        )
+        self._riverbed_hydraulic_conductivity_m_per_s[:] = (
+            groundwater_conductivity_m_per_s * riverbed_conductivity_multiplier
+        ).astype(np.float32)
+
     def get_river_width_alpha_and_beta(
         self,
         beta: float,
@@ -1911,7 +1988,7 @@ class Routing(Module):
             river_width = alpha * discharge^beta
 
         for alpha a default value of 3.91 is used, and beta is set to 0.62 based on
-        Bjerklie et al. (2003) (doi:10.1016/S0022-1694(03)00129-X, Table 3).
+        default configuration parameters.
 
         Re-arranging for alpha gives:
 
@@ -2028,9 +2105,7 @@ class Routing(Module):
             )
             return_flow_m3_per_hour[self._wb_cell_mask] = 0.0
         else:
-            return_flow_m3_to_waterbodies_per_hour = np.zeros(
-                self.hydrology.waterbodies.n, dtype=np.float32
-            )
+            return_flow_m3_to_waterbodies_per_hour = np.zeros(0, dtype=np.float32)
 
         net_base_sideflow_per_hour: ArrayFloat32 = (
             return_flow_m3_per_hour - channel_abstraction_m3_per_hour
@@ -2063,9 +2138,14 @@ class Routing(Module):
 
         over_abstraction_m3: ArrayFloat32 = self._over_abstraction_daily
         over_abstraction_m3.fill(0.0)
+        self.var.river_transmission_loss_m3.fill(0.0)
 
-        # update alpha and beta once per day
-        if self.model.in_spinup:
+        self._groundwater_head_top_layer_m[:] = self.grid.var.heads[0].astype(
+            np.float32
+        )
+
+        # update alpha and beta once per day during spinup or if river geometry is not fixed
+        if self.model.in_spinup or not self.fix_river_geometry_after_spinup:
             (
                 self.var.river_width_alpha,
                 self.var.river_width_beta,
@@ -2091,7 +2171,7 @@ class Routing(Module):
             np.multiply(
                 total_runoff_m[hour, :],
                 self.grid.var.cell_area,
-                out=self._side_flow_buf,
+                out=self._side_flow_buffer_m3,
             )
 
             # then split the runoff into runoff directly to water bodies,
@@ -2100,13 +2180,13 @@ class Routing(Module):
                 _accumulate_waterbody_runoff_and_evaporation(
                     active_wb_cells=self._active_wb_cells,
                     wb_cell_indices=self._wb_cell_indices,
-                    side_flow=self._side_flow_buf,
+                    side_flow=self._side_flow_buffer_m3,
                     ref_et=reference_evapotranspiration_water_m[hour],
                     wb_cell_counts=self._wb_cell_counts,
                     lake_area=self.hydrology.waterbodies.var.lake_area,
                     wb_storage=self.hydrology.waterbodies.var.storage,
                     return_flow_m3_to_wb=return_flow_m3_to_waterbodies_per_hour,
-                    wb_pot_evap_buf=self._wb_pot_evap_buf,
+                    wb_potential_river_evaporation_buffer_m3=self._wb_potential_river_evaporation_buffer_m3,
                     wb_act_evap_buf=self._wb_act_evap_buf,
                 )
 
@@ -2148,13 +2228,13 @@ class Routing(Module):
                         "Prescribed reservoir outflow cannot be greater than storage"
                     )
 
-            self._side_flow_buf += net_base_sideflow_per_hour
+            self._side_flow_buffer_m3 += net_base_sideflow_per_hour
             if __debug__:
-                assert (self._side_flow_buf[self._wb_cell_mask] == 0).all()
+                assert (self._side_flow_buffer_m3[self._wb_cell_mask] == 0).all()
 
             for cell_index, inflow in self._inflow_list:
                 inflow_m3 = inflow[self.inflow_idx] * np.float32(3600)
-                self._side_flow_buf[cell_index] += inflow_m3
+                self._side_flow_buffer_m3[cell_index] += inflow_m3
                 if __debug__:
                     total_inflow_m3 += inflow_m3
 
@@ -2163,26 +2243,47 @@ class Routing(Module):
                     self.var.discharge_in_rivers_m3_s_substep[self._not_wb_cell_mask]
                 ).all()
 
-            _compute_potential_river_evaporation(
-                alpha=self.var.river_width_alpha,
-                beta=self.var.river_width_beta,
+            calculate_wetted_channel_area(
+                use_kinematic=self.use_kinematic,
+                water_stage_m=self.var.water_stage_m,
+                bed_elevation_m=self.router.bed_elevation,
+                bankfull_width_m=self.router.river_width,
+                bankfull_depth_m=self.router.bankfull_depth,
+                shape_exponent=self.shape_exponent,
+                floodplain_profile_widths_m=self.floodplain_profile_widths_m,
+                floodplain_side_slope_m_per_m=self.floodplain_side_slope_m_per_m,
+                river_width_alpha=self.var.river_width_alpha,
+                river_width_beta=self.var.river_width_beta,
                 discharge_m3_s=self.var.discharge_in_rivers_m3_s_substep,
-                river_length=self.grid.var.river_length,
-                cell_area=self.grid.var.cell_area,
-                is_wb=self._wb_cell_mask,
-                ref_et=reference_evapotranspiration_water_m[hour],
-                out=self._pot_evap_buf,
+                river_length_m=self.grid.var.river_length,
+                cell_area_m2=self.grid.var.cell_area,
+                is_waterbody=self._wb_cell_mask,
+                wetted_channel_area_m2=self._wetted_channel_area_buffer_m2,
             )
 
-            routed_outflow_m3: ArrayFloat32 = outflow_per_waterbody_m3[
-                self._routing_waterbody_indices
-            ]
-            routed_waterbody_storage_m3: ArrayFloat64
-            routed_waterbody_inflow_m3: ArrayFloat32
+            calculate_potential_river_evaporation(
+                reference_evapotranspiration_m=reference_evapotranspiration_water_m[
+                    hour
+                ],
+                wetted_channel_area_m2=self._wetted_channel_area_buffer_m2,
+                potential_evaporation_m3=self._potential_river_evaporation_buffer_m3,
+            )
+
+            calculate_potential_river_transmission_loss(
+                wetted_channel_area_m2=self._wetted_channel_area_buffer_m2,
+                riverbed_hydraulic_conductivity_m_s=self._riverbed_hydraulic_conductivity_m_per_s,
+                bed_elevation_m=self.router.bed_elevation,
+                water_stage_m=self.var.water_stage_m,
+                groundwater_head_m=self._groundwater_head_top_layer_m,
+                timestep_s=np.float32(3600),
+                potential_transmission_loss_m3=self._potential_transmission_loss_buffer_m3,
+            )
+
             (
                 self.var.discharge_in_rivers_m3_s_substep,
                 self.var.river_storage_m3,
                 actual_evaporation_in_rivers_m3_per_hour,
+                actual_transmission_loss_m3_per_hour,
                 over_abstraction_m3_routing_step,
                 routed_waterbody_storage_m3,
                 routed_waterbody_inflow_m3,
@@ -2193,12 +2294,11 @@ class Routing(Module):
             ) = self.router.step(
                 Q_prev_m3_s=self.var.discharge_in_rivers_m3_s_substep,
                 river_storage_m3=self.var.river_storage_m3,
-                sideflow_m3=self._side_flow_buf,
-                evaporation_m3=self._pot_evap_buf,
-                waterbody_storage_m3=self.hydrology.waterbodies.var.storage[
-                    self._routing_waterbody_indices
-                ],
-                outflow_per_waterbody_m3=routed_outflow_m3,
+                sideflow_m3=self._side_flow_buffer_m3,
+                evaporation_m3=self._potential_river_evaporation_buffer_m3,
+                transmission_loss_m3=self._potential_transmission_loss_buffer_m3,
+                waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
+                outflow_per_waterbody_m3=outflow_per_waterbody_m3,
                 retention_storage_m3=self.var.retention_basin_storage_m3,
                 retention_activation_threshold_m3_s=self.retention_activation_threshold_m3_s,
             )
@@ -2218,6 +2318,8 @@ class Routing(Module):
                 out=self.var.water_stage_m
             )
 
+            self.var.river_transmission_loss_m3 += actual_transmission_loss_m3_per_hour
+
             if __debug__:
                 if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
                     raise ValueError(
@@ -2225,16 +2327,7 @@ class Routing(Module):
                     )
                 assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
 
-            # Future reservoirs use river flow to build their inflow history.
-            future_reservoirs: ArrayBool = ~self.hydrology.waterbodies.is_active
-            waterbody_inflow_m3[future_reservoirs] = (
-                self.var.discharge_in_rivers_m3_s_substep[
-                    self.hydrology.waterbodies.var.waterbody_outflow_linear_mapping[
-                        future_reservoirs
-                    ]
-                ]
-                * 3600
-            )
+            # the reservoir operators need to track the inflow to the reservoirs
             if len(self._reservoir_indices) > 0:
                 self.model.agents.reservoir_operators.track_inflow(
                     waterbody_inflow_m3[self._reservoir_indices]
@@ -2342,6 +2435,7 @@ class Routing(Module):
                     waterbody_evaporation_m3,
                     retention_evaporation_m3,
                     command_area_release_m3,
+                    self.var.river_transmission_loss_m3,
                 ],
                 prestorages=[
                     pre_waterbody_storage,
@@ -2463,7 +2557,8 @@ class Routing(Module):
 
         Estimates the 2-year flood return period discharge (and retention basin
         activation threshold discharge) for each active river segment using extreme
-        value analysis on daily simulated river outflow. Dynamically updates bankfull
+        value analysis on daily simulated river outflow. If the model is in spinup or
+        if fix_river_geometry_after_spinup is False, dynamically updates bankfull
         channel width, bankfull depth, and the local inertial router geometry.
 
         Raises:
@@ -2517,6 +2612,13 @@ class Routing(Module):
         discharge_by_river_daily.index.freq = pd.infer_freq(  # ty:ignore[unresolved-attribute]
             discharge_by_river_daily.index  # ty:ignore[invalid-argument-type]
         )
+        return_periods_to_fit: list[int | float] = list(
+            set(
+                [2, activation_threshold_return_period_years]
+                if (self.model.in_spinup or not self.fix_river_geometry_after_spinup)
+                else [activation_threshold_return_period_years]
+            )
+        )
         for idx in tqdm(
             active_rivers.index,
             total=len(active_rivers),
@@ -2533,7 +2635,7 @@ class Routing(Module):
             # there should be more exceedances and a reliable fit for the low RPs used here.
             model: ReturnPeriodModel = ReturnPeriodModel(
                 series=discharge_by_river_daily[idx],
-                return_periods=list(set([2, activation_threshold_return_period_years])),
+                return_periods=return_periods_to_fit,
                 fixed_quantile=0.95,  # use a fixed quantile
                 min_exceed=1,
                 fixed_shape=0.0,
@@ -2550,29 +2652,31 @@ class Routing(Module):
                     self.default_minimum_discharge_m3_per_s,
                 )
 
-        # For channels without observed width, estimate bankfull width from the newly fitted 2-year return period discharge
-        # using downstream hydraulic geometry W = alpha * Q2^beta:
-        self.var.river_width = self.calculate_bankfull_width(
-            use_simulated_bankfull_q=True
-        )
+        # Update river geometry only during spinup or if fix_river_geometry_after_spinup is False
+        if self.model.in_spinup or not self.fix_river_geometry_after_spinup:
+            # For channels without observed width, estimate bankfull width from the newly fitted 2-year return period discharge
+            # using downstream hydraulic geometry W = alpha * Q2^beta:
+            self.var.river_width = self.calculate_bankfull_width(
+                use_simulated_bankfull_q=True
+            )
 
-        # Dynamically update the local inertial router's bankfull depth in place
-        # using the newly fitted 2-year flood return periods:
-        updated_bankfull_depth: ArrayFloat32 = self.calculate_bankfull_depth(
-            bankfull_top_width_m=self.var.river_width,
-            use_simulated_bankfull_q=True,
-        )
-        self.router.update_channel_geometry(
-            river_width=self.var.river_width,
-            bankfull_depth_m=updated_bankfull_depth,
-        )
-        self._update_rivers_geometry(
-            width_grid=self.var.river_width,
-            depth_grid=updated_bankfull_depth,
-            manning_grid=self.grid.var.river_mannings,
-            floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
-            floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
-        )
+            # Dynamically update the local inertial router's bankfull depth in place
+            # using the newly fitted 2-year flood return periods:
+            updated_bankfull_depth: ArrayFloat32 = self.calculate_bankfull_depth(
+                bankfull_top_width_m=self.var.river_width,
+                use_simulated_bankfull_q=True,
+            )
+            self.router.update_channel_geometry(
+                river_width=self.var.river_width,
+                bankfull_depth_m=updated_bankfull_depth,
+            )
+            self._update_rivers_geometry(
+                width_grid=self.var.river_width,
+                depth_grid=updated_bankfull_depth,
+                manning_grid=self.grid.var.river_mannings,
+                floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
+                floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
+            )
 
         for basin_id in range(len(self.retention_basin_data)):
             basin_cells = np.where(self.retention_basin_ids == basin_id)[0]

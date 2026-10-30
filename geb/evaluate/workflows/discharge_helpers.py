@@ -1,7 +1,7 @@
 """Load discharge observations and simulations and locate evaluation outputs."""
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import geopandas as gpd
 import numpy as np
@@ -320,8 +320,14 @@ def load_station_discharge_comparison(
         simulated_discharge.index = simulated_discharge.index + observed_timestep / 2
 
     # cut both observed and simulated discharge to the same time range
-    start_time = max(observed_discharge.index.min(), simulated_discharge.index.min())
-    end_time = min(observed_discharge.index.max(), simulated_discharge.index.max())
+    start_time: pd.Timestamp = max(
+        cast(pd.Timestamp, observed_discharge.index.min()),
+        cast(pd.Timestamp, simulated_discharge.index.min()),
+    )
+    end_time: pd.Timestamp = min(
+        cast(pd.Timestamp, observed_discharge.index.max()),
+        cast(pd.Timestamp, simulated_discharge.index.max()),
+    )
     observed_discharge = observed_discharge.loc[start_time:end_time]
     simulated_discharge = simulated_discharge.loc[start_time:end_time]
 

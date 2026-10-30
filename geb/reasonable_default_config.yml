@@ -69,20 +69,19 @@ hazards:
 hydrology:
   karst:
     capture_fraction: 1.0 # Fraction of surface runoff and interflow captured on karst land below the swallowing ceiling.
-    max_runoff_capture_m_per_day: 0.025 # Maximum daily runoff and interflow captured by dry valleys and karst depressions (m/day, 25 mm/day).
-    max_storage_m: 0.05 # Maximum water depth stored in karst aquifer delay storage (m, 50 mm). Excess overflows to stream discharge.
     release_time_days: 10.0 # Starting value in days.
     vertical_conductivity_multiplier: 10.0 # Multiplier for vertical hydraulic conductivity in karst soils.
   routing:
     max_threads: null
-    minimum_river_slope_m_per_m: 0.0001
+    fix_river_geometry_after_spinup: true
     retention_basins:
-      release_threshold_factor: 0.2
+      release_threshold_factor: 0.85
       activation_threshold_return_period_years: 2
+    riverbed_hydraulic_conductivity_multiplier: 0.1
     river_width:
       parameters:
-        default_alpha: 3.91 # Bjerklie et al. (2003) doi:10.1016/S0022-1694(03)00129-X (Table 3, inverted Q = 0.11 * W^1.62)
-        beta: 0.62          # Bjerklie et al. (2003) Table 3 exponent (1 / 1.62 = 0.617)
+        default_alpha: 7.2 # Andreadis et al. (2013) doi:10.1002/wrcr.20440
+        beta: 0.5          # Andreadis et al. (2013) doi:10.1002/wrcr.20440
     river_depth:
       # Coupled bankfull width and depth derivation from Bjerklie et al. (2003):
       #
@@ -105,9 +104,6 @@ hydrology:
       # Coupling width and depth through this shared framework guarantees that channel conveyance
       # reproduces the universal discharge equation without cross-sectional distortion in both steep and flat rivers.
       parameters:
-        c: 0.15   # Bjerklie et al. (2003) coupled inversion (Eq. 17 & Table 4)
-        d: 0.21   # Bjerklie et al. (2003)
-        e: -0.20  # Bjerklie et al. (2003) slope exponent
         min_depth_m: 0.1
         shape_exponent: 0.5
         use_observed_width_as_bankfull: true
@@ -293,3 +289,4 @@ parameters:
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0
   variable_runoff_shape_beta_multiplier: 1.0
+  runoff_concentration_factor: 1.0

@@ -1429,9 +1429,7 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
         },
     }
 
-    # -------------------------------------------------------------------------
     # Plot 1: Saturated matric flux potential and potential vs saturation
-    # -------------------------------------------------------------------------
     fig1, (ax1a, ax1b) = plt.subplots(1, 2, figsize=(12, 5))
 
     bubbling_pressures_m: np.ndarray = np.linspace(0.02, 1.0, 50, dtype=np.float32)
@@ -1489,9 +1487,7 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
     fig1.savefig(plot1_path, dpi=150)
     plt.close(fig1)
 
-    # -------------------------------------------------------------------------
     # Plot 2: Capillary rise and percolation fluxes vs groundwater depth
-    # -------------------------------------------------------------------------
     fig2, (ax2a, ax2b) = plt.subplots(1, 2, figsize=(12, 5))
 
     total_soil_depth_m: np.float32 = np.float32(2.0)
@@ -1597,9 +1593,7 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
     fig2.savefig(plot2_path, dpi=150)
     plt.close(fig2)
 
-    # -------------------------------------------------------------------------
     # Plot 3: Flux and sensitivity vs bottom soil saturation across water table depths
-    # -------------------------------------------------------------------------
     fig3, (ax3a, ax3b) = plt.subplots(1, 2, figsize=(12, 5))
 
     loam_props = soils["Loam"]
@@ -1686,9 +1680,7 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
     fig3.savefig(plot3_path, dpi=150)
     plt.close(fig3)
 
-    # -------------------------------------------------------------------------
     # Verification assertions
-    # -------------------------------------------------------------------------
     assert plot1_path.exists(), f"{plot1_path} was not created"
     assert plot1_path.stat().st_size > 0, f"{plot1_path} is empty"
 

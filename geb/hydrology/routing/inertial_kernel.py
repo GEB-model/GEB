@@ -28,9 +28,11 @@ from .geometry import (
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_RIVER_WIDTH,
+    GEOM_IN_SHAPE_EXPONENT,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
     InertialGeometry,
     compute_overbank_depth_and_top_width,
+    compute_top_width_from_depth,
     compute_top_width_from_overbank_depth,
 )
 from .solver import evaluate_discharge_pow_0_6, solve_inertial_momentum
@@ -135,7 +137,9 @@ class SubstepBuffers(NamedTuple):
     terminal_wb_outflow_accum_m3: ArrayFloat32
     substep_discharge_inertial: ArrayFloat32 = np.empty(0, dtype=np.float32)
     kinematic_inflow_rate_inertial: ArrayFloat32 = np.empty(0, dtype=np.float32)
-    block_min_buf: ArrayFloat32 = np.empty(0, dtype=np.float32)
+    block_min_buf: ArrayFloat32 = np.empty(
+        REDUCTION_NUM_BLOCKS * REDUCTION_BLOCK_STRIDE, dtype=np.float32
+    )
 
 
 @njit(fastmath=True, parallel=True)
@@ -145,10 +149,12 @@ def _gather_inputs(
     storage_in: ArrayFloat64,
     sideflow_in: ArrayFloat32,
     evap_in: ArrayFloat32,
+    trans_in: ArrayFloat32,
     q_out: ArrayFloat32,
     storage_out: ArrayFloat64,
     sideflow_out: ArrayFloat32,
     evap_out: ArrayFloat32,
+    trans_out: ArrayFloat32,
 ) -> None:
     """Gathers and permutes multiple routing input arrays into topological order.
 
@@ -161,10 +167,12 @@ def _gather_inputs(
         storage_in: Input river storage volume array (m³).
         sideflow_in: Input lateral sideflow volume array (m³).
         evap_in: Input potential evaporation volume array (m³).
+        trans_in: Input potential transmission loss volume array (m³).
         q_out: Target pre-allocated discharge array (m³/s).
         storage_out: Target pre-allocated river storage array (m³).
         sideflow_out: Target pre-allocated sideflow array (m³).
         evap_out: Target pre-allocated evaporation array (m³).
+        trans_out: Target pre-allocated transmission loss array (m³).
     """
     n: int = len(sorted_idxs)
     for i in prange(n):
@@ -173,6 +181,7 @@ def _gather_inputs(
         storage_out[i] = storage_in[idx]
         sideflow_out[i] = sideflow_in[idx]
         evap_out[i] = evap_in[idx]
+        trans_out[i] = trans_in[idx]
 
 
 @njit(fastmath=True, parallel=True)
@@ -180,10 +189,12 @@ def _scatter_outputs(
     sorted_idxs: ArrayInt32,
     q_perm: ArrayFloat32,
     evap_perm: ArrayFloat32,
+    trans_perm: ArrayFloat32,
     over_abs_perm: ArrayFloat32,
     storage_perm: ArrayFloat64,
     q_out: ArrayFloat32,
     evap_out: ArrayFloat32,
+    trans_out: ArrayFloat32,
     over_abs_out: ArrayFloat32,
     storage_out: ArrayFloat64,
 ) -> None:
@@ -196,10 +207,12 @@ def _scatter_outputs(
         sorted_idxs: Precomputed 1D permutation index array.
         q_perm: Permuted channel discharge array (m³/s).
         evap_perm: Permuted actual evaporation volume array (m³).
+        trans_perm: Permuted actual transmission loss volume array (m³).
         over_abs_perm: Permuted over-abstraction deficit array (m³).
         storage_perm: Permuted river storage volume array (m³).
         q_out: Target original-order discharge array (m³/s).
         evap_out: Target original-order actual evaporation array (m³).
+        trans_out: Target original-order actual transmission loss array (m³).
         over_abs_out: Target original-order over-abstraction array (m³).
         storage_out: Target original-order river storage array (m³).
     """
@@ -208,6 +221,7 @@ def _scatter_outputs(
         idx: int = sorted_idxs[i]
         q_out[idx] = q_perm[i]
         evap_out[idx] = evap_perm[i]
+        trans_out[idx] = trans_perm[i]
         over_abs_out[idx] = over_abs_perm[i]
         storage_out[idx] = storage_perm[i]
 
@@ -1136,17 +1150,9 @@ def _apply_confluence_inflow_limits(
         depth_c: np.float32 = max(stage_c - bed_c, np.float32(0.0))
         bankfull_depth_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
 
-        depth_cap: np.float32 = max(
-            np.float32(0.5) * depth_c,
-            np.float32(0.2) * bankfull_depth_c,
-            np.float32(0.05),
-        )
-        head_diff: np.float32 = max(max_up_stage - stage_c, np.float32(0.0))
-        delta_z_max: np.float32 = (
-            min(head_diff, depth_cap)
-            if head_diff > np.float32(0.0)
-            else np.float32(0.05)
-        )
+        # Confluence absorption capacity is bounded by approaching upstream water stage.
+        # Water cannot flow into the confluence reach to raise its stage above the feeding tributaries.
+        delta_z_max: np.float32 = max(max_up_stage - stage_c, np.float32(0.0))
 
         inv_length_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
         reach_length_c: np.float32 = np.float32(1.0) / inv_length_c
@@ -1155,27 +1161,18 @@ def _apply_confluence_inflow_limits(
             reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
         ]
 
-        if depth_c > bankfull_depth_c:
-            top_width_c: np.float32 = compute_top_width_from_overbank_depth(
-                overbank_depth_m=depth_c - bankfull_depth_c,
+        shape_exp_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_SHAPE_EXPONENT]
+        top_width_c: np.float32 = max(
+            compute_top_width_from_depth(
+                water_depth_m=depth_c,
+                bankfull_depth_m=bankfull_depth_c,
                 bankfull_width_m=bf_width_c,
+                shape_exponent=shape_exp_c,
                 floodplain_widths=geom_floodplain_widths[reach_idx],
                 side_slope_z=fp_slope_c,
-            )
-        else:
-            depth_ratio: np.float32 = depth_c / max(bankfull_depth_c, np.float32(1e-3))
-            inv_shape_exp_plus_one: np.float32 = geom_inbank[
-                reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
-            ]
-            shape_exponent: np.float32 = (
-                np.float32(0.5)
-                if inv_shape_exp_plus_one == np.float32(1.0 / 1.5)
-                else (np.float32(1.0) / inv_shape_exp_plus_one) - np.float32(1.0)
-            )
-            top_width_c = max(
-                bf_width_c * (depth_ratio**shape_exponent),
-                bf_width_c * np.float32(0.1),
-            )
+            ),
+            bf_width_c * np.float32(0.1),
+        )
 
         surface_area_c: np.float32 = top_width_c * reach_length_c
         delta_v_cap: np.float32 = surface_area_c * delta_z_max
@@ -1212,6 +1209,7 @@ def _apply_confluence_inflow_limits(
 @njit(inline="always")
 def _route_inertial_retention(
     substep_discharge_m3_s: ArrayFloat32,
+    previous_discharge_m3_s_inertial: ArrayFloat32,
     sideflow_m3_inertial: ArrayFloat32,
     river_storage_m3_inertial: ArrayFloat64,
     ret: RetentionCoupling,
@@ -1224,6 +1222,7 @@ def _route_inertial_retention(
 
     Args:
         substep_discharge_m3_s: Primary reach discharge array (m³/s).
+        previous_discharge_m3_s_inertial: Reach discharge from previous macro timestep (m³/s).
         sideflow_m3_inertial: Macro-timestep lateral sideflow volume (m³).
         river_storage_m3_inertial: Reach water storage volume array (m³).
         ret: Flood retention basin state arrays and parameters.
@@ -1251,7 +1250,10 @@ def _route_inertial_retention(
                 retention_id
             ]
             river_volume_substep: np.float32 = avail_flow_rate * dt_substep
-            is_rising_limb: bool = bool(avail_flow_rate > discharge_positive)
+            previous_discharge: np.float32 = max(
+                previous_discharge_m3_s_inertial[reach_idx], np.float32(0.0)
+            )
+            is_rising_limb: bool = bool(avail_flow_rate > previous_discharge)
 
             (
                 diverted_vol,
@@ -1287,9 +1289,11 @@ def _update_continuity_and_cfl(
     kinematic_inflow_rate: ArrayFloat32,
     sideflow_m3_inertial: ArrayFloat32,
     evaporation_m3_inertial: ArrayFloat32,
+    transmission_loss_m3_inertial: ArrayFloat32,
     river_storage_m3_inertial: ArrayFloat64,
     over_abstraction_m3_inertial: ArrayFloat32,
     actual_evaporation_m3_inertial: ArrayFloat32,
+    actual_transmission_loss_m3_inertial: ArrayFloat32,
     geom: InertialGeometry,
     topo: InertialTopology,
     buffers: SubstepBuffers,
@@ -1309,9 +1313,11 @@ def _update_continuity_and_cfl(
         kinematic_inflow_rate: Upstream inflow rates from kinematic domain (m³/s).
         sideflow_m3_inertial: Macro-timestep lateral sideflow volume (m³).
         evaporation_m3_inertial: Macro-timestep potential channel evaporation volume (m³).
+        transmission_loss_m3_inertial: Macro-timestep potential river transmission loss volume (m³).
         river_storage_m3_inertial: Primary reach water storage volume array (m³).
         over_abstraction_m3_inertial: Output over-abstraction deficit volume accumulator (m³).
         actual_evaporation_m3_inertial: Output actual evaporation volume accumulator (m³).
+        actual_transmission_loss_m3_inertial: Output actual transmission loss volume accumulator (m³).
         geom: Static channel and floodplain geometry lookup tables.
         topo: Network connectivity and topological ordering structure.
         buffers: Pre-allocated workspace scratch buffers.
@@ -1430,7 +1436,16 @@ def _update_continuity_and_cfl(
                 evaporation_volume, np.float32(new_storage)
             )
             actual_evaporation_m3_inertial[reach_idx] += actual_evaporation
-            new_storage -= float(actual_evaporation)
+            new_storage = max(new_storage - float(actual_evaporation), 0.0)
+
+            trans_loss_volume: np.float32 = (
+                transmission_loss_m3_inertial[reach_idx] * inv_dt_macro
+            ) * dt_substep
+            actual_trans_loss: np.float32 = min(
+                trans_loss_volume, np.float32(new_storage)
+            )
+            actual_transmission_loss_m3_inertial[reach_idx] += actual_trans_loss
+            new_storage = max(new_storage - float(actual_trans_loss), 0.0)
 
             river_storage_m3_inertial[reach_idx] = new_storage
             discharge_vol_sum_inertial[reach_idx] += outflow_rate * dt_substep
@@ -1512,11 +1527,14 @@ def _run_inertial_substeps(
     dt_f32: np.float32,
     n_inertial: int,
     substep_discharge_m3_s: ArrayFloat32,
+    previous_discharge_m3_s_inertial: ArrayFloat32,
     river_storage_m3_inertial: ArrayFloat64,
     sideflow_m3_inertial: ArrayFloat32,
     evaporation_m3_inertial: ArrayFloat32,
+    transmission_loss_m3_inertial: ArrayFloat32,
     over_abstraction_m3_inertial: ArrayFloat32,
     actual_evaporation_m3_inertial: ArrayFloat32,
+    actual_transmission_loss_m3_inertial: ArrayFloat32,
     updated_discharge_m3_s_inertial: ArrayFloat32,
     kinematic_inflow_rate: ArrayFloat32,
     geom: InertialGeometry,
@@ -1542,11 +1560,14 @@ def _run_inertial_substeps(
         dt_f32: Macro routing timestep duration (seconds).
         n_inertial: Number of reaches routed with local inertial equations.
         substep_discharge_m3_s: Primary discharge array (m³/s).
+        previous_discharge_m3_s_inertial: Reach discharge from previous macro timestep (m³/s).
         river_storage_m3_inertial: Primary reach water storage volume array (m³).
         sideflow_m3_inertial: Macro-timestep lateral sideflow volume (m³).
         evaporation_m3_inertial: Macro-timestep potential channel evaporation volume (m³).
+        transmission_loss_m3_inertial: Macro-timestep potential river transmission loss volume (m³).
         over_abstraction_m3_inertial: Accumulator tracking unfulfilled abstraction deficit volume (m³).
         actual_evaporation_m3_inertial: Accumulator tracking actual volume evaporated from channel (m³).
+        actual_transmission_loss_m3_inertial: Accumulator tracking actual volume lost to groundwater (m³).
         updated_discharge_m3_s_inertial: Output array storing timestep-averaged reach discharge (m³/s).
         kinematic_inflow_rate: Upstream inflow rates from kinematic domain (m³/s).
         geom: Static channel and floodplain geometry lookup tables.
@@ -1581,10 +1602,6 @@ def _run_inertial_substeps(
 
     dt_substep: np.float32 = dt_f32 / np.float32(num_inertial_substeps)
     block_min_buf: ArrayFloat32 = buffers.block_min_buf
-    if block_min_buf.size < REDUCTION_NUM_BLOCKS * REDUCTION_BLOCK_STRIDE:
-        block_min_buf = np.empty(
-            REDUCTION_NUM_BLOCKS * REDUCTION_BLOCK_STRIDE, dtype=np.float32
-        )
 
     t_elapsed: np.float32 = np.float32(0.0)
     substep_count: int = 0
@@ -1667,6 +1684,7 @@ def _run_inertial_substeps(
         # 4. Route diversions and releases for retention basins
         _route_inertial_retention(
             substep_discharge_m3_s=substep_discharge_m3_s,
+            previous_discharge_m3_s_inertial=previous_discharge_m3_s_inertial,
             sideflow_m3_inertial=sideflow_m3_inertial,
             river_storage_m3_inertial=river_storage_m3_inertial,
             ret=ret,
@@ -1683,9 +1701,11 @@ def _run_inertial_substeps(
             kinematic_inflow_rate=kinematic_inflow_rate,
             sideflow_m3_inertial=sideflow_m3_inertial,
             evaporation_m3_inertial=evaporation_m3_inertial,
+            transmission_loss_m3_inertial=transmission_loss_m3_inertial,
             river_storage_m3_inertial=river_storage_m3_inertial,
             over_abstraction_m3_inertial=over_abstraction_m3_inertial,
             actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
+            actual_transmission_loss_m3_inertial=actual_transmission_loss_m3_inertial,
             geom=geom,
             topo=topo,
             buffers=buffers,
@@ -1716,6 +1736,9 @@ def _run_inertial_substeps(
     )
     actual_evaporation_m3_inertial[:] = np.minimum(
         actual_evaporation_m3_inertial, evaporation_m3_inertial
+    )
+    actual_transmission_loss_m3_inertial[:] = np.minimum(
+        actual_transmission_loss_m3_inertial, transmission_loss_m3_inertial
     )
 
     return substep_count

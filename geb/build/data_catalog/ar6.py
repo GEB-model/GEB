@@ -22,7 +22,7 @@ class AR6(Adapter):
 
     def fetch(
         self,
-        url: str | None = None,
+        url: str = "https://zenodo.org/records/6382554/files/ar6-regional-confidence.zip?download=1",
     ) -> AR6:
         """Fetch the dataset from the given URL if not already present.
 
@@ -36,12 +36,12 @@ class AR6(Adapter):
             fetch_and_save(url=url, file_path=self.path, logger=self.logger)
         return self
 
-    def read(self, scenario: str | int, percentile: float) -> xr.Dataset:
+    def read(self, scenario: str | int, projection_quantile: float) -> xr.Dataset:
         """Read the AR6 data.
 
         Args:
             scenario: The SSP scenario to read (e.g., 119, 126, 245, 370, 585).
-            percentile: The percentile to read (e.g., 0.5, 0.95, 1.0).
+            projection_quantile: The projection quantile to read (e.g., 0.5, 0.95, 1.0).
         Returns:
             The AR6 data as a Dataset.
         Raises:
@@ -59,7 +59,7 @@ class AR6(Adapter):
                 data = f.read()
 
         ds = xr.open_dataset(io.BytesIO(data))
-        ds = ds.sel(quantiles=percentile)
+        ds = ds.sel(quantiles=projection_quantile)
 
         # Express relative to 2020 and convert from mm to m
         ds["sea_level_change"] = (

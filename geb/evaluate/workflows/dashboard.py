@@ -6,6 +6,7 @@ _JavascriptMacro adds these scripts and their data to the HTML file.
 """
 
 import base64
+import datetime
 import gzip
 import html
 import json
@@ -247,6 +248,53 @@ class _StationsPaneMacro(MacroElement):
         )
 
 
+def read_run_completion_time(run_output_folder: Path | None) -> str | None:
+    """Read the completion timestamp of a simulation run from done.txt if available.
+
+    Uses the creation/modification time of done.txt, which is touched when
+    a run finishes.
+
+    Args:
+        run_output_folder: Simulation output directory for the run.
+
+    Returns:
+        Formatted completion timestamp string, or None if not found.
+    """
+    if run_output_folder is None:
+        return None
+    done_file: Path = run_output_folder / "done.txt"
+
+    if not done_file.exists():
+        return None
+    mtime: float = done_file.stat().st_mtime
+    return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def read_run_completion_timestamp_for_filename(
+    run_output_folder: Path | None,
+) -> str | None:
+    """Read the completion timestamp of a simulation run formatted for filenames.
+
+    Uses the creation/modification time of done.txt, which is touched when
+    a run finishes.
+
+    Args:
+        run_output_folder: Simulation output directory for the run.
+
+    Returns:
+        Formatted completion timestamp string '%Y%m%d_%H%M%S' (e.g. '20261022_130706'),
+        or None if not found.
+    """
+    if run_output_folder is None:
+        return None
+    done_file: Path = run_output_folder / "done.txt"
+
+    if not done_file.exists():
+        return None
+    mtime: float = done_file.stat().st_mtime
+    return datetime.datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
+
+
 def create_discharge_dashboard(
     evaluation_folder: Path,
     run_output_folder: Path,
@@ -257,7 +305,7 @@ def create_discharge_dashboard(
     correct_discharge_observations: bool = False,
     output_filename: str = "discharge_evaluation_map.html",
     include_return_period_plots: bool = True,
-    reservoir_period: tuple[int, int, int] | None = None,
+    run_name: str = "default",
 ) -> dict[str, str]:
     """Create only the discharge evaluation dashboard.
 
@@ -278,10 +326,12 @@ def create_discharge_dashboard(
             by the observed-to-GEB upstream-area ratio (dimensionless), matching
             the option in ``evaluate_discharge``.
         output_filename: Dashboard HTML filename written inside the discharge
-            evaluation output folder, or an absolute output path.
+            evaluation output folder, or an absolute output path. If the run is
+            completed, the completion timestamp (date, hour, minute, second) is
+            appended to the filename stem.
         include_return_period_plots: Whether to calculate and plot return-period
             curves in station popups. Defaults to True.
-        reservoir_period: Spinup start, simulation start, and simulation end years.
+        run_name: Simulation run name shown on the dashboard. Defaults to "default".
 
     Returns:
         Dictionary with the created dashboard path.
@@ -375,7 +425,19 @@ def create_discharge_dashboard(
         run_output_folder=run_output_folder,
     )
 
-    dashboard_path: Path = evaluation_folder / output_path
+    completion_time: str | None = read_run_completion_time(run_output_folder)
+    completion_timestamp: str | None = read_run_completion_timestamp_for_filename(
+        run_output_folder
+    )
+    if completion_timestamp and completion_timestamp not in output_path.stem:
+        output_path = output_path.with_stem(
+            f"{output_path.stem}_{completion_timestamp}"
+        )
+
+    if output_path.is_absolute():
+        dashboard_path: Path = output_path
+    else:
+        dashboard_path = evaluation_folder / output_path
     logger.info("Preparing interactive chart data...")
     station_bundle_indices, chart_bundles, chart_timelines = (
         _write_dashboard_charts_from_saved_scores(
@@ -402,6 +464,9 @@ def create_discharge_dashboard(
         station_characteristics=dashboard_characteristics,
         excluded_stations=excluded_stations,
         chart_timeline=chart_timelines,
+        run_output_folder=run_output_folder,
+        run_name=run_name,
+        completion_date=completion_time,
     )
     logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
     return {"dashboard": str(dashboard_path)}
@@ -419,7 +484,8 @@ def write_discharge_dashboard(
     excluded_stations: gpd.GeoDataFrame | None = None,
     chart_timeline: list[int] | dict[str, Any] | None = None,
     run_output_folder: Path | None = None,
-    reservoir_period: tuple[int, int, int] | None = None,
+    run_name: str | None = None,
+    completion_date: str | datetime.datetime | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -451,11 +517,23 @@ def write_discharge_dashboard(
         run_output_folder: Optional simulation output folder used to attach
             end-of-run simulated river dimensions if not already present on
             rivers. Defaults to None.
-        reservoir_period: Spinup start, simulation start, and simulation end years.
+        run_name: Optional simulation run name shown on the dashboard and in the
+            legend.
+        completion_date: Optional completion timestamp string or datetime
+            shown on the dashboard and in the legend. If omitted, read from
+            ``run_output_folder / done.txt``.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
     """
+    formatted_completion_date: str | None = None
+    if completion_date is None and run_output_folder is not None:
+        formatted_completion_date = read_run_completion_time(run_output_folder)
+    elif isinstance(completion_date, datetime.datetime):
+        formatted_completion_date = completion_date.strftime("%Y-%m-%d %H:%M:%S")
+    elif completion_date is not None:
+        formatted_completion_date = str(completion_date)
+
     if run_output_folder is not None and (
         "width_m" not in rivers.columns or "depth_m" not in rivers.columns
     ):
@@ -475,6 +553,12 @@ def write_discharge_dashboard(
         )
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
     discharge_map = folium.Map(location=map_center, tiles=None, prefer_canvas=True)
+    dashboard_title_parts: list[str] = ["Discharge Evaluation Dashboard"]
+    if run_name:
+        dashboard_title_parts.append(f"Run: {run_name}")
+    if formatted_completion_date:
+        dashboard_title_parts.append(f"Completed: {formatted_completion_date}")
+    cast(Figure, discharge_map.get_root()).title = " · ".join(dashboard_title_parts)
     _StationsPaneMacro().add_to(discharge_map)
     topo_tile: TileLayer = TileLayer(
         tiles=_ESRI_TOPO_TILES,
@@ -738,9 +822,7 @@ def write_discharge_dashboard(
 
     waterbody_layers: list[folium.FeatureGroup] = []
     if waterbodies is not None and not waterbodies.empty:
-        waterbody_layers = _add_waterbody_layers(
-            discharge_map, waterbodies, reservoir_period
-        )
+        waterbody_layers = _add_waterbody_layers(discharge_map, waterbodies)
 
     basemaps_data: list[dict[str, Any]] = [
         {
@@ -812,6 +894,8 @@ def write_discharge_dashboard(
         excluded_stations=station_marker_index,
         exclusion_summary=exclusion_summary,
         snapping_layer=snapping_layer.get_name() if snapping_stations else None,
+        run_name=run_name,
+        completion_date=formatted_completion_date,
     )
 
     chart_macro_data: dict[str, Any] = {
@@ -999,27 +1083,36 @@ def determine_main_time_index(
         return None
 
     # Read the simulation index from the first available station routing file.
-    simulated_index: pd.Index = pd.read_parquet(first_parquet_file).index
-    if not isinstance(simulated_index, pd.DatetimeIndex) or simulated_index.empty:
+    raw_simulated_index: pd.Index = pd.read_parquet(first_parquet_file).index
+    if (
+        not isinstance(raw_simulated_index, pd.DatetimeIndex)
+        or raw_simulated_index.empty
+    ):
         return None
+    simulated_index: pd.DatetimeIndex = raw_simulated_index
+
+    sim_min: pd.Timestamp = cast(pd.Timestamp, simulated_index.min())
+    sim_max: pd.Timestamp = cast(pd.Timestamp, simulated_index.max())
 
     if frequency == "daily":
         # Match GEB daily aggregation: noon (12:00:00) midpoint timestamps.
-        sim_start: pd.Timestamp = simulated_index.min().floor("D") + pd.Timedelta(
-            hours=12
+        sim_start: pd.Timestamp = cast(
+            pd.Timestamp, sim_min.floor("D") + pd.Timedelta(hours=12)
         )
-        sim_end: pd.Timestamp = simulated_index.max().floor("D") + pd.Timedelta(
-            hours=12
+        sim_end: pd.Timestamp = cast(
+            pd.Timestamp, sim_max.floor("D") + pd.Timedelta(hours=12)
         )
         freq_step: str = "D"
     else:
         # Match GEB hourly timestamp convention (half-hour HH:30:00).
-        sim_start = simulated_index.min()
-        sim_end = simulated_index.max()
+        sim_start = sim_min
+        sim_end = sim_max
         freq_step = "h"
 
-    start_timestamp: pd.Timestamp = max(observations_index.min(), sim_start)
-    end_timestamp: pd.Timestamp = min(observations_index.max(), sim_end)
+    obs_min: pd.Timestamp = cast(pd.Timestamp, observations_index.min())
+    obs_max: pd.Timestamp = cast(pd.Timestamp, observations_index.max())
+    start_timestamp: pd.Timestamp = max(obs_min, sim_start)
+    end_timestamp: pd.Timestamp = min(obs_max, sim_end)
 
     if period_start is not None:
         aligned_period_start: pd.Timestamp = (
@@ -2133,17 +2226,9 @@ def _build_station_marker_payload(
             native_col: str = (
                 f"{metric_name}_{freq}"
                 if f"{metric_name}_{freq}" in row
-                else (
-                    f"{metric_name}_hourly"
-                    if freq == "hourly" and f"{metric_name}_hourly" in row
-                    else (
-                        f"{metric_name}_daily"
-                        if f"{metric_name}_daily" in row
-                        else metric_name
-                    )
-                )
+                else metric_name
             )
-            metric_val: float = row.get(native_col, row.get(metric_name, np.nan))
+            metric_val: float = row.get(native_col, np.nan)
             if pd.notna(metric_val) and np.isfinite(metric_val):
                 val_float: float = round(float(metric_val), 4)
                 metric_values[layer.get_name()] = val_float
@@ -2261,6 +2346,8 @@ def _inject_station_layer_legend_script(
     excluded_stations: list[StationMarkerIndex],
     exclusion_summary: dict[str, Any] | None = None,
     snapping_layer: str | None = None,
+    run_name: str | None = None,
+    completion_date: str | None = None,
 ) -> None:
     """Add unified dynamic station legend with metric selector and distribution plots.
 
@@ -2282,6 +2369,8 @@ def _inject_station_layer_legend_script(
         excluded_stations: Serialized excluded station markers for search resolution.
         exclusion_summary: Optional summary counts of excluded stations and reasons.
         snapping_layer: Optional name of the station snapping details feature group.
+        run_name: Optional simulation run name displayed in the legend.
+        completion_date: Optional completion timestamp string displayed in the legend.
     """
     configs_by_column: dict[str, dict[str, Any]] = {
         str(config["col"]): config for config in _METRIC_LAYER_CONFIGS
@@ -2379,6 +2468,8 @@ def _inject_station_layer_legend_script(
         "excludedStations": excluded_stations,
         "exclusionSummary": exclusion_summary,
         "snappingLayer": snapping_layer,
+        "runName": run_name,
+        "completionDate": completion_date,
     }
     _JavascriptMacro("legend.js", unified_menu_payload).add_to(discharge_map)
 
@@ -2441,21 +2532,21 @@ def _add_river_layers(
 def _add_waterbody_layers(
     discharge_map: folium.Map,
     waterbodies: gpd.GeoDataFrame,
-    reservoir_period: tuple[int, int, int] | None = None,
 ) -> list[folium.FeatureGroup]:
-    """Show lakes and distinguish reservoirs by construction period.
+    """Add lake and reservoir point layers to the discharge map.
 
     Args:
         discharge_map: Folium map receiving waterbody layers.
         waterbodies: Waterbody GeoDataFrame with polygon geometries and
-            ``waterbody_type`` identifiers and GDW construction years.
-        reservoir_period: Spinup start, simulation start, and simulation end years.
-            Without these years, reservoirs share one layer.
+            ``waterbody_type`` identifiers. Lakes and reservoirs are shown.
 
     Returns:
         List of created lake and reservoir feature group layers.
     """
-    waterbody_layers: dict[str, folium.FeatureGroup] = {}
+    waterbody_layers: dict[int, folium.FeatureGroup] = {
+        waterbody_type: folium.FeatureGroup(name=style["label"] + "s", show=False)
+        for waterbody_type, style in _WATERBODY_STYLE.items()
+    }
     waterbody_types: pd.Series = waterbodies["waterbody_type"].astype(int)
     mask: pd.Series = waterbody_types.isin(
         [LAKE_WATERBODY_TYPE, RESERVOIR_WATERBODY_TYPE, CONTROL_LAKE_WATERBODY_TYPE]
@@ -2473,29 +2564,6 @@ def _add_waterbody_layers(
             else RESERVOIR_WATERBODY_TYPE
         )
         waterbody_style: dict[str, str] = _WATERBODY_STYLE[resolved_type]
-
-        layer_name: str = waterbody_style["label"] + "s"
-        color: str = waterbody_style["color"]
-        construction_year: float = waterbody_row.get("gdw_construction_year", np.nan)
-        if resolved_type == RESERVOIR_WATERBODY_TYPE and reservoir_period is not None:
-            spinup_year, start_year, end_year = reservoir_period
-            if pd.isna(construction_year) or construction_year <= 0:
-                layer_name = "Reservoirs · construction year unknown"
-            elif construction_year < spinup_year:
-                layer_name = "Reservoirs · existing before spinup"
-            elif construction_year < start_year:
-                layer_name = "Reservoirs · constructed during spinup"
-                color = "#8B5CF6"
-            elif construction_year <= end_year:
-                layer_name = "Reservoirs · constructed during simulation"
-                color = "#E11D48"
-            else:
-                layer_name = "Reservoirs · constructed after simulation"
-                color = "#94A3B8"
-        if layer_name not in waterbody_layers:
-            waterbody_layers[layer_name] = folium.FeatureGroup(
-                name=layer_name, show=False
-            )
 
         centroid = waterbody_row.geometry.centroid
         area_m2: float | None = (
@@ -2539,7 +2607,7 @@ def _add_waterbody_layers(
             popup=folium.Popup("".join(popup_lines), max_width=200),
             tooltip=f"{waterbody_style['label']} {waterbody_row.get('waterbody_id', '')}",
             z_index=500,
-        ).add_to(waterbody_layers[layer_name])
+        ).add_to(waterbody_layers[resolved_type])
 
     added_layers: list[folium.FeatureGroup] = []
     for waterbody_layer in waterbody_layers.values():

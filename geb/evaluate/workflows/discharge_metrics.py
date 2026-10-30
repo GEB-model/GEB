@@ -128,7 +128,8 @@ def calculate_discharge_metrics(
         DischargeMetrics with KGE, modified KGE, KGE correlation/bias/variability
         components, NSE, squared Pearson correlation r² (stored as `R2`), RMSE,
         and RRMSE; all NaN when there are fewer than 2 valid pairs. RMSE is in
-        m3/s; all other metrics are dimensionless.
+        m3/s; all other metrics are dimensionless. All calculated metrics are
+        rounded to 4 decimal places.
 
     """
     discharge_columns: list[str] = [
@@ -191,16 +192,16 @@ def calculate_discharge_metrics(
     rrmse: float = rmse / observed_std if observed_std > 0 else float("nan")
 
     return DischargeMetrics(
-        KGE=kge,
-        KGE_modified=modified_kge,
-        KGE_correlation=correlation,
-        KGE_bias_ratio=bias_ratio,
-        KGE_variability_ratio=variability_ratio,
-        NSE=nse,
+        KGE=round(kge, 4),
+        KGE_modified=round(modified_kge, 4),
+        KGE_correlation=round(correlation, 4),
+        KGE_bias_ratio=round(bias_ratio, 4),
+        KGE_variability_ratio=round(variability_ratio, 4),
+        NSE=round(nse, 4),
         # R2 stores Pearson r², not the coefficient of determination.
-        R2=correlation**2,
-        RMSE=rmse,
-        RRMSE=rrmse,
+        R2=round(correlation**2, 4),
+        RMSE=round(rmse, 4),
+        RRMSE=round(rrmse, 4),
     )
 
 
@@ -256,9 +257,8 @@ def use_native_discharge_scores(station_scores: pd.DataFrame) -> None:
     """Copy native observation-frequency scores to unsuffixed columns for the dashboard.
 
     For stations with an hourly observation frequency, the hourly skill scores
-    are copied to the unsuffixed metric columns (e.g., ``KGE``). For daily
-    stations or stations where hourly scores are unavailable, the daily skill scores
-    are used as fallback.
+    are copied to the unsuffixed metric columns (e.g., KGE). For daily
+    stations, the daily skill scores are copied.
 
     Args:
         station_scores: Discharge evaluation table modified in place.
@@ -273,12 +273,10 @@ def use_native_discharge_scores(station_scores: pd.DataFrame) -> None:
             freq: str = str(row.get("observation_frequency", ""))
             if freq == "hourly" and hourly_col in row and pd.notna(row[hourly_col]):
                 return float(row[hourly_col])
-            if daily_col in row and pd.notna(row[daily_col]):
+            if freq == "daily" and daily_col in row and pd.notna(row[daily_col]):
                 return float(row[daily_col])
             if metric_name in row and pd.notna(row[metric_name]):
                 return float(row[metric_name])
-            if hourly_col in row and pd.notna(row[hourly_col]):
-                return float(row[hourly_col])
             return float("nan")
 
         native_scores: pd.Series = station_scores.apply(_get_native_value, axis=1)

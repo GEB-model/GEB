@@ -39,7 +39,9 @@ __all__: list[str] = [
     "build_inertial_geometry",
     "compute_cfl_area_and_top_width",
     "compute_cross_section_from_depth",
+    "compute_hydraulic_geometry_width",
     "compute_overbank_depth_and_top_width",
+    "compute_top_width_from_depth",
     "compute_top_width_from_overbank_depth",
     "compute_static_geometry",
     "estimate_lake_outflow",
@@ -462,6 +464,74 @@ def compute_top_width_from_overbank_depth(
 
 
 @njit(inline="always")
+def compute_hydraulic_geometry_width(
+    discharge_m3_s: np.float32,
+    alpha: np.float32,
+    beta: np.float32,
+) -> np.float32:
+    """Calculates channel top width using hydraulic geometry power law w = alpha * |Q|^beta.
+
+    Args:
+        discharge_m3_s: River discharge rate (m³/s).
+        alpha: Hydraulic geometry width coefficient (m / (m³/s)^beta).
+        beta: Hydraulic geometry width exponent (dimensionless).
+
+    Returns:
+        Calculated river channel width (meters).
+    """
+    flow_rate_m3_s: np.float32 = np.abs(discharge_m3_s)
+    if flow_rate_m3_s <= np.float32(1e-12):
+        return np.float32(0.0)
+    return alpha * (flow_rate_m3_s**beta)
+
+
+@njit(inline="always")
+def compute_top_width_from_depth(
+    water_depth_m: np.float32,
+    bankfull_depth_m: np.float32,
+    bankfull_width_m: np.float32,
+    shape_exponent: np.float32,
+    floodplain_widths: ArrayFloat32,
+    side_slope_z: np.float32,
+) -> np.float32:
+    """Calculates channel top width across in-bank and overbank regimes from water depth.
+
+    For water depths at or below bankfull depth, top width follows the in-bank power-law
+    profile w = w_bf * (h / h_bf)^r. For depths above bankfull, top width is derived
+    from the 10-point cross-sectional floodplain profile with piecewise linear
+    interpolation and side-slope extrapolation.
+
+    Args:
+        water_depth_m: Water depth relative to channel bed (meters).
+        bankfull_depth_m: Bankfull channel depth before floodplain spilling occurs (meters).
+        bankfull_width_m: Main channel bankfull width (meters).
+        shape_exponent: Channel cross-sectional shape exponent (dimensionless).
+        floodplain_widths: 10-point cross-sectional top widths at fixed depth levels (meters).
+        side_slope_z: Valley side-slope ratio z (m/m horizontal:vertical).
+
+    Returns:
+        Total top width across channel and floodplain (meters).
+    """
+    if water_depth_m <= np.float32(0.0):
+        return np.float32(0.0)
+
+    if water_depth_m <= bankfull_depth_m or bankfull_depth_m <= np.float32(0.0):
+        # In-bank flow regime: width increases smoothly from bed to bankfull following channel shape
+        depth_ratio: np.float32 = water_depth_m / max(
+            bankfull_depth_m, np.float32(1e-4)
+        )
+        return bankfull_width_m * (depth_ratio**shape_exponent)
+
+    # Overbank regime: top width spills onto floodplain profiles
+    return compute_top_width_from_overbank_depth(
+        overbank_depth_m=water_depth_m - bankfull_depth_m,
+        bankfull_width_m=bankfull_width_m,
+        floodplain_widths=floodplain_widths,
+        side_slope_z=side_slope_z,
+    )
+
+
+@njit(inline="always")
 def compute_cross_section_from_depth(
     effective_depth_m: np.float32,
     bankfull_width_m: np.float32,
@@ -529,13 +599,25 @@ def compute_cross_section_from_depth(
             effective_depth_m - bankfull_depth_m, np.float32(0.0)
         )
 
-        # In CaMa-Flood style routing, the floodplain acts as a storage reservoir (dead zone):
-        # water stored on the floodplain attenuates the flood wave and raises the water surface level,
-        # but downstream conveyance between reaches is carried by the river channel section (channel
-        # area plus the column of water directly above the river channel).
+        # Conveyance area includes the bankfull river channel plus the column of water
+        # flowing directly above it.
         area = bankfull_area_m2 + bankfull_width_m * floodplain_depth
         top_width = bankfull_width_m
-        wetted_perimeter = bankfull_perimeter_m
+
+        # Turbulent momentum exchange (apparent shear stress) during overbank flow:
+        # In compound channel hydraulics, water rushing down the main channel meets sluggish,
+        # shallow water on the rough, vegetated floodplain. This sharp velocity gradient generates
+        # turbulent shear vortices along the lateral boundaries, transferring momentum away
+        # from the main channel and acting as an hydraulic brake.
+        # Consequently, the hydraulic efficiency of the conveyed cross section cannot exceed its
+        # bankfull efficiency (R <= R_bankfull).
+        # To represent this turbulent shear drag in 1D routing and prevent artificial friction
+        # collapse and numerical spikiness, the wetted perimeter accounts for the bankfull hydraulic
+        # efficiency plus the lateral shear interfaces on either side of the overbank column.
+        bankfull_rh: np.float32 = bankfull_area_m2 / max(
+            bankfull_perimeter_m, np.float32(1e-4)
+        )
+        wetted_perimeter = (area / bankfull_rh) + np.float32(2.0) * floodplain_depth
 
     return area, top_width, wetted_perimeter
 

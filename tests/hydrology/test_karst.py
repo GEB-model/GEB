@@ -23,8 +23,6 @@ def karst() -> Karst:
         "hydrology": {
             "karst": {
                 "capture_fraction": 1.0,
-                "max_runoff_capture_m_per_day": None,
-                "max_storage_m": None,
                 "release_time_days": 10.0,
             }
         }
@@ -56,8 +54,8 @@ def test_karst_step(karst: Karst, coverage: float, capture_fraction: float) -> N
     karst.karst_fraction[:] = [coverage, coverage / 2]
     karst.storage_m[:] = [0.01, 0.02]
     karst.model.config["hydrology"]["karst"]["capture_fraction"] = capture_fraction
-    runoff_m: np.ndarray = np.full((24, 6), 0.001, dtype=np.float32)
-    interflow_m: np.ndarray = np.full((24, 6), 0.0005, dtype=np.float32)
+    runoff_m: np.ndarray = np.full((24, 6), 0.0005, dtype=np.float32)
+    interflow_m: np.ndarray = np.full((24, 6), 0.00025, dtype=np.float32)
     soil_m: np.ndarray = np.full(6, 0.002, dtype=np.float32)
     previous_storage_m: np.ndarray = karst.storage_m.copy()
     # Sealed and open-water HRUs (the last two) must retain all their input flows.
@@ -73,12 +71,12 @@ def test_karst_step(karst: Karst, coverage: float, capture_fraction: float) -> N
             0.0,
         ]
     )
-    expected_capture_m: np.ndarray = 0.036 * eligible_karst_fraction * capture_fraction
+    expected_capture_m: np.ndarray = 0.018 * eligible_karst_fraction * capture_fraction
     expected_soil_m: np.ndarray = 0.002 * eligible_karst_fraction
     expected_inflow_m: np.ndarray = np.array(
         [
-            (0.036 * capture_fraction + 0.002) * karst_presence_cell_0,
-            ((0.036 * capture_fraction + 0.002) * karst_presence_cell_1) / 3,
+            (0.018 * capture_fraction + 0.002) * karst_presence_cell_0,
+            ((0.018 * capture_fraction + 0.002) * karst_presence_cell_1) / 3,
         ]
     )
     recharge_m: np.ndarray
@@ -96,14 +94,14 @@ def test_karst_step(karst: Karst, coverage: float, capture_fraction: float) -> N
     np.testing.assert_allclose(
         runoff_m,
         np.broadcast_to(
-            0.001 * (1 - eligible_karst_fraction * capture_fraction), (24, 6)
+            0.0005 * (1 - eligible_karst_fraction * capture_fraction), (24, 6)
         ),
         rtol=1e-6,
     )
     np.testing.assert_allclose(
         interflow_m,
         np.broadcast_to(
-            0.0005 * (1 - eligible_karst_fraction * capture_fraction), (24, 6)
+            0.00025 * (1 - eligible_karst_fraction * capture_fraction), (24, 6)
         ),
         rtol=1e-6,
     )
@@ -128,7 +126,7 @@ def test_karst_step(karst: Karst, coverage: float, capture_fraction: float) -> N
         .mean(axis=1)
         + recharge_m
         + karst.storage_m,
-        previous_storage_m + 0.038,
+        previous_storage_m + 0.020,
         rtol=1e-6,
     )
 
@@ -140,7 +138,7 @@ def test_karst_dry_recession(karst: Karst) -> None:
         karst: Isolated karst module.
     """
     karst.model.config["hydrology"]["karst"]["capture_fraction"] = 0.0
-    karst.storage_m[:] = [0.1, 0.2]
+    karst.storage_m[:] = [0.02, 0.04]
     initial_storage_m: np.ndarray = karst.storage_m.copy()
     cumulative_recharge_m: np.ndarray = np.zeros(2)
     for day in range(1, 31):
@@ -214,20 +212,17 @@ def test_karst_rejects_invalid_config(karst: Karst, settings: dict[str, float]) 
 
 
 def test_karst_runoff_capture_ceiling(karst: Karst) -> None:
-    """Cap daily captured runoff and interflow at max_runoff_capture_m_per_day.
+    """Cap daily captured runoff and interflow at MAX_RUNOFF_CAPTURE_M_PER_DAY.
 
     Args:
         karst: Isolated karst module.
     """
     karst.karst_fraction[:] = [1.0, 1.0]
     karst.storage_m[:] = [0.0, 0.0]
-    # Set swallowing ceiling of 0.01 m (10 mm/day) with 100% capture below ceiling.
     karst.model.config["hydrology"]["karst"]["capture_fraction"] = 1.0
-    karst.model.config["hydrology"]["karst"]["max_runoff_capture_m_per_day"] = 0.01
-    karst.model.config["hydrology"]["karst"]["max_storage_m"] = None
 
-    # Total inflow 24 * 0.001 = 0.024 m (24 mm), exceeding the 10 mm ceiling.
-    runoff_m: np.ndarray = np.full((24, 6), 0.001, dtype=np.float32)
+    # Total inflow 24 * 0.002 = 0.048 m (48 mm), exceeding the 0.025 m (25 mm) ceiling.
+    runoff_m: np.ndarray = np.full((24, 6), 0.002, dtype=np.float32)
     interflow_m: np.ndarray = np.zeros((24, 6), dtype=np.float32)
     soil_m: np.ndarray = np.zeros(6, dtype=np.float32)
 
@@ -239,27 +234,27 @@ def test_karst_runoff_capture_ceiling(karst: Karst) -> None:
         runoff_m, interflow_m, soil_m
     )
 
-    # Eligible HRUs (0, 1, 2, 3) must be capped at exactly 0.01 m.
+    # Eligible HRUs (0, 1, 2, 3) must be capped at exactly 0.025 m.
     # Ineligible HRUs (4: sealed, 5: open water) must capture 0.
     expected_capture: np.ndarray = np.array(
-        [0.01, 0.01, 0.01, 0.01, 0.0, 0.0], dtype=np.float32
+        [0.025, 0.025, 0.025, 0.025, 0.0, 0.0], dtype=np.float32
     )
     np.testing.assert_allclose(captured_m, expected_capture, rtol=1e-6)
 
-    # Remaining runoff: 0.024 - 0.01 = 0.014 m per eligible HRU, evenly across 24 hours.
+    # Remaining runoff: 0.048 - 0.025 = 0.023 m per eligible HRU, evenly across 24 hours.
     np.testing.assert_allclose(
         runoff_m[:, :4],
-        np.full((24, 4), 0.014 / 24.0, dtype=np.float32),
+        np.full((24, 4), 0.023 / 24.0, dtype=np.float32),
         rtol=1e-6,
     )
-    # Ineligible HRUs retain all 0.024 m.
+    # Ineligible HRUs retain all 0.048 m.
     np.testing.assert_allclose(
-        runoff_m[:, 4:], np.full((24, 2), 0.001, dtype=np.float32), rtol=1e-6
+        runoff_m[:, 4:], np.full((24, 2), 0.002, dtype=np.float32), rtol=1e-6
     )
 
 
 def test_karst_storage_capacity_overflow(karst: Karst) -> None:
-    """Overflow storage exceeding max_storage_m to river discharge.
+    """Overflow storage exceeding MAX_STORAGE_M to river discharge.
 
     Args:
         karst: Isolated karst module.
@@ -267,12 +262,10 @@ def test_karst_storage_capacity_overflow(karst: Karst) -> None:
     karst.karst_fraction[:] = [1.0, 0.0]
     karst.storage_m[:] = [0.04, 0.0]
     karst.model.config["hydrology"]["karst"]["capture_fraction"] = 1.0
-    karst.model.config["hydrology"]["karst"]["max_runoff_capture_m_per_day"] = None
-    karst.model.config["hydrology"]["karst"]["max_storage_m"] = 0.05
 
-    # Inflow of 0.03 m on cell 0.
-    # Initial storage 0.04 m + inflow 0.03 m - recharge ~0.006 m > 0.05 m ceiling.
-    runoff_m: np.ndarray = np.full((24, 6), 0.03 / 24.0, dtype=np.float32)
+    # Inflow of 0.02 m on cell 0.
+    # Initial storage 0.04 m + inflow 0.02 m - recharge ~0.005 m > 0.05 m ceiling.
+    runoff_m: np.ndarray = np.full((24, 6), 0.02 / 24.0, dtype=np.float32)
     interflow_m: np.ndarray = np.zeros((24, 6), dtype=np.float32)
     soil_m: np.ndarray = np.zeros(6, dtype=np.float32)
 
@@ -284,13 +277,13 @@ def test_karst_storage_capacity_overflow(karst: Karst) -> None:
         runoff_m, interflow_m, soil_m
     )
 
-    # Cell 0 storage must be capped at exactly max_storage_m (0.05 m).
+    # Cell 0 storage must be capped at exactly MAX_STORAGE_M (0.05 m).
     assert karst.storage_m[0] == pytest.approx(0.05, abs=1e-7)
     assert overflow_m[0] > 0.0
     assert overflow_m[1] == 0.0
 
     # Total water conservation: initial_storage + inflow == storage + recharge + overflow.
-    inflow_m: float = 0.03
+    inflow_m: float = 0.02
     np.testing.assert_allclose(
         0.04 + inflow_m,
         karst.storage_m[0] + recharge_m[0] + overflow_m[0],

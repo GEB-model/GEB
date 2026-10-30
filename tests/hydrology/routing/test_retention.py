@@ -202,21 +202,38 @@ def _run_retention_step(
     upstream_discharge_m3_per_s: float,
     initial_retention_storage_m3: float = 0.0,
     retention_activation_threshold_m3_s: np.ndarray | None = None,
+    previous_downstream_discharge_m3_per_s: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Run a single LocalInertial step for the two-cell retention test network.
 
+    Args:
+        router: LocalInertial router instance.
+        mask: Active cell mask array.
+        upstream_discharge_m3_per_s: Inflow discharge rate to upstream reach (m³/s).
+        initial_retention_storage_m3: Initial storage in retention basin (m³).
+        retention_activation_threshold_m3_s: Discharge threshold array activating retention intake (m³/s).
+        previous_downstream_discharge_m3_per_s: Downstream reach discharge at previous step (m³/s).
+            Defaults to upstream_discharge_m3_per_s * 0.99999 (rising limb) if None.
+
     Returns:
-        Tuple of (outflow, retention_inflow, retention_storage_out).
+        Tuple of (retention_storage_out, retention_inflow, retention_outflow).
     """
-    Q_prev = np.array(
-        [upstream_discharge_m3_per_s, upstream_discharge_m3_per_s * 0.99999],
+    prev_ds: float = (
+        upstream_discharge_m3_per_s * 0.99999
+        if previous_downstream_discharge_m3_per_s is None
+        else previous_downstream_discharge_m3_per_s
+    )
+    Q_prev: np.ndarray = np.array(
+        [upstream_discharge_m3_per_s, prev_ds],
         dtype=np.float32,
     )
-    sideflow = np.array(
+    sideflow: np.ndarray = np.array(
         [upstream_discharge_m3_per_s * router.dt, 0.0], dtype=np.float32
     )
-    river_storage = np.zeros(mask.sum(), dtype=np.float64)
-    retention_storage = np.array([initial_retention_storage_m3], dtype=np.float32)
+    river_storage: np.ndarray = np.zeros(mask.sum(), dtype=np.float64)
+    retention_storage: np.ndarray = np.array(
+        [initial_retention_storage_m3], dtype=np.float32
+    )
     if retention_activation_threshold_m3_s is None:
         retention_activation_threshold_m3_s = np.zeros(1, dtype=np.float32)
 
@@ -224,6 +241,7 @@ def _run_retention_step(
         Q_out,
         river_storage_out,
         actual_evap,
+        actual_trans_loss,
         over_abs,
         wb_storage_out,
         wb_inflow_out,
@@ -236,6 +254,7 @@ def _run_retention_step(
         river_storage_m3=river_storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow),
+        transmission_loss_m3=np.zeros_like(sideflow),
         waterbody_storage_m3=np.zeros(0, dtype=np.float64),
         outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=retention_storage,
@@ -451,7 +470,7 @@ def test_retention_basin_evaporation_logic() -> None:
 
 
 def test_retention_release_at_low_flow() -> None:
-    """Water is released from the basin back into the river when flow is low."""
+    """Water is released from the basin back into the river when flow is low on the falling limb."""
     dt = 1
     activation_threshold = 10.0
     initial_storage = 1000.0
@@ -465,14 +484,124 @@ def test_retention_release_at_low_flow() -> None:
         release_threshold_factor=0.75,
     )
 
+    # Previous discharge is higher than current discharge (falling limb: 2.0 <= 4.0)
     storage_out, inflow, outflow = _run_retention_step(
         router,
         mask,
         upstream_discharge_m3_per_s=low_discharge,
         initial_retention_storage_m3=initial_storage,
         retention_activation_threshold_m3_s=threshold_controlled,
+        previous_downstream_discharge_m3_per_s=4.0,
     )
 
     assert outflow[0] == pytest.approx(5.5, rel=1e-4)
     assert storage_out[0] == pytest.approx(994.5, rel=1e-4)
     assert inflow[0] == pytest.approx(0.0)
+
+
+def test_retention_no_release_on_rising_limb() -> None:
+    """Water is not released from the basin during low flow if on a rising limb."""
+    dt = 1
+    activation_threshold = 10.0
+    initial_storage = 1000.0
+    low_discharge = 2.0
+
+    router, mask, threshold_controlled, threshold_uncontrolled = _make_two_cell_router(
+        dt=dt,
+        activation_threshold_m3_per_s=activation_threshold,
+        max_storage_m3=2000.0,
+        controlled=True,
+        release_threshold_factor=0.75,
+    )
+
+    # Previous discharge is lower than current discharge (rising limb: 2.0 > 1.0)
+    storage_out, inflow, outflow = _run_retention_step(
+        router,
+        mask,
+        upstream_discharge_m3_per_s=low_discharge,
+        initial_retention_storage_m3=initial_storage,
+        retention_activation_threshold_m3_s=threshold_controlled,
+        previous_downstream_discharge_m3_per_s=1.0,
+    )
+
+    assert outflow[0] == pytest.approx(0.0)
+    assert storage_out[0] == pytest.approx(initial_storage)
+    assert inflow[0] == pytest.approx(0.0)
+
+
+def test_inertial_retention_release_falling_vs_rising_limb() -> None:
+    """Local inertial routing only releases retention water on the falling limb."""
+    dt: int = 15
+    activation_threshold: float = 10.0
+    initial_storage: float = 1000.0
+    low_discharge: float = 2.0
+    n_cells: int = 2
+
+    ldd: np.ndarray = np.array([[2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((2, 1), dtype=bool)
+    river_network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+
+    retention_node_id: np.ndarray = np.array([-1, 0], dtype=np.int32)
+    retention_max_storage_m3: np.ndarray = np.array([2000.0], dtype=np.float32)
+    controlled_retention: np.ndarray = np.array([True], dtype=bool)
+    threshold_controlled: np.ndarray = np.array(
+        [activation_threshold], dtype=np.float32
+    )
+
+    router: LocalInertial = _make_local_inertial(
+        dt=dt,
+        river_network=river_network,
+        river_length=np.full(n_cells, 500.0, dtype=np.float32),
+        river_width=np.full(n_cells, 20.0, dtype=np.float32),
+        bankfull_river_elevation_m=np.array([10.0, 9.0], dtype=np.float32),
+        waterbody_ids=np.full(n_cells, -1, dtype=np.int32),
+        is_waterbody_outflow=np.zeros(n_cells, dtype=bool),
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_basin_release_threshold_factor=0.75,
+        use_kinematic=np.zeros(n_cells, dtype=bool),
+    )
+
+    # Lateral sideflow into reach 1 gives an available flow rate of 3.0 m³/s at the basin.
+    sideflow: np.ndarray = np.array([0.0, 3.0 * dt], dtype=np.float32)
+
+    # 1. Falling limb: previous downstream discharge was higher (5.0 m³/s > 3.0 m³/s)
+    res_falling = router.step(
+        Q_prev_m3_s=np.array([0.0, 5.0], dtype=np.float32),
+        river_storage_m3=np.zeros(2, dtype=np.float64),
+        sideflow_m3=sideflow,
+        evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.array([initial_storage], dtype=np.float32),
+        retention_activation_threshold_m3_s=threshold_controlled,
+    )
+    storage_falling: np.ndarray = res_falling[8]
+    inflow_falling: np.ndarray = res_falling[9]
+    outflow_falling: np.ndarray = res_falling[10]
+    assert outflow_falling[0] > 0.0
+    assert storage_falling[0] < initial_storage
+    assert inflow_falling[0] == pytest.approx(0.0)
+
+    # 2. Rising limb: previous downstream discharge was lower (1.0 m³/s < 3.0 m³/s)
+    res_rising = router.step(
+        Q_prev_m3_s=np.array([0.0, 1.0], dtype=np.float32),
+        river_storage_m3=np.zeros(2, dtype=np.float64),
+        sideflow_m3=sideflow,
+        evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.array([initial_storage], dtype=np.float32),
+        retention_activation_threshold_m3_s=threshold_controlled,
+    )
+    storage_rising: np.ndarray = res_rising[8]
+    inflow_rising: np.ndarray = res_rising[9]
+    outflow_rising: np.ndarray = res_rising[10]
+    assert outflow_rising[0] == pytest.approx(0.0)
+    assert storage_rising[0] == pytest.approx(initial_storage)
+    assert inflow_rising[0] == pytest.approx(0.0)

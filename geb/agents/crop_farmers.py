@@ -2736,8 +2736,8 @@ class CropFarmers(AgentBaseClass):
 
     def save_yearly_income(
         self,
-        income: DynamicArray,
-        potential_income: DynamicArray,
+        income: DynamicArray | np.ndarray,
+        potential_income: DynamicArray | np.ndarray,
     ) -> None:
         """Saves the latest profit and potential profit values for harvesting farmers to determine yearly profits, considering inflation and field size.
 

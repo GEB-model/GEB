@@ -1,9 +1,11 @@
 """Unit tests for discharge dashboard timeseries generation and main index alignment."""
 
 import base64
+import datetime
 import gzip
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,7 +19,6 @@ import shapely.geometry as sg
 
 from geb.evaluate.workflows.dashboard import (
     StationChartBundleWriter,
-    _as_finite_float,
     _build_station_marker_payload,
     _build_timeseries_data,
     _calculate_distribution_summary,
@@ -25,7 +26,10 @@ from geb.evaluate.workflows.dashboard import (
     _encode_varint_deltas,
     _to_int_deltas,
     build_station_chart_data,
+    create_discharge_dashboard,
     determine_main_time_index,
+    read_run_completion_time,
+    read_run_completion_timestamp_for_filename,
     serialize_main_timeline,
     write_discharge_dashboard,
 )
@@ -298,19 +302,6 @@ def test_build_station_chart_data_includes_timeseries() -> None:
         1000,
         1000,
     ]
-
-
-def test_as_finite_float() -> None:
-    """Test _as_finite_float rounds to 2 decimals and handles non-finite values."""
-    assert _as_finite_float(0.854321) == 0.85
-    assert _as_finite_float(0.856789) == 0.86
-    assert _as_finite_float(10.0) == 10.0
-    assert _as_finite_float(None) is None
-    assert _as_finite_float(float("nan")) is None
-    assert _as_finite_float(float("inf")) is None
-    assert _as_finite_float(float("-inf")) is None
-    # Custom decimal precision
-    assert _as_finite_float(0.12345, decimals=3) == 0.123
 
 
 def test_station_chart_bundle_writer() -> None:
@@ -1009,45 +1000,6 @@ def test_plot_skill_score_maps(tmp_path: Path) -> None:
     assert (maps_dir / "skill_score_map_nse.svg").exists()
 
 
-@pytest.mark.parametrize(
-    ("year", "period", "color"),
-    [
-        (1994, "existing before spinup", "#FF8A65"),
-        (1995, "constructed during spinup", "#8B5CF6"),
-        (1999, "constructed during spinup", "#8B5CF6"),
-        (2000, "constructed during simulation", "#E11D48"),
-        (2008, "constructed during simulation", "#E11D48"),
-        (2009, "constructed after simulation", "#94A3B8"),
-        (0, "construction year unknown", "#FF8A65"),
-        (np.nan, "construction year unknown", "#FF8A65"),
-    ],
-)
-def test_reservoir_construction_layers(year: float, period: str, color: str) -> None:
-    """Check construction periods at the spinup and simulation boundaries."""
-    from geb.evaluate.workflows.dashboard import _add_waterbody_layers
-
-    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {
-            "waterbody_type": [2],
-            "waterbody_id": [1338],
-            "gdw_construction_year": [year],
-        },
-        geometry=[sg.Point(-7.5, 38.2)],
-        crs="EPSG:4326",
-    )
-    layers: list[folium.FeatureGroup] = _add_waterbody_layers(
-        folium.Map(), waterbodies, (1995, 2000, 2008)
-    )
-    assert len(layers) == 1
-    assert layers[0].layer_name == f"Reservoirs · {period}"
-    marker: folium.CircleMarker = next(iter(layers[0]._children.values()))
-    assert marker.options["fillColor"] == color
-    popup_html: str = layers[0].get_root().render()
-    assert "Construction year:" in popup_html
-    if pd.notna(year) and year > 0:
-        assert f"Construction year: {int(year)}" in popup_html
-
-
 def test_use_native_discharge_scores() -> None:
     """Test setting unsuffixed score columns using native observation frequency."""
     df: pd.DataFrame = pd.DataFrame(
@@ -1062,3 +1014,178 @@ def test_use_native_discharge_scores() -> None:
     assert df.loc["st_1", "KGE"] == 0.72
     assert df.loc["st_2", "KGE"] == 0.65
     assert df.loc["st_3", "KGE"] == 0.60
+
+
+def test_read_run_completion_time(tmp_path: Path) -> None:
+    """Test reading run completion timestamp from done.txt modification time."""
+    assert read_run_completion_time(None) is None
+    assert read_run_completion_timestamp_for_filename(None) is None
+
+    run_dir: Path = tmp_path / "my_run"
+    assert read_run_completion_time(run_dir) is None
+    assert read_run_completion_timestamp_for_filename(run_dir) is None
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    done_file: Path = run_dir / "done.txt"
+    done_file.touch()
+
+    completion_time: str | None = read_run_completion_time(run_dir)
+    assert completion_time is not None
+    parsed_dt: datetime.datetime = datetime.datetime.strptime(
+        completion_time, "%Y-%m-%d %H:%M:%S"
+    )
+    assert parsed_dt is not None
+
+    completion_ts: str | None = read_run_completion_timestamp_for_filename(run_dir)
+    assert completion_ts is not None
+    assert re.match(r"^\d{8}_\d{6}$", completion_ts)
+
+    report_dir: Path = run_dir / "report"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    assert read_run_completion_time(report_dir) is None
+    assert read_run_completion_timestamp_for_filename(report_dir) is None
+
+
+def test_write_discharge_dashboard_with_run_and_completion_date(tmp_path: Path) -> None:
+    """Test dashboard metadata inclusion (run name and completion date in legend, themed, with no duplicate title card)."""
+    dashboard_file: Path = tmp_path / "discharge_evaluation_map.html"
+    run_dir: Path = tmp_path / "scenario_a"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "done.txt").touch()
+
+    region: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        geometry=[sg.box(7.0, 49.0, 9.0, 51.0)],
+        crs="EPSG:4326",
+    )
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "uparea_m2": [5000000.0],
+        },
+        geometry=[sg.LineString([(7.5, 49.5), (8.5, 50.5)])],
+        index=pd.Index(["riv_1"]),
+        crs="EPSG:4326",
+    )
+    scores: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station Test"],
+            "upstream_area_GEB": [1000000.0],
+            "discharge_observations_to_GEB_upstream_area_ratio": [1.02],
+            "KGE": [0.88],
+            "timezone_utc_offset": [1.0],
+        },
+        geometry=[sg.Point(8.0, 50.0)],
+        index=pd.Index(["test_st"]),
+        crs="EPSG:4326",
+    )
+
+    write_discharge_dashboard(
+        mapped_station_scores=scores,
+        output_path=dashboard_file,
+        region_geom=region,
+        rivers=rivers,
+        chart_bundles=[],
+        station_bundle_indices={},
+        run_output_folder=run_dir,
+        run_name="scenario_a",
+    )
+
+    assert dashboard_file.exists()
+    html_content: str = dashboard_file.read_text(encoding="utf-8")
+    assert (
+        "<title>Discharge Evaluation Dashboard · Run: scenario_a · Completed: "
+        in html_content
+    )
+    assert '"runName": "scenario_a"' in html_content
+    assert '"completionDate":' in html_content
+    # Metadata is shown in only one place on the page (in the unified legend header)
+    assert "geb-run-meta" in html_content
+    assert "geb-dashboard-title-card" not in html_content
+    # Strictly adheres to both dark and light themes
+    assert "geb-run-meta" in html_content
+    assert ".geb-run-meta{border-top:1px solid #1e293b}" in html_content
+    assert ".geb-run-meta{border-top:1px solid #e2e8f0}" in html_content
+    assert "data-geb-theme" in html_content
+    assert "data-set-theme" in html_content
+
+
+def test_create_discharge_dashboard_filename_with_date(tmp_path: Path) -> None:
+    """Test that create_discharge_dashboard appends the completion timestamp (date, hour, minute, second) to the html filename."""
+    eval_folder: Path = tmp_path / "evaluate"
+    eval_folder.mkdir(parents=True, exist_ok=True)
+    run_dir: Path = tmp_path / "scenario_b"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "done.txt").touch()
+
+    region_box: sg.Polygon = sg.box(7.0, 49.0, 9.0, 51.0)
+    scores = gpd.GeoDataFrame(
+        columns=[
+            "station_name",
+            "upstream_area_GEB",
+            "discharge_observations_to_GEB_upstream_area_ratio",
+            "KGE",
+            "geometry",
+        ],
+        geometry="geometry",
+        crs="EPSG:4326",
+    )
+    scores.to_parquet(eval_folder / "evaluation_metrics.geoparquet")
+
+    snapped = gpd.GeoDataFrame(
+        {"GEB_upstream_area_from_grid": pd.Series(dtype=float)},
+        geometry=gpd.GeoSeries(crs="EPSG:4326"),
+        crs="EPSG:4326",
+    )
+    snapped_file: Path = tmp_path / "snapped.geoparquet"
+    snapped.to_parquet(snapped_file)
+
+    inventory = gpd.GeoDataFrame(
+        {
+            "station_name": pd.Series(dtype=str),
+            "evaluation_exclusion_reason": pd.Series(dtype=str),
+            "discharge_observations_upstream_area_m2": pd.Series(dtype=float),
+        },
+        geometry=gpd.GeoSeries(crs="EPSG:4326"),
+        crs="EPSG:4326",
+    )
+    inventory.to_parquet(tmp_path / "station_locations.geoparquet")
+
+    mask_file: Path = tmp_path / "mask.geoparquet"
+    gpd.GeoDataFrame(geometry=[region_box], crs="EPSG:4326").to_parquet(mask_file)
+
+    rivers_file: Path = tmp_path / "rivers.geoparquet"
+    gpd.GeoDataFrame(
+        {
+            "uparea_m2": [5000000.0],
+            "is_downstream_outflow": [False],
+            "is_further_downstream_outflow": [False],
+        },
+        geometry=[sg.LineString([(7.5, 49.5), (8.5, 50.5)])],
+        index=pd.Index(["riv_1"]),
+        crs="EPSG:4326",
+    ).to_parquet(rivers_file)
+
+    wb_file: Path = tmp_path / "waterbodies.geoparquet"
+    gpd.GeoDataFrame(geometry=[], crs="EPSG:4326").to_parquet(wb_file)
+
+    geom_files: dict[str, Path] = {
+        "mask": mask_file,
+        "routing/rivers": rivers_file,
+        "waterbodies/waterbody_data": wb_file,
+        "discharge/discharge_snapped_locations": snapped_file,
+    }
+
+    res: dict[str, str] = create_discharge_dashboard(
+        evaluation_folder=eval_folder,
+        run_output_folder=run_dir,
+        geometry_files=geom_files,
+        table_files={},
+        minimum_upstream_area_km2=0.0,
+        logger=logging.getLogger("test_dashboard"),
+        include_return_period_plots=False,
+        run_name="scenario_b",
+    )
+    dashboard_created_path: Path = Path(res["dashboard"])
+    assert dashboard_created_path.exists()
+    assert re.search(
+        r"discharge_evaluation_map_\d{8}_\d{6}\.html$", dashboard_created_path.name
+    )
