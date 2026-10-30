@@ -1253,3 +1253,37 @@ def test_fetch_and_save_retry(tmp_path: Path, caplog: pytest.LogCaptureFixture) 
         assert success is True
         assert dest.read_text() == "test"
         assert "Request failed: Timeout. Attempt 1 of 3." in caplog.text
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_fetch_and_save_does_not_retry_denied_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    """Reject invalid download credentials immediately without sleeping or writing.
+
+    Args:
+        tmp_path: Temporary output directory.
+        monkeypatch: Fixture replacing retry sleeps.
+        status_code: HTTP authentication or permission failure.
+    """
+    import logging
+    from unittest.mock import Mock
+
+    response: Mock = Mock(status_code=status_code)
+    session: Mock = Mock()
+    session.get.return_value = response
+    sleep: Mock = Mock()
+    monkeypatch.setattr(io_module.time, "sleep", sleep)
+    destination: Path = tmp_path / "download.zip"
+    with pytest.raises(RuntimeError, match=rf"access denied \(HTTP {status_code}\)"):
+        fetch_and_save(
+            "https://example.com/archive.zip",
+            destination,
+            logging.getLogger(__name__),
+            session=session,
+            verbose=False,
+        )
+    session.get.assert_called_once()
+    response.close.assert_called_once()
+    sleep.assert_not_called()
+    assert not destination.exists()

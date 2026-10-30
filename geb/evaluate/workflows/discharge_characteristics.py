@@ -504,7 +504,7 @@ def plot_skill_scores_vs_upstream_area(
 
     Raises:
         ValueError: If `upstream_area_GEB` is missing from the evaluation metrics.
-    """  # noqa: DOC202
+    """
     if "upstream_area_GEB" not in station_scores.columns:
         raise ValueError("`upstream_area_GEB` is missing from evaluation metrics.")
 

@@ -139,24 +139,34 @@ def get_and_maybe_do_version_updates(
     Args:
         version_info: The version string stored in the version file, e.g. "1.2.3".
         logger: The logger instance for logging messages.
-        build_model: The GEB model instance for building. If not provided, the function will only return the updates that need to be made, but will not perform the auto-update. If provided and perform_auto_update is True, the function will perform the auto-update by updating the version file after each successful update and using the provided build model to perform the updates that can be performed automatically.
-        methods: A dictionary of loaded methods from the build configuration. Must be provided if perform_auto_update is True.
+        build_model: Builder used to apply automatic updates. If None, only
+            describe the required changes. Record each completed migration
+            before starting the next one so failed updates can be resumed.
+        methods: Arguments for each method from the build configuration.
+            Required when build_model is provided.
 
     Returns:
         A list of strings describing the updates that need to be made to update to the current version.
 
     Raises:
-        ValueError: If the version update text is not in the expected format.
-        RuntimeError: If an error occurs during auto-update.
+        ValueError: If inputs are newer than the running code or a migration
+            instruction has an invalid format.
+        RuntimeError: If an automatic update fails or manual actions remain.
     """
     current_v = Version(__version__)
     stored_v = Version(version_info)
+    if stored_v > current_v:
+        raise ValueError(
+            f"Input version {stored_v} is newer than GEB {current_v}. "
+            "Refusing to downgrade the version marker without rebuilding inputs. "
+            "Use matching code or explicitly rebuild the inputs before changing their version."
+        )
 
     versions: list[str] = sorted(
         VERSION_UPDATES.keys(), key=Version
     )  # iterate from oldest to newest version
     updates_to_print: list[str] = []
-    error_occurred: bool = False
+    update_error: Exception | None = None
 
     succesfull_version_updates: list[str] = []
 
@@ -241,8 +251,8 @@ def get_and_maybe_do_version_updates(
                     succesfull_version_updates.append(update_version)
                     build_model.set_version(update_version)
 
-    except Exception:
-        error_occurred = True
+    except Exception as error:
+        update_error = error
         if build_model is not None:
             logger.exception("An error occurred while performing version updates.")
             if succesfull_version_updates:
@@ -263,18 +273,18 @@ def get_and_maybe_do_version_updates(
             updates_msg = "\n- ".join(updates_to_print)
             error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
             logger.error(error)
-            if error_occurred:
+            if update_error is not None:
                 error += "\n\nIn addition, an error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
-            raise RuntimeError(error)
+            raise RuntimeError(error) from update_error
         else:
             logger.info(
                 "Updates are required to update to the current version. Run geb update-version to perform them."
             )
-    elif not error_occurred:
+    elif update_error is None:
         logger.info("Successfully auto-updated.")
-    else:  # error occurred but no updates to print
-        logger.error(
-            "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
-        )
+    else:  # A first-method failure may not have collected any manual notices.
+        error_message: str = "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
+        logger.error(error_message)
+        raise RuntimeError(error_message) from update_error
 
     return updates_to_print

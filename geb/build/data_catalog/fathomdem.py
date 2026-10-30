@@ -129,11 +129,11 @@ class FathomDem(Adapter):
         """
         load_dotenv()
         token: str | None = os.getenv("ZENODO_ACCESS_TOKEN")
-        if token is None:
+        if token is None or not token.strip():
             raise ValueError(
                 "Environment variable 'ZENODO_ACCESS_TOKEN' is required to access FathomDEM on Zenodo. Please create a personal access token on https://zenodo.org/account/settings/applications and set it in your environment or .env file."
             )
-        return token
+        return token.strip()
 
     def _fetch_record_files_metadata(self, record_id: str) -> list[dict[str, Any]]:
         """Retrieve file metadata for a specific Zenodo record ID.
@@ -255,8 +255,6 @@ class FathomDem(Adapter):
         if not zips_to_download:
             raise RuntimeError("No FathomDEM zip archives intersect the provided mask.")
 
-        token: str = self._get_access_token()
-
         for file_info in zips_to_download:
             zip_name: str = file_info["key"]
             marker: Path = self.root / f".{zip_name}.unpacked"
@@ -264,6 +262,7 @@ class FathomDem(Adapter):
                 continue
 
             download_url: str = file_info["download_url"]
+            token: str = self._get_access_token()
 
             with tempfile.TemporaryDirectory() as tmpdir_str:
                 temp_zip_path: Path = Path(tmpdir_str) / zip_name

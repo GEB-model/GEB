@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from llvmlite import binding
 from numba import config, njit, prange, threading_layer
 
+from geb.version import __version__ as __version__
 from geb.workflows.io import fetch_and_save
 
 # set environment variable for GEB package directory

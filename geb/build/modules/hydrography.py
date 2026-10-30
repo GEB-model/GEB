@@ -36,6 +36,10 @@ from geb.build.workflows.river_snapping import (
     SnappingResults,
     snap_point_to_river_network,
 )
+from geb.build.workflows.waterbodies_preprocessing import (
+    load_and_enrich_waterbodies,
+    snap_waterbody_points,
+)
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -52,7 +56,7 @@ from geb.hydrology.routing.geometry import (
     FLOODPLAIN_PROFILE_DEPTHS,
     NUM_FLOODPLAIN_LEVELS,
 )
-from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
+from geb.hydrology.waterbodies import LAKE, RESERVOIR
 from geb.workflows.raster import (
     calculate_height_m,
     calculate_width_m,
@@ -218,10 +222,76 @@ def _extract_1sec_subgrid(
     fathomdem_sub: npt.NDArray[np.float32] = np.full(
         target_shape, np.nan, dtype=np.float32
     )
-    fathomdem_sub[dst_r0:dst_r1, dst_c0:dst_c1] = elevation_1sec.values[
-        src_r0:src_r1, src_c0:src_c1
-    ]
+    # Load only the overlapping window, rather than the full cached DEM.
+    fathomdem_sub[dst_r0:dst_r1, dst_c0:dst_c1] = elevation_1sec.isel(
+        y=slice(src_r0, src_r1), x=slice(src_c0, src_c1)
+    ).to_numpy()
     return fathomdem_sub
+
+
+def _count_flooded_subpixels_per_reach(
+    elevation_1sec: npt.NDArray[np.float32],
+    drainage_elevation_3sec: npt.NDArray[np.float32],
+    reach_ids_3sec: npt.NDArray[np.uint32],
+    number_of_reaches: int,
+) -> npt.NDArray[np.int64]:
+    """Count flooded subpixels per river reach without expanding entire basin maps.
+
+    Process 256 drainage-grid rows at a time to limit temporary memory use.
+    The 1-arc-second elevation grid has three rows and columns for each
+    3-arc-second drainage cell. Input arrays are not modified.
+
+    Args:
+        elevation_1sec: Terrain elevations on the 1-arc-second grid (meters).
+        drainage_elevation_3sec: Nearest drainage elevations (meters).
+        reach_ids_3sec: Reach IDs from 1 through number_of_reaches; 0 is outside.
+        number_of_reaches: Number of river reaches.
+
+    Returns:
+        Flooded subpixel counts at each configured floodplain depth, per reach.
+
+    Raises:
+        ValueError: If grid shapes do not match the threefold refinement,
+            or the number of reaches is negative.
+    """
+    if number_of_reaches < 0:
+        raise ValueError("number_of_reaches must be non-negative.")
+    if drainage_elevation_3sec.shape != reach_ids_3sec.shape or (
+        elevation_1sec.shape != tuple(3 * size for size in reach_ids_3sec.shape)
+    ):
+        raise ValueError(
+            "Floodplain grids must have matching shapes at 3:1 refinement."
+        )
+
+    counts: npt.NDArray[np.int64] = np.zeros(
+        (len(FLOODPLAIN_PROFILE_DEPTHS), number_of_reaches), dtype=np.int64
+    )
+    row_start: int
+    for row_start in range(0, reach_ids_3sec.shape[0], 256):
+        row_end: int = min(row_start + 256, reach_ids_3sec.shape[0])
+        # Broadcast drainage elevations within each 3x3 cell instead of copying
+        # a full-resolution drainage map for the entire region.
+        terrain_block: npt.NDArray[np.float32] = elevation_1sec[
+            3 * row_start : 3 * row_end
+        ].reshape(row_end - row_start, 3, reach_ids_3sec.shape[1], 3)
+        height_above_drainage: npt.NDArray[np.float32] = np.maximum(
+            terrain_block - drainage_elevation_3sec[row_start:row_end, None, :, None],
+            np.float32(0.0),
+        )
+        reach_ids: npt.NDArray[np.uint32] = reach_ids_3sec[row_start:row_end].ravel()
+        depth_index: int
+        depth_m: float
+        for depth_index, depth_m in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
+            # Count the nine subpixels within each drainage cell, then sum by reach.
+            flooded_per_cell: npt.NDArray[np.int64] = np.count_nonzero(
+                height_above_drainage <= depth_m, axis=(1, 3)
+            )
+            counts[depth_index] += np.bincount(
+                reach_ids,
+                weights=flooded_per_cell.ravel(),
+                minlength=number_of_reaches + 1,
+            )[1:].astype(np.int64)
+    return counts
 
 
 def calculate_dem_floodplain_geometry(
@@ -299,17 +369,13 @@ def calculate_dem_floodplain_geometry(
         drain_high_res = np.zeros(upstream_area_high_res_m2.shape, dtype=bool)
         drain_high_res.ravel()[river_outflows_hd] = True
 
-    # Decompose into 3x3 blocks corresponding to 3 arc-second cells
-    blocks = (
-        fathomdem_sub.reshape(H_hd, 3, W_hd, 3)
-        .transpose(0, 2, 1, 3)
-        .reshape(H_hd, W_hd, 9)
-    )
+    # Reduce the 3x3 blocks directly, avoiding a full-size transposed copy.
+    blocks: npt.NDArray[np.float32] = fathomdem_sub.reshape(H_hd, 3, W_hd, 3)
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", category=RuntimeWarning, message="All-NaN slice"
         )
-        min_subpixels = np.nanmin(blocks, axis=2)
+        min_subpixels = np.nanmin(blocks, axis=(1, 3))
     elev_3sec = np.where(
         np.isnan(min_subpixels), elevation_high_res.values, min_subpixels
     )
@@ -321,13 +387,8 @@ def calculate_dem_floodplain_geometry(
     )
     drain_elev_3sec = elev_3sec - hand_3sec
 
-    # Expand datum and subbasins to 1 arc-second grid (3x3 integer refinement)
-    drain_elev_1sec = np.repeat(np.repeat(drain_elev_3sec, 3, axis=0), 3, axis=1)
-    hand_1sec = np.maximum(fathomdem_sub - drain_elev_1sec, np.float32(0.0))
-
     subbasin_ids = np.arange(1, river_cell_indices.size + 1, dtype=np.uint32)
     subbasins_hd = flow_raster_high_res.basins(idxs=river_outflows_hd, ids=subbasin_ids)
-    subbasins_1sec = np.repeat(np.repeat(subbasins_hd, 3, axis=0), 3, axis=1)
 
     # Convert 1 arc-second subpixel counts to reach-level floodplain areas (m²)
     cell_area_flat = cell_area_low_res.values.ravel()[river_cell_indices].astype(
@@ -336,19 +397,14 @@ def calculate_dem_floodplain_geometry(
     high_res_pixel_area = cell_area_flat / np.float32(ldd_scale_factor**2)
     subpixel_area = high_res_pixel_area / np.float32(9.0)
 
-    subbasins_flat = subbasins_1sec.ravel()
-    hand_flat = hand_1sec.ravel()
-    valid_pixel_mask = (subbasins_flat > 0) & ~np.isnan(hand_flat)
-
-    n_reaches: int = river_cell_indices.size
-    reach_profile_areas = np.zeros((n_levels, n_reaches), dtype=np.float32)
-
-    for k, d_k in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
-        mask_k = valid_pixel_mask & (hand_flat <= d_k)
-        counts_k = np.bincount(subbasins_flat[mask_k], minlength=n_reaches + 1)
-        reach_profile_areas[k] = (
-            counts_k[1 : n_reaches + 1].astype(np.float32) * subpixel_area
-        )
+    # Integer counts are accumulated before conversion, preserving the original
+    # areas independently of the number of row blocks.
+    reach_pixel_counts: npt.NDArray[np.int64] = _count_flooded_subpixels_per_reach(
+        fathomdem_sub, drain_elev_3sec, subbasins_hd, river_cell_indices.size
+    )
+    reach_profile_areas: npt.NDArray[np.float32] = (
+        reach_pixel_counts.astype(np.float32) * subpixel_area
+    )
 
     river_raster_flat = river_raster_low_res.ravel()
     unique_segments = np.unique(river_raster_flat[river_mask_flat])
@@ -1798,33 +1854,23 @@ class Hydrography(BuildModelBase):
         calculate_command_areas: bool = False,
         custom_reservoir_capacity: None | str = None,
     ) -> None:
-        """Set up waterbodies, reservoirs, and command areas.
+        """Set up waterbodies from HydroLAKES and GDW data.
 
-        Configure waterbodies and their associated command areas for the model grid.
-        This includes rasterizing lake and reservoir identifiers, optionally
-        assigning command areas from preset data or by deriving them from the river
-        routing network, and updating reservoir storage capacities.
+        Controlled lakes become reservoirs. Natural lakes become reservoirs when
+        an intersecting GDW Dam or Lake Control Dam has a matching or missing ID.
+        Save waterbody parameters and matching results.
 
         Args:
-            mode: Whether to enable waterbodies ("on"), disable them ("off"),
-                or include only lakes ("lakes_only") or only reservoirs ("reservoirs_only").
-            command_areas: Identifier of the preset command area data in the
-                data catalog. If None, command areas can be calculated from the
-                routing network instead.
-            calculate_command_areas: Flag or identifier indicating that command areas
-                should be calculated based on the routing network. If false, command
-                areas are not calculated and default to a missing value.
-            custom_reservoir_capacity: Identifier of the custom reservoir capacity
-                data in the data catalog. If None, the default reservoir capacities
-                from the waterbody dataset are used. The table must have
-                ``waterbody_id`` as the index and a ``volume_total`` column defining
-                the reservoir capacity.
+            mode: 'on', 'off', 'lakes_only', or 'reservoirs_only'.
+            command_areas: Optional polygon file with waterbody_id. Linked
+                waterbodies use reservoir behavior.
+            calculate_command_areas: Derive command areas from river routing.
+                Cannot be combined with command_areas.
+            custom_reservoir_capacity: Optional CSV or Excel file with
+                waterbody_id and volume_total (m3).
 
         Raises:
-            ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
-            ValueError: If command_areas and calculate_command_areas are both provided.
-            ValueError: If mode is not "on", "off", "lakes_only", or "reservoirs_only".
-            ValueError: If command areas are requested but mode is "off" or "lakes_only".
+            ValueError: If options conflict or input data are invalid.
         """
         if mode not in ["on", "off", "lakes_only", "reservoirs_only"]:
             raise ValueError(
@@ -1844,57 +1890,18 @@ class Hydrography(BuildModelBase):
                 "Command areas cannot be used or calculated when waterbodies are disabled or set to lakes only."
             )
 
-        waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
-            bbox=self.bounds,
-            columns=[
-                "waterbody_id",
-                "waterbody_type",
-                "volume_total",
-                "average_discharge",
-                "average_area",
-                "geometry",
-            ],
+        waterbodies: gpd.GeoDataFrame
+        dam_checks: gpd.GeoDataFrame
+        waterbodies, dam_checks = load_and_enrich_waterbodies(
+            self.data_catalog, self.region, mode
         )
-        hydrolakes_to_geb: dict[int, np.int32] = {
-            1: np.int32(LAKE),
-            2: np.int32(RESERVOIR),
-            3: np.int32(LAKE_CONTROL),
-        }
-        assert set(waterbodies["waterbody_type"]).issubset(hydrolakes_to_geb.keys())
-        waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
-            hydrolakes_to_geb
-        )
-        assert waterbodies["waterbody_type"].dtype == np.int32
-
-        if (
-            mode == "off"
-        ):  # to keep the dtypes consistent we still load the waterbodies, but we will remove all rows to disable them
-            # remove all rows
-            waterbodies = waterbodies.iloc[0:0]
-        elif mode == "lakes_only":
+        if mode == "lakes_only":
             waterbodies = waterbodies[waterbodies["waterbody_type"] == LAKE]
         elif mode == "reservoirs_only":
             waterbodies = waterbodies[waterbodies["waterbody_type"] == RESERVOIR]
 
-        # only select waterbodies that intersect with the region
-        waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
-
-        # Sample lake surface elevation directly from original_d8_elevation at representative points
-        if not waterbodies.empty:
-            original_d8_elevation: xr.DataArray = self.other[
-                "drainage/original_d8_elevation"
-            ]
-            rep_points = waterbodies.geometry.representative_point()
-            xs = xr.DataArray(rep_points.x.values, dims="points")
-            ys = xr.DataArray(rep_points.y.values, dims="points")
-            waterbodies["elevation"] = original_d8_elevation.sel(
-                x=xs, y=ys, method="nearest"
-            ).values.astype(np.float32)
-
-        waterbodies["volume_flood"] = waterbodies["volume_total"]
-
         waterbody_id: xr.DataArray = rasterize_like(
-            gdf=waterbodies,
+            gdf=waterbodies[waterbodies.geometry.geom_type != "Point"],
             column="waterbody_id",
             raster=self.grid["mask"],
             nodata=-1,
@@ -1902,11 +1909,51 @@ class Hydrography(BuildModelBase):
             all_touched=True,
         )
 
+        if (waterbodies.geometry.geom_type == "Point").any():
+            skipped: dict[int, str] = snap_waterbody_points(
+                waterbodies,
+                waterbody_id,
+                self.geom["routing/rivers"],
+                self.grid["routing/upstream_area_m2"],
+                self.other["drainage/original_d8_upstream_area_m2"],
+            )
+            gdw_id: int
+            reason: str
+            for gdw_id, reason in skipped.items():
+                skipped_dam: pd.Series = dam_checks["gdw_id"].eq(gdw_id)
+                dam_checks.loc[skipped_dam, "addition_reason"] = reason
+                dam_checks.loc[skipped_dam, "waterbody_id"] = pd.NA
+                self.logger.warning("Skipping GDW reservoir %s: %s", gdw_id, reason)
+
+        if mode != "off":
+            self.set_geom(dam_checks, name="waterbodies/gdw_checks")
+            checks_path: Path = self.report_dir / "waterbodies" / "gdw_checks.csv"
+            checks_path.parent.mkdir(parents=True, exist_ok=True)
+            dam_checks.drop(columns="geometry").to_csv(checks_path, index=False)
+            self.logger.info(
+                "GDW match results: %s",
+                dam_checks["match_method"].value_counts().to_dict(),
+            )
+
+        # Sample lake surface elevation directly from original_d8_elevation at representative points
+        if not waterbodies.empty:
+            original_d8_elevation: xr.DataArray = self.other[
+                "drainage/original_d8_elevation"
+            ]
+            rep_points: gpd.GeoSeries = waterbodies.geometry.representative_point()
+            xs: xr.DataArray = xr.DataArray(rep_points.x.values, dims="points")
+            ys: xr.DataArray = xr.DataArray(rep_points.y.values, dims="points")
+            waterbodies["elevation"] = original_d8_elevation.sel(
+                x=xs, y=ys, method="nearest"
+            ).values.astype(np.float32)
+
         waterbody_id_array: TwoDArrayInt32 = waterbody_id.values.copy()
         if np.any(waterbody_id_array != -1):
             river_ids: TwoDArrayInt32 = self.grid["routing/river_ids"].values
-            flow_raster_idxs_ds = self.grid["flow_raster_idxs_ds"].compute()
-            flow_raster = FlwdirRaster(
+            flow_raster_idxs_ds: xr.DataArray = self.grid[
+                "flow_raster_idxs_ds"
+            ].compute()
+            flow_raster: FlwdirRaster = FlwdirRaster(
                 flow_raster_idxs_ds.values.ravel(),
                 shape=flow_raster_idxs_ds.shape,
                 transform=np.array(flow_raster_idxs_ds.rio.transform(recalc=True)),
@@ -1970,7 +2017,7 @@ class Hydrography(BuildModelBase):
                 by="waterbody_id", as_index=False
             )
 
-            # Set lakes with command area to reservoirs and reservoirs without command area to lakes
+            # Command areas require reservoir operations, regardless of source type.
             ids_with_command: set[int] = set(command_areas_gdf["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),
@@ -2058,11 +2105,11 @@ class Hydrography(BuildModelBase):
         if mode in ("on", "reservoirs_only") and custom_reservoir_capacity:
             if custom_reservoir_capacity.endswith(".xlsx"):
                 custom_reservoir_capacity_df: pd.DataFrame = pd.read_excel(
-                    custom_reservoir_capacity
+                    custom_reservoir_capacity, index_col="waterbody_id"
                 )
             elif custom_reservoir_capacity.endswith(".csv"):
                 custom_reservoir_capacity_df: pd.DataFrame = pd.read_csv(
-                    custom_reservoir_capacity
+                    custom_reservoir_capacity, index_col="waterbody_id"
                 )
             else:
                 raise ValueError(
@@ -2076,6 +2123,8 @@ class Hydrography(BuildModelBase):
             waterbodies.set_index("waterbody_id", inplace=True)
             waterbodies.update(custom_reservoir_capacity_df)
             waterbodies.reset_index(inplace=True)
+
+        waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
         assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"

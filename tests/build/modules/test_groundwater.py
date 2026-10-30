@@ -1,12 +1,14 @@
 """Tests for the groundwater build module."""
 
 import logging
+from collections.abc import Callable
 from unittest.mock import MagicMock
 
 import geopandas as gpd
 import numpy as np
 import pytest
 import xarray as xr
+from pyproj import CRS
 from shapely.geometry import Polygon, box
 
 from geb.build.methods import build_method
@@ -193,3 +195,59 @@ def test_setup_karst_spatial_coverage(
     assert saved.rio.crs == mask.rio.crs
     assert saved.attrs["units"] == "1"
     assert saved.attrs["source"] == "Synthetic karst map"
+
+
+@pytest.mark.parametrize("invalid_stage", ["source", "projected"])
+def test_setup_karst_repairs_invalid_geometry(
+    monkeypatch: pytest.MonkeyPatch, invalid_stage: str
+) -> None:
+    """Repair source and projection defects once, before dissolving.
+
+    Args:
+        monkeypatch: Fixture for injecting a projection-induced invalid polygon.
+        invalid_stage: Whether invalid geometry comes from the source or projection.
+
+    """
+    build_method.logger = logging.getLogger("test")
+    mask: xr.DataArray = xr.DataArray(
+        [[False, False], [False, False]],
+        coords={"y": [15.0, 5.0], "x": [5.0, 15.0]},
+        dims=("y", "x"),
+    ).rio.write_crs(6933)
+    # Both triangular lobes contribute area; buffer(0) would lose one lobe.
+    crossing_polygon: Polygon = Polygon([(0, 0), (10, 10), (0, 10), (10, 0), (0, 0)])
+    polygons: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"karst_fraction": [0.8]},
+        geometry=[crossing_polygon if invalid_stage == "source" else box(0, 0, 10, 10)],
+        crs=6933,
+    )
+    original_to_crs: Callable[..., gpd.GeoDataFrame] = gpd.GeoDataFrame.to_crs
+
+    def reproject_with_invalid_geometry(
+        frame: gpd.GeoDataFrame, crs: CRS | int | None = None
+    ) -> gpd.GeoDataFrame:
+        """Simulate a topology defect introduced by equal-area reprojection.
+
+        Args:
+            frame: Source polygons with coverage fractions.
+            crs: Target coordinate reference system.
+
+        Returns:
+            Projected frame with a controlled self-intersection.
+        """
+        projected: gpd.GeoDataFrame = original_to_crs(frame, crs=crs)
+        if invalid_stage == "projected" and isinstance(crs, int) and crs == 6933:
+            projected.geometry = [crossing_polygon]
+        return projected
+
+    monkeypatch.setattr(gpd.GeoDataFrame, "to_crs", reproject_with_invalid_geometry)
+    model: MagicMock = MagicMock()
+    model.logger = logging.getLogger("test")
+    model.grid = {"mask": mask}
+    model.data_catalog.fetch.return_value.read.return_value = polygons
+    GroundWater.setup_karst(model)
+    saved: xr.DataArray = model.set_grid.call_args.args[0]
+    np.testing.assert_allclose(saved.values, [[0.0, 0.0], [0.4, 0.0]])
+    assert polygons.geometry.iloc[0].equals(
+        crossing_polygon if invalid_stage == "source" else box(0, 0, 10, 10)
+    )
