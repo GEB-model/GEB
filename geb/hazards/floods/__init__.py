@@ -1048,6 +1048,7 @@ class Floods(Module):
         discharge = discharge.loc[start_time:]
 
         # set the frequency of the index
+        assert isinstance(discharge.index, pd.DatetimeIndex)
         discharge.index.freq = pd.infer_freq(discharge.index)
 
         return discharge
@@ -1084,6 +1085,7 @@ class Floods(Module):
 
         start_time = spinup_discharge.index[0] + pd.DateOffset(years=10)
         spinup_discharge = spinup_discharge.loc[start_time:]
+        assert isinstance(spinup_discharge.index, pd.DatetimeIndex)
         spinup_discharge.index.freq = pd.infer_freq(spinup_discharge.index)
 
         if (spinup_discharge.index[-1].year - spinup_discharge.index[0].year) < 20:
@@ -1100,6 +1102,7 @@ class Floods(Module):
                 all_rivers=all_rivers,
             )
             discharge = pd.concat([spinup_discharge, run_discharge])
+            assert isinstance(discharge.index, pd.DatetimeIndex)
             discharge.index.freq = pd.infer_freq(discharge.index)
             spinup_years = (
                 spinup_discharge.index[-1].year - spinup_discharge.index[0].year

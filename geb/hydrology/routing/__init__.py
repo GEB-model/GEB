@@ -2529,8 +2529,9 @@ class Routing(Module):
             "D", label="left"
         ).mean()
 
-        discharge_by_river_daily.index.freq = pd.infer_freq(  # ty:ignore[unresolved-attribute]
-            discharge_by_river_daily.index  # ty:ignore[invalid-argument-type]
+        assert isinstance(discharge_by_river_daily.index, pd.DatetimeIndex)
+        discharge_by_river_daily.index.freq = pd.infer_freq(
+            discharge_by_river_daily.index
         )
         return_periods_to_fit: list[int | float] = list(
             set(

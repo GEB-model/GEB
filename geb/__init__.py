@@ -12,6 +12,7 @@ from typing import cast
 import netCDF4  # noqa: F401  # Needed to solve: https://github.com/pydata/xarray/issues/7259
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import rioxarray  # noqa: F401  # needed for rioxarray to register itself as an xarray extension
 import xarray as xr
 from dotenv import load_dotenv
@@ -170,6 +171,9 @@ else:
 # xarray uses bottleneck for some operations to speed up computations
 # however, some implementations are numerically unstable, so we disable it
 xr.set_options(use_bottleneck=False, keep_attrs=True)
+
+# pandas 4 will return a BaseOffset object instead of a string from infer_freq
+pd.set_option("future.infer_freq_returns_offset", True)
 
 # raise all numpy warnings as errors, to catch potential issues early on
 np.seterr(divide="raise", over="raise", under="ignore", invalid="raise")
