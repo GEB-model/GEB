@@ -1262,7 +1262,7 @@ class LandSurface(Module):
             crop_group_number=crop_group_number,
             minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
             interflow_multiplier=np.float32(
-                self.model.config["parameters"]["interflow_multiplier"]
+                self.model.config["hydrology"]["landsurface"]["interflow_multiplier"]
             ),
             deep_soil_temperature_C=deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
@@ -2049,7 +2049,7 @@ class LandSurface(Module):
         ] *= np.float32(0.1)
 
         self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s *= (
-            self.model.config["parameters"][
+            self.model.config["hydrology"]["landsurface"][
                 "saturated_hydraulic_conductivity_multiplier"
             ]
         )  # calibration parameter
@@ -2076,7 +2076,7 @@ class LandSurface(Module):
         self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s = (
             self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s
             * np.float32(
-                self.model.config["parameters"][
+                self.model.config["hydrology"]["landsurface"][
                     "vertical_saturated_hydraulic_conductivity_multiplier"
                 ]
             )
@@ -2217,7 +2217,9 @@ class LandSurface(Module):
 
             # Scale topographic shape parameter beta with the user-defined calibration scale factor
             variable_runoff_shape_beta_scale: np.float32 = np.float32(
-                self.model.config["parameters"]["variable_runoff_shape_beta_multiplier"]
+                self.model.config["hydrology"]["landsurface"][
+                    "variable_runoff_shape_beta_multiplier"
+                ]
             )
             self.HRU.var.variable_runoff_shape_beta[:] = (
                 ((surface_area_ratio_hru - np.float32(1.0)) + np.float32(0.2))
@@ -2334,7 +2336,7 @@ class LandSurface(Module):
             get_crop_sub_stage=get_crop_sub_stage,
         )
 
-        crop_factor *= self.model.config["parameters"][
+        crop_factor *= self.model.config["hydrology"]["landsurface"][
             "crop_factor_multiplier"
         ]  # calibration parameter
 

@@ -503,9 +503,12 @@ class DummyModel:
         """
         self.in_spinup: bool = False
         self.config: dict[str, Any] = {
-            "parameters": {
-                "bankfull_discharge_multiplier": mult,
-                "mannings_n_multiplier": 1.0,
+            "hydrology": {
+                "routing": {
+                    "bankfull_discharge_multiplier": mult,
+                    "mannings_n_multiplier": 1.0,
+                    "lake_outflow_multiplier": 1.0,
+                }
             }
         }
         self.files: dict[str, Any] = {
@@ -545,17 +548,13 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
     routing.config = {
         "max_threads": None,
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            },
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            },
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -661,17 +660,13 @@ def test_routing_updates_rivers_geometry() -> None:
     routing.grid = DummyGrid(5)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -736,17 +731,13 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
     routing.grid = DummyGrid(3)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -806,17 +797,13 @@ def test_routing_unobserved_channel_width_depth_estimation() -> None:
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            },
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            },
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -873,17 +860,13 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
     routing.config = {
         "max_threads": None,
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            },
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            },
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
         "retention_basins": {"release_threshold_factor": 1.0},
         "riverbed_hydraulic_conductivity_multiplier": 0.1,
@@ -991,17 +974,13 @@ def test_unrepresented_river_geometry_confluence() -> None:
     routing.grid = DummyGrid(4)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1075,17 +1054,13 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
     routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1150,17 +1125,13 @@ def test_unrepresented_river_cascade_with_bankfull_multiplier() -> None:
     routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1233,17 +1204,13 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1301,17 +1268,13 @@ def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1372,17 +1335,13 @@ def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1442,17 +1401,13 @@ def test_unrepresented_river_confluence_both_observed_widths() -> None:
     routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1507,17 +1462,13 @@ def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
     routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1574,17 +1525,13 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1640,17 +1587,13 @@ def test_unrepresented_river_non_positive_width_raises_assertion() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1711,17 +1654,13 @@ def test_parabolic_channel_geometry_and_mean_depth_conversion() -> None:
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -1796,17 +1735,13 @@ def test_routing_calculate_bankfull_depth_continuity_scaling_with_observed_width
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -1901,17 +1836,13 @@ def test_routing_calculate_bankfull_depth_flag_revert_machinery() -> None:
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -1945,9 +1876,7 @@ def test_routing_calculate_bankfull_depth_flag_revert_machinery() -> None:
     assert np.isclose(float(depth_cold_true[0]), expected_depth_q100, rtol=1e-3)
 
     # 2. Cold-start with Flag False: q_proxy = (72.0 / 14.4)^2 = 25.0 m3/s -> depth scales by (0.25)^0.6
-    routing.config["river_depth"]["parameters"]["use_observed_width_as_bankfull"] = (
-        False
-    )
+    routing.config["river_depth"]["use_observed_width_as_bankfull"] = False
     depth_cold_false: ArrayFloat32 = routing.calculate_bankfull_depth(
         bankfull_top_width_m=widths,
         use_simulated_bankfull_q=False,
@@ -1969,11 +1898,9 @@ def test_routing_missing_config_keys_raise_key_error() -> None:
     # Missing river_width entirely raises KeyError
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
     }
     with pytest.raises(KeyError):
@@ -1982,16 +1909,12 @@ def test_routing_missing_config_keys_raise_key_error() -> None:
     # Missing use_observed_width_as_bankfull raises KeyError
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     with pytest.raises(KeyError):
@@ -2007,17 +1930,13 @@ def test_routing_calculate_bankfull_width() -> None:
     routing.grid = DummyGrid(3)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -2078,17 +1997,13 @@ def test_routing_unobserved_river_width_and_depth_uses_parameters() -> None:
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -2159,17 +2074,13 @@ def test_bankfull_discharge_multiplier_scaling() -> None:
         r.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
         r.config = {
             "river_width": {
-                "parameters": {
-                    "default_alpha": 7.2,
-                    "beta": 0.5,
-                },
+                "default_alpha": 7.2,
+                "beta": 0.5,
             },
             "river_depth": {
-                "parameters": {
-                    "min_depth_m": 0.1,
-                    "shape_exponent": 0.5,
-                    "use_observed_width_as_bankfull": False,
-                },
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": False,
             },
         }
         r.default_missing_channel_width = 0.5
@@ -2435,17 +2346,13 @@ def test_routing_calculate_bankfull_width_and_depth_limited_by_floodplain() -> N
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 1.0
@@ -2530,17 +2437,13 @@ def test_routing_calculate_bankfull_depth_slope_scaling_swot() -> None:
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -2640,17 +2543,13 @@ def test_routing_calculate_bankfull_width_depth_coupled_system() -> None:
 
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": alpha_val,
-                "beta": beta_val,
-            }
+            "default_alpha": alpha_val,
+            "beta": beta_val,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -3092,13 +2991,11 @@ def test_routing_calculate_bankfull_depth_steady_backwater_integration() -> None
     routing.var = var
 
     routing.config = {
-        "river_width": {"parameters": {"default_alpha": 7.2, "beta": 0.5}},
+        "river_width": {"default_alpha": 7.2, "beta": 0.5},
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
     }
 

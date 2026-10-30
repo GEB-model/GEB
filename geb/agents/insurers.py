@@ -57,16 +57,12 @@ class Insurers(AgentBaseClass):
         """
         super().__init__(model)
         self.agents = agents
-        self.config = (
-            self.model.config["agent_settings"]["insurers"]
-            if "insurers" in self.model.config["agent_settings"]
-            else {}
-        )
+        self.config = self.model.config["agents"]["insurers"]
         if self.model.simulate_hydrology:
             self.HRU = model.hydrology.HRU
             self.grid = model.hydrology.grid
 
-        self.hydrological_year_start_month = self.model.config["general"][
+        self.hydrological_year_start_month = self.model.config["hydrology"][
             "hydrological_year_start_month"
         ]
         self.traditional_insurance_adaptation_active = (

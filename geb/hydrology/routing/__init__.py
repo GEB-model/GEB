@@ -1048,7 +1048,7 @@ class Routing(Module):
         if not unrepresented_mask.any():
             return
 
-        depth_params: dict[str, Any] = self.config["river_depth"]["parameters"]
+        depth_params: dict[str, Any] = self.config["river_depth"]
         min_depth_m: float = float(depth_params["min_depth_m"])
         default_missing_width: float = float(self.default_missing_channel_width)
         shape_exponent: float = float(depth_params["shape_exponent"])
@@ -1204,7 +1204,9 @@ class Routing(Module):
         Returns:
             The bankfull discharge multiplier (dimensionless).
         """
-        return self.model.config["parameters"]["bankfull_discharge_multiplier"]
+        return self.model.config["hydrology"]["routing"][
+            "bankfull_discharge_multiplier"
+        ]
 
     @property
     def has_simulated_bankfull_q(self) -> bool:
@@ -1254,13 +1256,11 @@ class Routing(Module):
             bankfull_discharge_m3_s: ArrayFloat32 = q2_col.reindex(
                 self.var.river_ids
             ).values.astype(np.float32) * np.float32(self.bankfull_discharge_multiplier)
-            width_params: dict[str, Any] = self.config["river_width"]["parameters"]
+            width_params: dict[str, Any] = self.config["river_width"]
             default_alpha: np.float32 = np.float32(width_params["default_alpha"])
             default_beta: np.float32 = np.float32(width_params["beta"])
             use_observed_width_as_bankfull: bool = bool(
-                self.config["river_depth"]["parameters"][
-                    "use_observed_width_as_bankfull"
-                ]
+                self.config["river_depth"]["use_observed_width_as_bankfull"]
             )
             alpha: ArrayFloat32 | np.float32 = (
                 default_alpha
@@ -1349,11 +1349,11 @@ class Routing(Module):
                 'return_period_2_years_daily_m3_per_s' contains null values in self.var.rivers,
                 or if calculated bankfull depth exceeds 250 m.
         """
-        width_params: dict[str, Any] = self.config["river_width"]["parameters"]
+        width_params: dict[str, Any] = self.config["river_width"]
         default_alpha: np.float32 = np.float32(width_params["default_alpha"])
         default_beta: np.float32 = np.float32(width_params["beta"])
 
-        depth_params: dict[str, Any] = self.config["river_depth"]["parameters"]
+        depth_params: dict[str, Any] = self.config["river_depth"]
         min_depth_m: np.float32 = np.float32(depth_params["min_depth_m"])
         shape_exponent_val: np.float32 = np.float32(depth_params["shape_exponent"])
         use_observed_width_as_bankfull: bool = bool(
@@ -1535,7 +1535,7 @@ class Routing(Module):
         # W(y) = W_bf * sqrt(y / h_bf), yielding bankfull area A_bf = (2/3) * W_bf * h_bf
         # and centerline depth h_bf = 1.5 * h_mean (Dingman 2009, Moody & Troutman 2002).
         shape_exponent_val: np.float32 = np.float32(
-            self.config["river_depth"]["parameters"]["shape_exponent"]
+            self.config["river_depth"]["shape_exponent"]
         )
         self.shape_exponent = np.full(
             self.var.river_ids.shape, shape_exponent_val, dtype=np.float32
@@ -1583,7 +1583,7 @@ class Routing(Module):
             ].astype(np.float32)
 
             lake_a_factor: np.float32 = np.float32(
-                self.model.config["parameters"]["lake_outflow_multiplier"]
+                self.model.config["hydrology"]["routing"]["lake_outflow_multiplier"]
             )
             outflow_river_width: ArrayFloat32 = bankfull_top_width_m[
                 waterbody_outflow_linear
@@ -1824,7 +1824,9 @@ class Routing(Module):
         )
         self.grid.var.river_mannings = (
             np.clip(raw_mannings, np.float32(0.020), np.float32(0.075))
-            * np.float32(self.model.config["parameters"]["mannings_n_multiplier"])
+            * np.float32(
+                self.model.config["hydrology"]["routing"]["mannings_n_multiplier"]
+            )
         ).astype(np.float32)
         assert (self.grid.var.river_mannings > 0).all()
 
@@ -1854,8 +1856,8 @@ class Routing(Module):
             self.var.river_width_alpha,
             self.var.river_width_beta,
         ) = self.get_river_width_alpha_and_beta(
-            default_alpha=self.config["river_width"]["parameters"]["default_alpha"],
-            beta=self.config["river_width"]["parameters"]["beta"],
+            default_alpha=self.config["river_width"]["default_alpha"],
+            beta=self.config["river_width"]["beta"],
         )
 
         # Initialize discharge with zero
@@ -1915,9 +1917,6 @@ class Routing(Module):
 
             river_width = alpha * discharge^beta
 
-        for alpha a default value of 3.91 is used, and beta is set to 0.62 based on
-        default configuration parameters.
-
         Re-arranging for alpha gives:
 
             alpha = river_width / discharge^beta
@@ -1927,8 +1926,7 @@ class Routing(Module):
 
         Args:
             beta: The beta parameter for the kinematic wave routing.
-            default_alpha: The default alpha value to use for rivers without an observed average river width,
-                default is 3.91.
+            default_alpha: The default alpha value to use for rivers without an observed average river width.
 
         Returns:
             A tuple containing:
@@ -2078,8 +2076,8 @@ class Routing(Module):
                 self.var.river_width_alpha,
                 self.var.river_width_beta,
             ) = self.get_river_width_alpha_and_beta(
-                default_alpha=self.config["river_width"]["parameters"]["default_alpha"],
-                beta=self.config["river_width"]["parameters"]["beta"],
+                default_alpha=self.config["river_width"]["default_alpha"],
+                beta=self.config["river_width"]["beta"],
             )
             if self.has_simulated_bankfull_q:
                 dynamic_width: ArrayFloat32 = self.calculate_bankfull_width(
@@ -2496,7 +2494,7 @@ class Routing(Module):
         else:
             folder: Path = (
                 self.model.report_folder.parent.parent
-                / self.model.config["general"]["spinup_name"]
+                / self.model.config["spinup_name"]
                 / "report"
                 / "hydrology.routing"
             )
@@ -2531,8 +2529,9 @@ class Routing(Module):
             "D", label="left"
         ).mean()
 
-        discharge_by_river_daily.index.freq = pd.infer_freq(  # ty:ignore[unresolved-attribute]
-            discharge_by_river_daily.index  # ty:ignore[invalid-argument-type]
+        assert isinstance(discharge_by_river_daily.index, pd.DatetimeIndex)
+        discharge_by_river_daily.index.freq = pd.infer_freq(
+            discharge_by_river_daily.index
         )
         return_periods_to_fit: list[int | float] = list(
             set(

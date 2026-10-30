@@ -81,6 +81,12 @@ class GEBModel(Module):
             config
         )  # TODO: Make this a frozendict when Python 3.15 is released.
         self.logger = logger or logging.getLogger(__name__)  # model logger
+        numeric_level: int = getattr(
+            logging, str(self.config["loglevel"]).upper(), logging.INFO
+        )
+        self.logger.setLevel(numeric_level)
+        for handler in self.logger.handlers:
+            handler.setLevel(numeric_level)
         self.timing = timing  # whether to log timing of modules
         self.mode = mode  # mode of the model, either 'r' (read) or 'w' (write)
         if self.mode not in ["r", "w"]:
@@ -258,7 +264,7 @@ class GEBModel(Module):
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 forecast_file_path = self.files["other"][
-                    f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['processing']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+                    f"forecasts/{self.config['forecasts']['provider']}/{self.config['forecasts']['processing']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
                 ]
                 forecast_data[loader_name] = read_zarr(forecast_file_path)
 
@@ -453,15 +459,15 @@ class GEBModel(Module):
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
         if (
-            self.config["general"]["forecasts"]["use"]
+            self.config["forecasts"]["use"]
             and self.multiverse_name
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
             # forecast issue dates are extracted from self.files['other'] keys
             # which are stored as: forecasts/PROVIDER/ENSEMBLE/YYYYMMDDTHHMMSS/...
-            provider: str = self.config["general"]["forecasts"]["provider"]
-            ensemble: str = self.config["general"]["forecasts"]["processing"]
+            provider: str = self.config["forecasts"]["provider"]
+            ensemble: str = self.config["forecasts"]["processing"]
             forecast_prefix: str = f"forecasts/{provider}/{ensemble}/"
 
             other_files: dict[str, Path] = self.files.get("other", {})
@@ -478,9 +484,7 @@ class GEBModel(Module):
             )
 
             # Get warning system config settings
-            warning_config = self.model.config["agent_settings"]["households"][
-                "warning_system"
-            ]
+            warning_config = self.config["agents"]["households"]["warning_system"]
 
             prob_threshold = warning_config["probability_threshold"]
             area_threshold = warning_config["area_threshold"]
@@ -527,7 +531,7 @@ class GEBModel(Module):
                     # )  # run the multiverse for the current timestep
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
-                    if self.config["agent_settings"]["households"]["warning_response"]:
+                    if self.config["agents"]["households"]["warning_response"]:
                         self.logger.info(
                             f"Running flood early warning system for date time {self.current_time.isoformat()}..."
                         )
@@ -596,7 +600,7 @@ class GEBModel(Module):
             f"{multiverse_prefix}{self.current_time.date()} - Δt={step_duration:.3f}s"
         )
 
-        forecasting_enabled: bool = self.config["general"]["forecasts"]["use"]
+        forecasting_enabled: bool = self.config["forecasts"]["use"]
         floods_enabled: bool = self.config["hazards"]["floods"]["simulate"]
 
         if not forecasting_enabled and not floods_enabled and self.n_timesteps > 0:
@@ -740,7 +744,7 @@ class GEBModel(Module):
         else:
             current_time = self.run_start
             checkpoint_path = self.get_checkpoint_path(
-                self.run_start, run_name=self.config["general"]["spinup_name"]
+                self.run_start, run_name=self.config["spinup_name"]
             )
             if not checkpoint_path.exists():
                 raise FileNotFoundError(
@@ -811,7 +815,7 @@ class GEBModel(Module):
             if key.startswith("agents.households") or key == "_config"
         }
 
-        self.config["general"]["name"] = model_name
+        self.config["name"] = model_name
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
@@ -831,7 +835,7 @@ class GEBModel(Module):
         n_timesteps = end_time.year - current_time.year + 1
 
         checkpoint_path = self.get_checkpoint_path(
-            self.run_start, run_name=self.config["general"]["spinup_name"]
+            self.run_start, run_name=self.config["spinup_name"]
         )
         if not checkpoint_path.exists():
             raise FileNotFoundError(
@@ -1018,7 +1022,7 @@ class GEBModel(Module):
         current_time: datetime.datetime = self.run_start
 
         checkpoint_path: Path = self.get_checkpoint_path(
-            self.run_start, run_name=self.config["general"]["spinup_name"]
+            self.run_start, run_name=self.config["spinup_name"]
         )
         if not checkpoint_path.exists():
             raise FileNotFoundError(
@@ -1084,7 +1088,7 @@ class GEBModel(Module):
             Path to the checkpoints directory.
         """
         run: str = self.run_name if run_name is None else run_name
-        return Path(self.config["general"]["simulation_root"]) / run / "checkpoints"
+        return Path(self.config["simulation_root"]) / run / "checkpoints"
 
     @property
     def checkpoints_folder(self) -> Path:
@@ -1102,7 +1106,7 @@ class GEBModel(Module):
         Returns:
             Path to the spinup checkpoints directory.
         """
-        return self.get_checkpoints_folder(self.config["general"]["spinup_name"])
+        return self.get_checkpoints_folder(self.config["spinup_name"])
 
     def format_timestamp(self, dt: datetime.datetime) -> str:
         """Format a datetime into a standard date string for checkpoint directories.
@@ -1249,7 +1253,7 @@ class GEBModel(Module):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path(self.config["general"]["simulation_root"]) / self.run_name
+        folder = Path(self.config["simulation_root"]) / self.run_name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -1260,7 +1264,7 @@ class GEBModel(Module):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path(self.config["general"]["simulation_root"]) / "spinup"
+        folder = Path(self.config["simulation_root"]) / "spinup"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -1272,9 +1276,9 @@ class GEBModel(Module):
             Name of the current model run. If in spinup mode, the spinup name is returned.
         """
         if self.in_spinup:
-            return self.config["general"]["spinup_name"]
+            return self.config["spinup_name"]
         else:
-            return self.config["general"]["name"]
+            return self.config["name"]
 
     @property
     def multiverse_name(self) -> str | None:
@@ -1307,7 +1311,7 @@ class GEBModel(Module):
         Returns:
             Path to the folder where output files will be saved.
         """
-        return Path(self.config["general"]["output_folder"]) / self.model.run_name
+        return Path(self.config["output_folder"]) / self.model.run_name
 
     @property
     def total_area_m2(self) -> float:
@@ -1327,7 +1331,7 @@ class GEBModel(Module):
         Returns:
             Path to the folder containing input files.
         """
-        return Path(self.config["general"]["input_folder"])
+        return Path(self.config["input_folder"])
 
     @property
     def bin_folder(self) -> Path:
@@ -1474,7 +1478,7 @@ class GEBModel(Module):
         Returns:
             Datetime object representing the start of the spinup period.
         """
-        return self.create_datetime(self.config["general"]["spinup_time"])
+        return self.create_datetime(self.config["spinup_time"])
 
     @property
     def spinup_end(self) -> datetime.datetime:
@@ -1483,10 +1487,7 @@ class GEBModel(Module):
         Returns:
             Datetime object representing the end of the spinup period.
         """
-        return (
-            self.create_datetime(self.config["general"]["start_time"])
-            - self.timestep_length
-        )
+        return self.create_datetime(self.config["start_time"]) - self.timestep_length
 
     @property
     def run_start(self) -> datetime.datetime:
@@ -1495,7 +1496,7 @@ class GEBModel(Module):
         Returns:
             Datetime object representing the start of the model run.
         """
-        return self.create_datetime(self.config["general"]["start_time"])
+        return self.create_datetime(self.config["start_time"])
 
     @property
     def run_end(self) -> datetime.datetime:
@@ -1504,7 +1505,7 @@ class GEBModel(Module):
         Returns:
             Datetime object representing the end of the model run.
         """
-        return self.create_datetime(self.config["general"]["end_time"])
+        return self.create_datetime(self.config["end_time"])
 
     @property
     def simulation_start(self) -> datetime.datetime:

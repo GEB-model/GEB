@@ -60,16 +60,11 @@ class LiveStockFarmers(AgentBaseClass):
             self.grid = model.hydrology.grid
 
         self.agents = agents
-        self.config = (
-            self.model.config["agent_settings"]["livestock_farmers"]
-            if "livestock_farmers" in self.model.config["agent_settings"]
-            else {}
-        )
 
         self.livestock_water_consumption_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
-        self.hydrological_year_start_month = self.model.config["general"][
+        self.hydrological_year_start_month = self.model.config["hydrology"][
             "hydrological_year_start_month"
         ]
         if self.model.in_spinup:

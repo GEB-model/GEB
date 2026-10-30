@@ -50,12 +50,8 @@ class Market(AgentBaseClass):
         """
         super().__init__(model)
         self.agents = agents
-        self.config = (
-            self.model.config["agent_settings"]["market"]
-            if "market" in self.model.config["agent_settings"]
-            else {}
-        )
-        self.hydrological_year_start_month = self.model.config["general"][
+        self.config = self.model.config["agents"]["market"]
+        self.hydrological_year_start_month = self.model.config["hydrology"][
             "hydrological_year_start_month"
         ]
         if self.model.in_spinup:
@@ -90,8 +86,7 @@ class Market(AgentBaseClass):
         """
         n_crops = len(self.agents.crop_farmers.var.crop_ids.keys())
         n_years = (
-            self.model.config["general"]["end_time"].year
-            - self.model.config["general"]["spinup_time"].year
+            self.model.config["end_time"].year - self.model.config["spinup_time"].year
         ) + 20
         self.var.production = DynamicArray(
             n=n_crops,
@@ -123,9 +118,7 @@ class Market(AgentBaseClass):
             self.model.files["dict"]["socioeconomics/inflation_rates"]
         )
         inflation["time"] = [int(time) for time in inflation["time"]]
-        start_idx = inflation["time"].index(
-            self.model.config["general"]["spinup_time"].year
-        )
+        start_idx = inflation["time"].index(self.model.config["spinup_time"].year)
         for region in inflation["data"]:
             region_inflation = [1] + inflation["data"][region][start_idx + 1 :]
             self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
@@ -143,8 +136,7 @@ class Market(AgentBaseClass):
         """
         estimation_start_year = 1  # skip first year
         estimation_end_year = (
-            self.model.current_time.year
-            - self.model.config["general"]["spinup_time"].year
+            self.model.current_time.year - self.model.config["spinup_time"].year
         )
 
         production = self.var.production[
@@ -364,7 +356,4 @@ class Market(AgentBaseClass):
         Returns:
             The current year index.
         """
-        return (
-            self.model.current_time.year
-            - self.model.config["general"]["spinup_time"].year
-        )
+        return self.model.current_time.year - self.model.config["spinup_time"].year

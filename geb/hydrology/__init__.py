@@ -502,7 +502,7 @@ class Hydrology(Data, Module):
         if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
             self.groundwater.modflow.finalize()
 
-        if self.model.config["general"]["simulate_forest"]:
+        if self.model.config["hydrology"]["simulate_forest"]:
             assert hasattr(self.model, "plantFATE")
             for plantFATE_model in self.model.plantFATE:
                 if plantFATE_model is not None:

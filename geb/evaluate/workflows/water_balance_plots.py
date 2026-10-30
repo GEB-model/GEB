@@ -68,9 +68,7 @@ def plot_water_circle(
     Returns:
         A matplotlib Figure object representing the water circle.
     """
-    folder: Path = (
-        Path(self.model.config["general"]["output_folder"]) / run_name / "report"
-    )
+    folder: Path = Path(self.model.config["output_folder"]) / run_name / "report"
 
     # because storage is the storage at the end of the timestep, we need to calculate the change
     # across the entire simulation period. For all other variables we do skip the first day.
@@ -208,9 +206,7 @@ def plot_water_balance(
     Raises:
         ValueError: If the water balance dataframe does not contain any rows.
     """
-    folder: Path = (
-        Path(self.model.config["general"]["output_folder"]) / run_name / "report"
-    )
+    folder: Path = Path(self.model.config["output_folder"]) / run_name / "report"
     water_balance_df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(
         folder
     )
@@ -843,9 +839,7 @@ def plot_water_storage(
     Raises:
         ValueError: If the water storage dataframe does not contain any rows.
     """
-    folder: Path = (
-        Path(self.model.config["general"]["output_folder"]) / run_name / "report"
-    )
+    folder: Path = Path(self.model.config["output_folder"]) / run_name / "report"
     storage_module: str = "hydrology.landsurface"
     storage_specs: dict[str, tuple[str, str]] = {
         reported_name.removeprefix("_").removesuffix("_m"): (

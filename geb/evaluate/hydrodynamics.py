@@ -1124,9 +1124,7 @@ class Hydrodynamics:
             "minimum_flood_depth"
         ]
 
-        sfincs_root = (
-            Path(self.model.config["general"]["simulation_root"]) / run_name / "SFINCS"
-        )
+        sfincs_root = Path(self.model.config["simulation_root"]) / run_name / "SFINCS"
         if not sfincs_root.exists():
             raise FileNotFoundError(
                 f"SFINCS simulation folder {sfincs_root} does not exist. "
@@ -1322,7 +1320,7 @@ class Hydrodynamics:
             self.model.logger.info(f"event: {event_name}")
 
             # Create event-specific folder
-            if self.model.config["general"]["forecasts"]["use"]:
+            if self.model.config["forecasts"]["use"]:
                 event_folder = eval_hydrodynamics_folders / "forecasts" / event_name
                 event_folder.mkdir(parents=True, exist_ok=True)
                 flood_maps_folder = (
@@ -1470,9 +1468,7 @@ class Hydrodynamics:
                     for flood_map_path in matching_flood_maps:
                         print(f"   Evaluating: {flood_map_path.name}")
 
-                        elevation_path = self.config["floods"].get(
-                            "elevation_data", self.model.files["other"]["DEM/fathomdem"]
-                        )
+                        elevation_path = self.model.files["other"]["DEM/fathomdem"]
                         metrics = calculate_performance_metrics(
                             observation=read_zarr(obs_file),
                             simulated=read_zarr(flood_map_path),

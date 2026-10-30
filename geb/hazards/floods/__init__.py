@@ -19,9 +19,6 @@ from geb.geb_types import (
     TwoDArrayFloat32,
 )
 from geb.hazards.event import Event
-from geb.hazards.floods.workflows.initial_water_level import (
-    set_river_initial_water_level,
-)
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.routing import (
     get_discharge_per_river,
@@ -176,11 +173,7 @@ class Floods(Module):
         super().__init__(model)
 
         self.model: GEBModel = model
-        self.config: dict[str, Any] = (
-            self.model.config["hazards"]["floods"]
-            if "floods" in self.model.config["hazards"]
-            else {}
-        )
+        self.config: dict[str, Any] = self.model.config["hazards"]["floods"]
 
         self.DEM_config: list[dict[str, Any]] = read_params(
             self.model.files["dict"]["hydrodynamics/DEM_config"]
@@ -325,7 +318,6 @@ class Floods(Module):
 
         Raises:
             ValueError: If the forcing method is unknown.
-            ValueError: If subgrid is off, as the burned rivers are detected in the subgrid DEM.
         """
         # Save the flood depth to a zarr file
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
@@ -425,16 +417,7 @@ class Floods(Module):
         if simulation.sfincs_root_model.has_inflow:
             simulation.set_river_inflow(discharge_by_river=discharge_by_river)
 
-        if not self.config["subgrid"]:
-            raise ValueError(
-                "Filling the rivers at the start of SFINCS requires hazards.floods.subgrid: true."
-            )
-        self.model.logger.info(
-            set_river_initial_water_level(
-                simulation,
-                DEMs=self.DEM_config,
-            )
-        )
+        simulation.set_river_initial_water_level()
 
         return simulation
 
@@ -588,7 +571,7 @@ class Floods(Module):
                 )  # log the start of the simulation
 
                 sfincs_simulation.run(
-                    gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
+                    gpu=self.config["SFINCS"]["gpu"],
                 )  # run the simulation
 
                 if event.export_max_intensity and event.export_final_intensity:
@@ -647,7 +630,7 @@ class Floods(Module):
 
         # This check is done to compute damages (using ERA5) only after multiverse is finished
         if self.model.multiverse_name is None:
-            if self.model.config["general"]["forecasts"]["use"]:
+            if self.model.config["forecasts"]["use"]:
                 print("Multiverse no longer active, now compute flood damages...")
             # Check if damage simulation is enabled before calculating damages
             if self.model.config["hazards"]["damage"]["simulate"]:
@@ -789,9 +772,7 @@ class Floods(Module):
                     all_rivers=region_rivers,
                     coastal=False,
                 )
-                _shape_config = self.config.get("hydrograph_shape", {})
-
-                spinup_name = self.model.config["general"]["spinup_name"]
+                spinup_name = self.model.config["spinup_name"]
                 output_root = self.model.report_folder.parent.parent
                 spinup_folder = (
                     output_root / spinup_name / "report" / "hydrology.routing"
@@ -822,9 +803,9 @@ class Floods(Module):
                     selection_strategy=self.config["selection_strategy"],
                     fixed_shape=self.config["fixed_shape"],
                     write_figures=self.config["write_figures"],
-                    hydrograph_shape=_shape_config.get("method", "triangular"),
-                    shape_window_days=_shape_config.get("window_days", 3.5),
-                    shape_tolerance=_shape_config.get("tolerance", 0.1),
+                    hydrograph_shape=self.config["hydrograph_shape"]["method"],
+                    shape_window_days=self.config["hydrograph_shape"]["window_days"],
+                    shape_tolerance=self.config["hydrograph_shape"]["tolerance"],
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
@@ -923,7 +904,7 @@ class Floods(Module):
             simulation = MultipleSFINCSSimulations(simulations=simulations)
             if simulations:
                 simulation.run(
-                    gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
+                    gpu=self.config["SFINCS"]["gpu"],
                 )
                 flood_depth_return_period: xr.DataArray = (
                     simulation.read_max_flood_depth(self.config["minimum_flood_depth"])
@@ -1044,7 +1025,7 @@ class Floods(Module):
         all_rivers = self.model.hydrology.routing.var.rivers
 
         # if spinup is requested, at least discard the first 10 years of data.
-        if run_name == self.model.config["general"]["spinup_name"]:
+        if run_name == self.model.config["spinup_name"]:
             assert run_name is not None
             discharge = get_discharge_per_river(
                 folder=self.model.report_folder.parent.parent
@@ -1067,6 +1048,7 @@ class Floods(Module):
         discharge = discharge.loc[start_time:]
 
         # set the frequency of the index
+        assert isinstance(discharge.index, pd.DatetimeIndex)
         discharge.index.freq = pd.infer_freq(discharge.index)
 
         return discharge
@@ -1093,7 +1075,7 @@ class Floods(Module):
         )
         all_rivers = self.model.hydrology.routing.var.rivers
 
-        spinup_name = self.model.config["general"]["spinup_name"]
+        spinup_name = self.model.config["spinup_name"]
         output_root = self.model.report_folder.parent.parent
         spinup_discharge = get_discharge_per_river(
             folder=output_root / spinup_name / "report" / "hydrology.routing",
@@ -1103,6 +1085,7 @@ class Floods(Module):
 
         start_time = spinup_discharge.index[0] + pd.DateOffset(years=10)
         spinup_discharge = spinup_discharge.loc[start_time:]
+        assert isinstance(spinup_discharge.index, pd.DatetimeIndex)
         spinup_discharge.index.freq = pd.infer_freq(spinup_discharge.index)
 
         if (spinup_discharge.index[-1].year - spinup_discharge.index[0].year) < 20:
@@ -1119,6 +1102,7 @@ class Floods(Module):
                 all_rivers=all_rivers,
             )
             discharge = pd.concat([spinup_discharge, run_discharge])
+            assert isinstance(discharge.index, pd.DatetimeIndex)
             discharge.index.freq = pd.infer_freq(discharge.index)
             spinup_years = (
                 spinup_discharge.index[-1].year - spinup_discharge.index[0].year
