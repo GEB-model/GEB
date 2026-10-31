@@ -54,18 +54,27 @@ def determine_nearest_river_cell(
     HRU_to_grid: ArrayInt32,
     mask: TwoDArrayBool,
     threshold_m2: float | int,
+    eligible_river_mask: TwoDArrayBool | None = None,
 ) -> ArrayInt32:
     """This function finds the nearest river cell to each HRU.
 
-    It does so by first selecting the rivers, by checking if the upstream area is
-    above a certain threshold. then for each grid cell, it finds the nearest
+    It does so by first selecting the rivers.
+    Eligible river cells are selected using `eligible_river_mask` when it is
+    provided. Otherwise, cells with upstream area greater than `threshold_m2` are selected.
+    The selected cells are matched to valid grid cells by
+    proximity, then for each grid cell, it finds the nearest
     river cell. Finally, it maps the nearest river cell to each HRU.
 
     Args:
-        upstream_area: 2D-array of upstream area in m².
+        upstream_area: 2D-array of upstream area in m². Used for threshold-based
+              selection when `eligible_river_mask` is not provided.
         HRU_to_grid: Array mapping HRUs to grid cells.
-        mask: Mask of the study area.
-        threshold_m2: Threshold in m² to consider a cell as a river.
+        mask: Boolean mask of the study area; `True` cells are excluded.
+        threshold_m2: Threshold in m² to consider a cell as a river. Used only when
+              `eligible_river_mask` is not provided.
+        eligible_river_mask: Optional 2D Boolean mask identifying eligible
+              river cells. When provided, it takes precedence over
+              `threshold_m2`.
 
     Returns:
         For each HRU, the index of the nearest river cell in the valid grid cells.
@@ -73,7 +82,15 @@ def determine_nearest_river_cell(
     valid_indices = np.argwhere(~mask)
     valid_values = upstream_area[~mask]
 
-    grid_cells_above_threshold_mask: npt.NDArray[np.bool_] = valid_values > threshold_m2
+    if eligible_river_mask is None:
+        grid_cells_above_threshold_mask: npt.NDArray[np.bool_] = (
+            valid_values > threshold_m2
+        )
+    else:
+        if eligible_river_mask.shape != upstream_area.shape:
+            raise ValueError("eligible_river_mask must match the model grid shape")
+        grid_cells_above_threshold_mask = eligible_river_mask[~mask]
+
     grid_cells_above_threshold_indices: npt.NDArray[np.int64] = valid_indices[
         grid_cells_above_threshold_mask
     ]
@@ -755,12 +772,17 @@ class HRUs(BaseVariables):
         upstream_area = read_grid(
             self.model.files["grid"]["routing/upstream_area_m2"], ndim=2
         )
+        eligible_river_mask = read_grid(
+            self.model.files["grid"]["routing/downstream_of_any_inflow_mask"],
+            ndim=2,
+        ).astype(bool)
 
         self.var.nearest_river_grid_cell = determine_nearest_river_cell(
             upstream_area,
             self.var.HRU_to_grid,
             mask=self.data.grid.mask,
             threshold_m2=25_000_000,  # 25 km² to align with MERIT-Basins defintion of a river, https://www.reachhydro.org/home/params/merit-basins
+            eligible_river_mask=eligible_river_mask,
         )
 
     @property
