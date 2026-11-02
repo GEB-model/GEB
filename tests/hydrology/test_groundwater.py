@@ -34,6 +34,9 @@ from geb.workflows.raster import calculate_cell_area_m2, compress
 
 from ..testconfig import GEB_PACKAGE_DIR, output_folder, tmp_folder
 
+output_folder_groundwater: Path = output_folder / "groundwater"
+output_folder_groundwater.mkdir(exist_ok=True, parents=True)
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 
@@ -499,7 +502,7 @@ def test_modflow_simulation_with_visualization() -> None:
         visualize_modflow_results(sim, axes[i])
 
     sim.finalize()
-    plt.savefig(output_folder / "modflow_simulation.png")
+    plt.savefig(output_folder_groundwater / "modflow_simulation.png")
 
 
 def test_modflow_simulation_with_restore() -> None:

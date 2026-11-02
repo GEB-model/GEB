@@ -1,6 +1,7 @@
 """Tests for potential evapotranspiration functions in GEB."""
 
 import math
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -32,6 +33,9 @@ from geb.hydrology.landsurface.potential_evapotranspiration import (
 )
 
 from ...testconfig import output_folder
+
+output_folder_pet: Path = output_folder / "potential_evapotranspiration"
+output_folder_pet.mkdir(exist_ok=True, parents=True)
 
 
 def test_get_vapour_pressure() -> None:
@@ -601,5 +605,5 @@ def test_plot_crop_factor_vs_lai() -> None:
     plt.title("Crop Factor vs Leaf Area Index")
     plt.legend()
     plt.grid(True)
-    plt.savefig(output_folder / "crop_factor_vs_lai.png")
+    plt.savefig(output_folder_pet / "crop_factor_vs_lai.png")
     plt.close()

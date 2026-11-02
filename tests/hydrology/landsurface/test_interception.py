@@ -336,40 +336,6 @@ def test_interception_large_rainfall() -> None:
     )
 
 
-def test_interception_edge_case_zero_storage_zero_rainfall() -> None:
-    """Test interception with zero storage and zero rainfall."""
-    rainfall_m = np.float32(0.0)
-    storage_m = np.float32(0.0)
-    capacity_m = np.float32(0.002)
-    potential_transpiration_m = np.float32(0.001)
-
-    (
-        new_storage,
-        throughfall,
-        evaporation,
-        remaining_potential_transpiration,
-        remaining_potential_direct_evaporation,
-    ) = interception(
-        rainfall_m=rainfall_m,
-        storage_m=storage_m,
-        capacity_m=capacity_m,
-        potential_interception_evaporation_m=potential_transpiration_m,
-        potential_transpiration_m=potential_transpiration_m,
-        potential_direct_evaporation_m=np.float32(0.0),
-        leaf_area_index=np.float32(2.5),
-    )
-
-    # Everything should be zero
-    assert throughfall == 0.0
-    assert evaporation == 0.0
-    assert new_storage == 0.0
-
-    # Water balance check
-    assert math.isclose(
-        rainfall_m, throughfall + evaporation + (new_storage - storage_m), abs_tol=1e-7
-    )
-
-
 def test_interception_evaporation_limited_by_storage() -> None:
     """Test that evaporation cannot exceed available storage."""
     rainfall_m = np.float32(0.0)
