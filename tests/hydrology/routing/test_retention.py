@@ -132,6 +132,7 @@ def _make_local_inertial(
         min_slope=min_slope,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
         floodplain_profile_widths_m=np.zeros((n_cells, 10), dtype=np.float32),
         waterbody_lake_area=waterbody_lake_area,

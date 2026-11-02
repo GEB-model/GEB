@@ -27,10 +27,12 @@ from .geometry import (
     GEOM_IN_INVERSE_INTERFACE_LENGTH,
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
+    GEOM_IN_LEVEE_DEPTH,
     GEOM_IN_RIVER_WIDTH,
     GEOM_IN_SHAPE_EXPONENT,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
     InertialGeometry,
+    compute_overbank_area_from_depth,
     compute_overbank_depth_and_top_width,
     compute_top_width_from_depth,
     compute_top_width_from_overbank_depth,
@@ -253,10 +255,18 @@ def _compute_reach_stage_and_cfl_depth(
     """
     bankfull_volume_m3: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME]
     bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
+    levee_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
     inv_shape_exp_plus_one: np.float32 = geom_inbank[
         reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
     ]
     bed_elevation: np.float32 = geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
+    inv_reach_len: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
+    bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
+
+    delta_h_levee: np.float32 = levee_depth_m - bankfull_depth_m
+    levee_volume_m3: np.float32 = bankfull_volume_m3 + (delta_h_levee * bf_width) / max(
+        inv_reach_len, np.float32(1e-12)
+    )
 
     if volume_m3 <= bankfull_volume_m3 or bankfull_depth_m <= np.float32(0.0):
         if volume_m3 <= np.float32(0.0):
@@ -276,22 +286,50 @@ def _compute_reach_stage_and_cfl_depth(
         h_vol: np.float32 = channel_depth_m * inv_shape_exp_plus_one
         return stage, h_vol
 
-    overbank_volume: np.float32 = volume_m3 - bankfull_volume_m3
-    inv_reach_len: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
-    bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
-    fp_slope_m_per_m: np.float32 = geom_inbank[
-        reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
-    ]
-    floodplain_depth, top_width = compute_overbank_depth_and_top_width(
-        overbank_area=overbank_volume * inv_reach_len,
-        bankfull_width_m=bf_width,
-        floodplain_areas=geom_floodplain_areas[reach_idx],
-        floodplain_widths=geom_floodplain_widths[reach_idx],
-        floodplain_side_slope_m_per_m=fp_slope_m_per_m,
-    )
-    stage = bed_elevation + bankfull_depth_m + floodplain_depth
-    h_vol = (volume_m3 * inv_reach_len) / max(top_width, np.float32(1e-3))
-    return stage, h_vol
+    elif volume_m3 <= levee_volume_m3:
+        # Water is above bankfull but confined between levees
+        extra_volume: np.float32 = volume_m3 - bankfull_volume_m3
+        embanked_depth: np.float32 = (extra_volume * inv_reach_len) / max(
+            bf_width, np.float32(1e-3)
+        )
+        stage = bed_elevation + bankfull_depth_m + embanked_depth
+        h_vol = (volume_m3 * inv_reach_len) / max(bf_width, np.float32(1e-3))
+        return stage, h_vol
+
+    else:
+        # Water exceeds levee crest. The protected floodplain behind the levees lies at
+        # natural ground (bankfull level): it first fills up to crest level while the stage
+        # stays at the crest, after which river and floodplain rise together.
+        fp_slope_m_per_m: np.float32 = geom_inbank[
+            reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
+        ]
+        overbank_area: np.float32 = (volume_m3 - bankfull_volume_m3) * inv_reach_len
+        crest_fill_area: np.float32 = compute_overbank_area_from_depth(
+            overbank_depth_m=delta_h_levee,
+            bankfull_width_m=bf_width,
+            floodplain_areas=geom_floodplain_areas[reach_idx],
+            floodplain_widths=geom_floodplain_widths[reach_idx],
+            side_slope_z=fp_slope_m_per_m,
+        )
+        if overbank_area <= crest_fill_area:
+            stage = bed_elevation + levee_depth_m
+            top_width: np.float32 = compute_top_width_from_overbank_depth(
+                overbank_depth_m=delta_h_levee,
+                bankfull_width_m=bf_width,
+                floodplain_widths=geom_floodplain_widths[reach_idx],
+                side_slope_z=fp_slope_m_per_m,
+            )
+        else:
+            floodplain_depth, top_width = compute_overbank_depth_and_top_width(
+                overbank_area=overbank_area,
+                bankfull_width_m=bf_width,
+                floodplain_areas=geom_floodplain_areas[reach_idx],
+                floodplain_widths=geom_floodplain_widths[reach_idx],
+                floodplain_side_slope_m_per_m=fp_slope_m_per_m,
+            )
+            stage = bed_elevation + bankfull_depth_m + floodplain_depth
+        h_vol = (volume_m3 * inv_reach_len) / max(top_width, np.float32(1e-3))
+        return stage, h_vol
 
 
 @njit(inline="always")
@@ -398,22 +436,22 @@ def _compute_reach_cfl_depths(
             reach_idx, GEOM_CFL_MANNING_COEFFICIENT
         ] * (total_flow_rate ** np.float32(0.6))
         bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
-        if raw_depth_from_flow > bankfull_depth_m and bankfull_depth_m > np.float32(
-            0.0
-        ):
-            extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
+        levee_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
+        if raw_depth_from_flow > levee_depth_m and levee_depth_m > np.float32(0.0):
+            extra_depth: np.float32 = raw_depth_from_flow - levee_depth_m
             bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
             fp_slope_m_per_m: np.float32 = geom_inbank[
                 reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
             ]
+            # Floodplain behind the levees lies at natural ground (bankfull level)
             top_width_flow: np.float32 = compute_top_width_from_overbank_depth(
-                overbank_depth_m=extra_depth,
+                overbank_depth_m=raw_depth_from_flow - bankfull_depth_m,
                 bankfull_width_m=bf_width,
                 floodplain_widths=geom_floodplain_widths[reach_idx],
                 side_slope_z=fp_slope_m_per_m,
             )
             width_ratio: np.float32 = bf_width / max(top_width_flow, bf_width)
-            h_flow = bankfull_depth_m + (extra_depth * width_ratio)
+            h_flow = levee_depth_m + (extra_depth * width_ratio)
         else:
             h_flow = raw_depth_from_flow
 
@@ -455,22 +493,22 @@ def _evaluate_reach_cfl_dt_from_depth(
             reach_idx, GEOM_CFL_MANNING_COEFFICIENT
         ] * evaluate_discharge_pow_0_6(total_flow_rate)
         bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
-        if raw_depth_from_flow > bankfull_depth_m and bankfull_depth_m > np.float32(
-            0.0
-        ):
-            extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
+        levee_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
+        if raw_depth_from_flow > levee_depth_m and levee_depth_m > np.float32(0.0):
+            extra_depth: np.float32 = raw_depth_from_flow - levee_depth_m
             bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
             fp_slope_m_per_m: np.float32 = geom_inbank[
                 reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
             ]
+            # Floodplain behind the levees lies at natural ground (bankfull level)
             top_width_flow: np.float32 = compute_top_width_from_overbank_depth(
-                overbank_depth_m=extra_depth,
+                overbank_depth_m=raw_depth_from_flow - bankfull_depth_m,
                 bankfull_width_m=bf_width,
                 floodplain_widths=geom_floodplain_widths[reach_idx],
                 side_slope_z=fp_slope_m_per_m,
             )
             width_ratio: np.float32 = bf_width / max(top_width_flow, bf_width)
-            h_flow = bankfull_depth_m + (extra_depth * width_ratio)
+            h_flow = levee_depth_m + (extra_depth * width_ratio)
         else:
             h_flow = raw_depth_from_flow
 
@@ -1162,6 +1200,7 @@ def _apply_confluence_inflow_limits(
         ]
 
         shape_exp_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_SHAPE_EXPONENT]
+        levee_depth_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
         top_width_c: np.float32 = max(
             compute_top_width_from_depth(
                 water_depth_m=depth_c,
@@ -1170,6 +1209,7 @@ def _apply_confluence_inflow_limits(
                 shape_exponent=shape_exp_c,
                 floodplain_widths=geom_floodplain_widths[reach_idx],
                 side_slope_z=fp_slope_c,
+                levee_depth_m=levee_depth_c,
             ),
             bf_width_c * np.float32(0.1),
         )

@@ -173,6 +173,7 @@ def calculate_wetted_channel_area(
     river_length_m: ArrayFloat32,
     cell_area_m2: ArrayFloat32,
     is_waterbody: ArrayBool,
+    levee_depth_m: ArrayFloat32,
     wetted_channel_area_m2: ArrayFloat32,
 ) -> None:
     """Calculates wetted channel area for all river reaches across the grid in parallel without allocations.
@@ -199,6 +200,8 @@ def calculate_wetted_channel_area(
         river_length_m: Channel length per grid cell (meters).
         cell_area_m2: Planform area per grid cell (m²).
         is_waterbody: Boolean mask identifying lake/waterbody cells.
+        levee_depth_m: Levee crest depth above the channel bed (meters); equals bankfull depth
+            where there are no levees. Top width stays at bankfull width until the crest is overtopped.
         wetted_channel_area_m2: Pre-allocated output array receiving wetted channel area (m²).
     """
     n: int = use_kinematic.shape[0]
@@ -224,6 +227,7 @@ def calculate_wetted_channel_area(
                 shape_exponent=shape_exponent[i],
                 floodplain_widths=floodplain_profile_widths_m[i],
                 side_slope_z=floodplain_side_slope_m_per_m[i],
+                levee_depth_m=levee_depth_m[i],
             )
 
         wetted_channel_area_m2[i] = min(
@@ -503,6 +507,7 @@ class RoutingVariables(Bucket):
     river_width_alpha: ArrayFloat32
     river_width_beta: ArrayFloat32
     river_transmission_loss_m3: ArrayFloat32
+    levee_depth_m: ArrayFloat32
 
 
 def select_active_rivers(
@@ -865,6 +870,7 @@ class Routing(Module):
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
         rivers["return_period_2_years_daily_m3_per_s"] = np.nan
         rivers["width_is_observed"] = rivers["width"].notnull()
+        rivers["levee_depth"] = np.nan
 
         # set river ID to -1 for waterbody cells
         river_ids: TwoDArrayInt32 = self.grid.load2d(
@@ -933,7 +939,55 @@ class Routing(Module):
                 [grid_linear_mapping[xy[1], xy[0]].item() for xy in xys]
             )
         )
+        if bool(self.config["flood_protection"]["enabled"]):
+            self._assign_flood_protection_standards(rivers)
         return rivers, river_ids_compressed, river_ids_no_waterbodies_removed
+
+    def _assign_flood_protection_standards(self, rivers: gpd.GeoDataFrame) -> None:
+        """Assign flood protection standards (years) from the build table to rivers in place.
+
+        Every river reach represented in the routing grid must have a protection standard
+        in whole years in the table, because protected reaches are designed for the
+        simulated discharge of that return period, which is fitted in whole years.
+        Reaches not represented in the grid (e.g. downstream of the model domain) are not
+        simulated and receive NaN if absent from the table.
+
+        Args:
+            rivers: River network GeoDataFrame indexed by COMID, with a final
+                "represented_in_grid" column.
+
+        Raises:
+            ValueError: If any represented river reach is missing from the table or has
+                a protection standard that is not a whole number of years.
+        """
+        table_key: str = "flood_protection_standards/flood_protection_standards"
+        protection_standards: pd.Series = pd.read_parquet(
+            self.model.files["table"][table_key]
+        )["flood_protection_standard"]
+
+        represented: pd.Index = rivers.index[rivers["represented_in_grid"]]
+        represented_standards: pd.Series = protection_standards.reindex(represented)
+        missing_comids: pd.Index = represented[represented_standards.isna().values]
+        if len(missing_comids) > 0:
+            raise ValueError(
+                f"{len(missing_comids)} river reaches represented in the grid have no "
+                f"protection standard in table '{table_key}' "
+                f"(e.g. COMIDs {list(missing_comids[:10])}). "
+                "Rebuild the flood protection standards table."
+            )
+        non_integer_comids: pd.Index = represented[
+            (represented_standards != np.round(represented_standards)).values
+        ]
+        if len(non_integer_comids) > 0:
+            raise ValueError(
+                f"{len(non_integer_comids)} river reaches have a protection standard that "
+                f"is not a whole number of years in table '{table_key}' "
+                f"(e.g. COMIDs {list(non_integer_comids[:10])}). "
+                "Rebuild the flood protection standards table."
+            )
+        rivers["flood_protection_standard"] = (
+            rivers.index.to_series().map(protection_standards).values.astype(np.float32)
+        )
 
     def _update_rivers_geometry(
         self,
@@ -942,6 +996,7 @@ class Routing(Module):
         manning_grid: ArrayFloat32,
         floodplain_profile_widths_grid_m: TwoDArrayFloat32,
         floodplain_side_slope_grid_m_per_m: ArrayFloat32,
+        levee_depth_grid: ArrayFloat32,
     ) -> None:
         """Update bankfull width, depth, and Manning's n on river reaches GeoDataFrame from routing grid arrays.
 
@@ -960,6 +1015,8 @@ class Routing(Module):
             manning_grid: Channel Manning roughness per routing grid cell (s/m^(1/3)).
             floodplain_profile_widths_grid_m: 10-point cross-sectional top widths at fixed depth levels per routing grid cell (meters).
             floodplain_side_slope_grid_m_per_m: Valley side-slope ratio z per routing grid cell (m/m horizontal:vertical).
+            levee_depth_grid: Levee crest channel depth per routing grid cell (meters), assigned as
+                reach averages to self.var.rivers['levee_depth'].
         """
         valid_river_cell_mask: ArrayBool = self.var.river_ids != -1
         valid_reach_ids: ArrayInt32 = self.var.river_ids[valid_river_cell_mask]
@@ -979,6 +1036,7 @@ class Routing(Module):
             "slope": raw_slope[valid_river_cell_mask],
             "river_width_alpha": self.var.river_width_alpha[valid_river_cell_mask],
             "river_width_beta": self.var.river_width_beta[valid_river_cell_mask],
+            "levee_depth": levee_depth_grid[valid_river_cell_mask],
         }
         grid_dict["floodplain_side_slope_m_per_m"] = floodplain_side_slope_grid_m_per_m[
             valid_river_cell_mask
@@ -991,6 +1049,7 @@ class Routing(Module):
             "river_width_alpha",
             "river_width_beta",
             "floodplain_side_slope_m_per_m",
+            "levee_depth",
         ]
         for k in range(NUM_FLOODPLAIN_LEVELS):
             col_k: str = f"floodplain_profile_width_{k}_m"
@@ -1196,6 +1255,12 @@ class Routing(Module):
                 float(raw_summed_q),
                 bool(is_observed),
             ]
+
+            # Levee height scales with the discharge-weighted upstream levee-to-bankfull depth ratio
+            levee_ratio: float = float(
+                (weights * (valid_up["levee_depth"] / valid_up["depth"])).sum()
+            )
+            rivers.loc[reach_id, "levee_depth"] = float(estimated_depth * levee_ratio)
 
     @property
     def bankfull_discharge_multiplier(self) -> float:
@@ -1480,6 +1545,167 @@ class Routing(Module):
 
         return bankfull_depth_m
 
+    def calculate_levee_depth(
+        self,
+        bankfull_top_width_m: ArrayFloat32,
+        bankfull_depth_m: ArrayFloat32,
+        use_simulated_bankfull_q: bool,
+    ) -> ArrayFloat32:
+        """Calculate levee crest depth corresponding to flood protection standards across the routing grid.
+
+        Separates geomorphic bankfull depth (h_bf corresponding to the ~2-year flood) from flood protection
+        levee depth (h_levee corresponding to flood protection standards T_prot from FLOPROS or user configuration).
+        Flow between bankfull and levee crest remains confined within embankments with expanding hydraulic radius
+        and full conveyance, only spilling onto the HAND floodplain once levee crest is overtopped.
+
+        For reaches with protection standards T_prot <= 2 years, cells outside river reaches, or when
+        flood protection is disabled, levee depth is identical to bankfull depth. For protected reaches
+        (T_prot > 2 years), the steady backwater network solver is run with the design discharge Q_prot
+        to determine the levee crest profile. Q_prot is the simulated discharge of return period T_prot
+        once discharge has been simulated; before that, the bankfull discharge proxy is scaled from
+        T = 2 to T_prot with a Gumbel/exponential-tail growth factor, analogous to the bankfull depth
+        initialization.
+
+        Args:
+            bankfull_top_width_m: Bankfull top channel width per cell (meters).
+            bankfull_depth_m: Bankfull channel depth per cell (meters).
+            use_simulated_bankfull_q: Whether to use simulated flood return period discharges from
+                self.var.rivers. Must be False during the first year of simulation or spinup.
+
+        Returns:
+            Levee crest channel depth per cell (meters), bounded below by bankfull_depth_m.
+
+        Raises:
+            ValueError: If simulated design discharges are missing for protected reaches, or if
+                calculated levee depth exceeds 250 m.
+        """
+        if not self.config["flood_protection"]["enabled"]:
+            return bankfull_depth_m.copy()
+
+        # Map flood protection standards to routing grid cells; cells outside river reaches are unprotected
+        is_river_cell: ArrayBool = self.var.river_ids != -1
+        protection_standard_grid: ArrayFloat32 = np.full(
+            self.var.river_ids.shape, np.float32(2.0), dtype=np.float32
+        )
+        protection_standard_grid[is_river_cell] = (
+            self.var.rivers["flood_protection_standard"]
+            .reindex(self.var.river_ids[is_river_cell])
+            .values
+        )
+        is_protected: ArrayBool = protection_standard_grid > np.float32(2.0)
+
+        # If no cells exceed 2-year protection, levee depth equals bankfull depth everywhere
+        if not bool(np.any(is_protected)):
+            return bankfull_depth_m.copy()
+
+        width_params: dict[str, Any] = self.config["river_width"]
+        default_alpha: np.float32 = np.float32(width_params["default_alpha"])
+        default_beta: np.float32 = np.float32(width_params["beta"])
+
+        depth_params: dict[str, Any] = self.config["river_depth"]
+        min_depth_m: np.float32 = np.float32(depth_params["min_depth_m"])
+        shape_exponent_val: np.float32 = np.float32(depth_params["shape_exponent"])
+        use_observed_width_as_bankfull: bool = bool(
+            depth_params["use_observed_width_as_bankfull"]
+        )
+
+        q_mult: np.float32 = np.float32(self.bankfull_discharge_multiplier)
+
+        # Bankfull discharge proxy from width inversion, as in calculate_bankfull_depth
+        q_proxy: ArrayFloat32
+        if use_observed_width_as_bankfull:
+            q_proxy = (bankfull_top_width_m / default_alpha) ** (
+                np.float32(1.0) / default_beta
+            )
+        else:
+            width_alpha: ArrayFloat32 = self.var.river_width_alpha
+            width_beta: ArrayFloat32 = self.var.river_width_beta
+            alpha: ArrayFloat32 = np.maximum(width_alpha, np.float32(1.0))
+            beta: ArrayFloat32 = np.maximum(width_beta, np.float32(0.1))
+            q_proxy = (bankfull_top_width_m / alpha) ** (np.float32(1.0) / beta)
+
+        design_discharge_m3_s: ArrayFloat32
+        if use_simulated_bankfull_q:
+            # Unprotected cells carry their bankfull discharge, which sets the backwater
+            # boundary for protected reaches upstream
+            q2_mapped: ArrayFloat32 = (
+                self.var.rivers.loc[
+                    self.var.rivers["represented_in_grid"],
+                    "return_period_2_years_daily_m3_per_s",
+                ]
+                .reindex(self.var.river_ids)
+                .values.astype(np.float32)
+            )
+            design_discharge_m3_s = np.where(is_river_cell, q2_mapped, q_proxy).astype(
+                np.float32
+            )
+
+            # Protected cells use the simulated discharge of their protection return period
+            for protection_standard in np.unique(
+                protection_standard_grid[is_protected]
+            ):
+                column: str = (
+                    f"return_period_{int(protection_standard)}_years_daily_m3_per_s"
+                )
+                cells: ArrayBool = protection_standard_grid == protection_standard
+                design_discharge_m3_s[cells] = (
+                    self.var.rivers[column]
+                    .reindex(self.var.river_ids[cells])
+                    .values.astype(np.float32)
+                )
+            if bool(np.any(np.isnan(design_discharge_m3_s[is_protected]))):
+                raise ValueError(
+                    "use_simulated_bankfull_q is True, but simulated design discharges for "
+                    "the flood protection return periods are missing for protected reaches."
+                )
+        else:
+            # Growth factor from T = 2 to T_prot under Gumbel/exponential tail
+            growth_factors: ArrayFloat32 = np.float32(1.0) + np.float32(0.25) * np.log(
+                protection_standard_grid / np.float32(2.0)
+            )
+            design_discharge_m3_s = q_proxy * growth_factors
+        levee_discharge_m3_s: ArrayFloat32 = design_discharge_m3_s * q_mult
+
+        bed_elevation: ArrayFloat32 = self.grid.load2d(
+            self.model.files["grid"]["routing/bankfull_river_elevation_m"]
+        )
+        if self.hydrology.waterbodies.n > 0:
+            bed_elevation = self.hydrology.waterbodies.flatten_waterbody_elevations(
+                bed_elevation
+            )
+
+        is_kinematic: ArrayBool = self.var.river_ids == -1
+        levee_depth_m: ArrayFloat32 = solve_steady_backwater_network(
+            compressed_seq=self._compressed_routing_seq,
+            compressed_ds=self._compressed_ds,
+            discharge=levee_discharge_m3_s,
+            width=bankfull_top_width_m,
+            bed_elevation=bed_elevation,
+            reach_length=self.grid.var.river_length,
+            manning_n=self.grid.var.river_mannings,
+            shape_exponent=shape_exponent_val,
+            min_depth_m=min_depth_m,
+            is_kinematic=is_kinematic,
+            min_kinematic_slope_m_per_m=MINIMUM_KINEMATIC_SLOPE_M_PER_M,
+        )
+
+        # Unprotected cells have no levees; levees never lie below the bankfull depth
+        levee_depth_m = np.where(
+            is_protected,
+            np.maximum(levee_depth_m, bankfull_depth_m),
+            bankfull_depth_m,
+        )
+
+        max_realistic_depth_m: np.float32 = np.float32(250.0)
+        if not bool(np.all(levee_depth_m <= max_realistic_depth_m)):
+            max_val: float = float(np.nanmax(levee_depth_m))
+            raise ValueError(
+                f"Calculated levee depth exceeds realistic bounds ({max_realistic_depth_m} m). "
+                f"Max depth found: {max_val:.2f} m."
+            )
+
+        return levee_depth_m
+
     def set_router(self) -> None:
         """Initialize the local inertial routing algorithm with derived river geometry.
 
@@ -1546,6 +1772,12 @@ class Routing(Module):
             bankfull_top_width_m=bankfull_top_width_m,
             use_simulated_bankfull_q=use_simulated_bankfull_q,
         )
+        levee_depth_m: ArrayFloat32 = self.calculate_levee_depth(
+            bankfull_top_width_m=bankfull_top_width_m,
+            bankfull_depth_m=bankfull_depth_m,
+            use_simulated_bankfull_q=use_simulated_bankfull_q,
+        )
+        self.var.levee_depth_m = levee_depth_m
 
         # Update derived bankfull width, depth, and floodplain geometry to self.var.rivers
         self._update_rivers_geometry(
@@ -1554,6 +1786,7 @@ class Routing(Module):
             manning_grid=self.grid.var.river_mannings,
             floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
             floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
+            levee_depth_grid=levee_depth_m,
         )
 
         bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
@@ -1650,6 +1883,7 @@ class Routing(Module):
             rivers_gdf=self.var.rivers,
             shape_exponent=shape_exponent,
             bankfull_depth_m=bankfull_depth_m,
+            levee_depth_m=levee_depth_m,
             floodplain_side_slope_m_per_m=self.floodplain_side_slope_m_per_m,
             waterbody_lake_area=self.hydrology.waterbodies.var.lake_area,
             waterbody_lake_factor=waterbody_lake_factor,
@@ -2088,7 +2322,17 @@ class Routing(Module):
                     bankfull_top_width_m=dynamic_width,
                     use_simulated_bankfull_q=True,
                 )
-                self.router.update_channel_geometry(dynamic_width, dynamic_depth_m)
+                dynamic_levee_depth_m: ArrayFloat32 = self.calculate_levee_depth(
+                    bankfull_top_width_m=dynamic_width,
+                    bankfull_depth_m=dynamic_depth_m,
+                    use_simulated_bankfull_q=True,
+                )
+                self.var.levee_depth_m = dynamic_levee_depth_m
+                self.router.update_channel_geometry(
+                    river_width=dynamic_width,
+                    bankfull_depth_m=dynamic_depth_m,
+                    levee_depth_m=dynamic_levee_depth_m,
+                )
 
         for hour in range(24):
             # increment inflow index for next hour
@@ -2185,6 +2429,7 @@ class Routing(Module):
                 cell_area_m2=self.grid.var.cell_area,
                 is_waterbody=self._wb_cell_mask,
                 wetted_channel_area_m2=self._wetted_channel_area_buffer_m2,
+                levee_depth_m=self.var.levee_depth_m,
             )
 
             calculate_potential_river_evaporation(
@@ -2540,6 +2785,17 @@ class Routing(Module):
                 else [activation_threshold_return_period_years]
             )
         )
+        if self.config["flood_protection"]["enabled"] and (
+            self.model.in_spinup or not self.fix_river_geometry_after_spinup
+        ):
+            # Design discharges for levees at the (whole-year) protection standards
+            for protection_standard in (
+                self.var.rivers["flood_protection_standard"].dropna().unique()
+            ):
+                if protection_standard > 2.0:
+                    return_period: int = int(protection_standard)
+                    if return_period not in return_periods_to_fit:
+                        return_periods_to_fit.append(return_period)
         for idx in tqdm(
             active_rivers.index,
             total=len(active_rivers),
@@ -2587,9 +2843,16 @@ class Routing(Module):
                 bankfull_top_width_m=self.var.river_width,
                 use_simulated_bankfull_q=True,
             )
+            updated_levee_depth: ArrayFloat32 = self.calculate_levee_depth(
+                bankfull_top_width_m=self.var.river_width,
+                bankfull_depth_m=updated_bankfull_depth,
+                use_simulated_bankfull_q=True,
+            )
+            self.var.levee_depth_m = updated_levee_depth
             self.router.update_channel_geometry(
                 river_width=self.var.river_width,
                 bankfull_depth_m=updated_bankfull_depth,
+                levee_depth_m=updated_levee_depth,
             )
             self._update_rivers_geometry(
                 width_grid=self.var.river_width,
@@ -2597,6 +2860,7 @@ class Routing(Module):
                 manning_grid=self.grid.var.river_mannings,
                 floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
                 floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
+                levee_depth_grid=updated_levee_depth,
             )
 
         for basin_id in range(len(self.retention_basin_data)):

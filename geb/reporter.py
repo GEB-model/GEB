@@ -1200,6 +1200,22 @@ class Reporter:
                                     "_group": "bankfull_width_rivers_yearly_m",
                                     "_group_key": str(river_ID_int),
                                 }
+                                bankfull_reporters[
+                                    f"levee_depth_river_yearly_m_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": (
+                                        f"sample_loc,{river_ID_int},levee_depth"
+                                    ),
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "levee_depth_rivers_yearly_m",
+                                    "_group_key": str(river_ID_int),
+                                }
                                 for k in range(10):
                                     bankfull_reporters[
                                         f"floodplain_profile_width_{k}_river_yearly_m_{river_ID_int}"

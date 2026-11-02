@@ -848,6 +848,7 @@ class TestSpecialExportersSingleFile:
         rivers_data = {
             "depth": [1.5, 2.5],
             "width": [10.0, 20.0],
+            "levee_depth": [1.5, 3.5],
             "return_period_2_years_daily_m3_per_s": [50.0, 120.0],
             "floodplain_side_slope_m_per_m": [2.0, 2.0],
         }

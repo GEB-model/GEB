@@ -19,6 +19,7 @@ from geb.hydrology.routing.geometry import (
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_PERIMETER,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
+    GEOM_IN_LEVEE_DEPTH,
     GEOM_IN_MANNING_N_SQUARED,
     GEOM_IN_RIVER_WIDTH,
     GEOM_IN_SHAPE_EXPONENT,
@@ -144,6 +145,7 @@ def solve_inertial_momentum(
         return np.float32(0.0)
 
     bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
+    levee_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
     inv_shape_exponent_plus_one: np.float32 = geom_inbank[
         reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
     ]
@@ -169,6 +171,7 @@ def solve_inertial_momentum(
         width_over_sqrt_bankfull_depth=geom_inbank[
             reach_idx, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH
         ],
+        levee_depth_m=levee_depth_m,
     )
 
     # Semi-implicit Manning friction term: A * R^(4/3) = A * (A / P)^(4/3)

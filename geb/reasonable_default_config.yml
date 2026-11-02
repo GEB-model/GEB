@@ -88,6 +88,8 @@ hydrology:
     retention_basins:
       release_threshold_factor: 0.85
       activation_threshold_return_period_years: 2
+    flood_protection:
+      enabled: true
     riverbed_hydraulic_conductivity_multiplier: 0.1
     river_width:
       default_alpha: 7.2

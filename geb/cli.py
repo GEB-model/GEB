@@ -511,14 +511,15 @@ def exec(
 
 def click_build_options(
     build_config: Path = BUILD_DEFAULT,
-    region: Path = REGION_DEFAULT,
+    region: Path | None = REGION_DEFAULT,
     build_config_help_extra: str | None = None,
 ) -> Any:
     """Decorator to add build options to a click command.
 
     Args:
         build_config: Default path to the build config file.
-        region: Default path to the region config file.
+        region: Default path to the region config file, or None for commands that
+            do not use a region config file.
         build_config_help_extra: Extra help text for the build config option.
 
     Returns:
@@ -550,13 +551,6 @@ def click_build_options(
             default=Path(build_config),
             help=build_config_help,
         )
-        @click.option(
-            "--region",
-            "-r",
-            type=click.Path(path_type=Path),
-            default=Path(region),
-            help=f"Path of the model region configuration file. Defaults to '{region}'.",
-        )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for build options.
@@ -570,7 +564,15 @@ def click_build_options(
             """
             return func(*args, **kwargs)
 
-        return wrapper
+        if region is None:
+            return wrapper
+        return click.option(
+            "--region",
+            "-r",
+            type=click.Path(path_type=Path),
+            default=Path(region),
+            help=f"Path of the model region configuration file. Defaults to '{region}'.",
+        )(wrapper)
 
     return decorator
 
@@ -716,7 +718,7 @@ def build(*args: Any, **kwargs: Any) -> None:
 
 
 @cli.command()
-@click_build_options()
+@click_build_options(region=None)
 @click.option(
     "--from-model",
     type=click.Path(path_type=Path),
@@ -737,6 +739,7 @@ def alter(*args: Any, **kwargs: Any) -> None:
 @cli.command()
 @click_build_options(
     build_config=UPDATE_DEFAULT,
+    region=None,
     build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
 )
 def update(*args: Any, **kwargs: Any) -> None:
@@ -750,7 +753,7 @@ def update(*args: Any, **kwargs: Any) -> None:
 
 
 @cli.command()
-@click_build_options()
+@click_build_options(region=None)
 def update_version(*args: Any, **kwargs: Any) -> None:
     """Update the model version file to the current model version.
 

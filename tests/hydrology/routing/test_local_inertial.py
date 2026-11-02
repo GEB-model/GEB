@@ -166,6 +166,7 @@ def _make_local_inertial(
         min_slope=min_slope,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
         floodplain_profile_widths_m=floodplain_profile_widths_m,
         waterbody_lake_area=waterbody_lake_area,
@@ -2408,7 +2409,9 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
     # Dynamically update river geometry as discharge develops (e.g. from 0.5m to 12.0m)
     updated_widths = np.array([8.0, 12.0, 15.0], dtype=np.float32)
     router.update_channel_geometry(
-        river_width=updated_widths, bankfull_depth_m=router.bankfull_depth
+        river_width=updated_widths,
+        bankfull_depth_m=router.bankfull_depth,
+        levee_depth_m=router.bankfull_depth,
     )
 
     np.testing.assert_array_almost_equal(
@@ -2766,6 +2769,7 @@ def test_local_inertial_waterbody_parameters_required(
         "rivers_gdf": rivers_gdf,
         "shape_exponent": shape_exp,
         "bankfull_depth_m": bk_depth,
+        "levee_depth_m": bk_depth,
         "floodplain_width_m": fp_width,
         # Missing waterbody_lake_area, etc.
     }
@@ -2792,6 +2796,7 @@ def test_local_inertial_waterbody_parameters_required(
             rivers_gdf=rivers_gdf,
             shape_exponent=shape_exp,
             bankfull_depth_m=bk_depth,
+            levee_depth_m=bk_depth,
             floodplain_side_slope_m_per_m=np.full(n_cells, 2.0, dtype=np.float32),
             floodplain_profile_widths_m=np.zeros((n_cells, 10), dtype=np.float32),
             waterbody_lake_area=np.ones(2, dtype=np.float32),  # n_wb is 0
@@ -4356,7 +4361,9 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
     # Dynamic channel geometry calibration occurs during spinup
     dynamic_width: ArrayFloat32 = np.array([2.0, 6.0, 9.0, 12.0], dtype=np.float32)
     router_A.update_channel_geometry(
-        river_width=dynamic_width, bankfull_depth_m=bankfull_depth
+        river_width=dynamic_width,
+        bankfull_depth_m=bankfull_depth,
+        levee_depth_m=bankfull_depth,
     )
 
     # Take step 5 with updated dynamic channel geometry

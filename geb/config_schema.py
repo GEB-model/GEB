@@ -270,6 +270,15 @@ class RetentionBasinsConfig(BaseModel):
     )
 
 
+class FloodProtectionConfig(BaseModel):
+    """Configuration for river flood protection and levees in routing."""
+
+    enabled: bool = Field(
+        ...,
+        description="Whether to represent levees and embanked channel conveyance based on flood protection standards.",
+    )
+
+
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
 
@@ -302,6 +311,9 @@ class RoutingConfig(BaseModel):
     )
     retention_basins: RetentionBasinsConfig = Field(
         ..., description="Retention basins configuration."
+    )
+    flood_protection: FloodProtectionConfig = Field(
+        ..., description="Flood protection and levee configuration."
     )
     riverbed_hydraulic_conductivity_multiplier: float = Field(
         ...,

@@ -222,6 +222,7 @@ class LocalInertial:
         rivers_gdf: gpd.GeoDataFrame,
         shape_exponent: ArrayFloat32,
         bankfull_depth_m: ArrayFloat32,
+        levee_depth_m: ArrayFloat32,
         floodplain_side_slope_m_per_m: ArrayFloat32,
         floodplain_profile_widths_m: TwoDArrayFloat32,
         waterbody_lake_area: ArrayFloat32,
@@ -254,6 +255,8 @@ class LocalInertial:
             rivers_gdf: Vector GeoDataFrame containing river geometry attributes.
             shape_exponent: Power-law cross-sectional shape exponent per reach (dimensionless).
             bankfull_depth_m: Bankfull channel depth before floodplain spilling (meters).
+            levee_depth_m: Levee crest depth above the channel bed per reach (meters); equals
+                bankfull depth where there are no levees.
             floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
             waterbody_lake_area: Surface area of each waterbody (m²).
             floodplain_profile_widths_m: 10-point cross-sectional top widths at fixed depth levels (meters).
@@ -325,6 +328,7 @@ class LocalInertial:
         self.retention_max_storage_m3 = retention_max_storage_m3
         self.controlled_retention = controlled_retention
         self.bankfull_depth = bankfull_depth_m
+        self.levee_depth = levee_depth_m.astype(np.float32)
 
         n_nodes_total = is_pit.size
         is_ocean_pit_orig = np.zeros(n_nodes_total, dtype=np.bool_)
@@ -442,6 +446,7 @@ class LocalInertial:
         river_length_perm: ArrayFloat32 = self.river_length[sorted_idxs]
         self._river_width: ArrayFloat32 = self.river_width[sorted_idxs]
         self._bankfull_depth: ArrayFloat32 = self.bankfull_depth[sorted_idxs]
+        self._levee_depth: ArrayFloat32 = self.levee_depth[sorted_idxs]
         bed_elevation_perm: ArrayFloat32 = self.bed_elevation[sorted_idxs]
         use_kinematic_perm: ArrayBool = use_kinematic[sorted_idxs]
         is_pit_perm: ArrayBool = is_pit[sorted_idxs]
@@ -771,6 +776,9 @@ class LocalInertial:
         bankfull_depth_inertial: ArrayFloat32 = self._bankfull_depth[
             inertial_start:inertial_end
         ]
+        levee_depth_inertial: ArrayFloat32 = self._levee_depth[
+            inertial_start:inertial_end
+        ]
         self._geometry: InertialGeometry = build_inertial_geometry(
             river_length=self._river_length_inertial,
             river_width=river_width_inertial,
@@ -784,23 +792,29 @@ class LocalInertial:
             manning_n_sq=self._manning_n_sq_inertial,
             inv_dx_interface=self._routing_topology.inv_dx_interface,
             pit_slope=self._pit_slope[inertial_start:inertial_end],
+            levee_depth=levee_depth_inertial,
         )
 
     def update_channel_geometry(
         self,
         river_width: ArrayFloat32,
         bankfull_depth_m: ArrayFloat32,
+        levee_depth_m: ArrayFloat32,
     ) -> None:
-        """Updates channel bankfull top width and depth dynamically during simulation.
+        """Updates channel bankfull top width, depth, and levee depth dynamically during simulation.
 
         Args:
             river_width: Updated channel bankfull top width (meters).
             bankfull_depth_m: Updated bankfull channel depth (meters).
+            levee_depth_m: Updated levee crest depth above the channel bed (meters); equals
+                bankfull depth where there are no levees.
         """
         self.river_width = river_width.astype(np.float32)
         self._river_width = self.river_width[self.sorted_idxs]
         self.bankfull_depth = bankfull_depth_m.astype(np.float32)
         self._bankfull_depth = self.bankfull_depth[self.sorted_idxs]
+        self.levee_depth = levee_depth_m.astype(np.float32)
+        self._levee_depth = self.levee_depth[self.sorted_idxs]
         self._compute_static_geometry()
 
     def calculate_river_storage_from_discharge(

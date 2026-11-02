@@ -9,6 +9,7 @@ from typing import Any, Literal
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyflwdir
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
@@ -16,7 +17,15 @@ from tqdm import tqdm
 from geb.build.data_catalog.global_exposure_model import gem_country_name_aliases
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
-from geb.geb_types import TwoDArrayBool, TwoDArrayInt32
+from geb.geb_types import (
+    ArrayBool,
+    ArrayFloat32,
+    ArrayFloat64,
+    ArrayInt32,
+    ArrayInt64,
+    TwoDArrayBool,
+    TwoDArrayInt32,
+)
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     clip_with_grid,
@@ -2452,35 +2461,183 @@ class Agents(BuildModelBase):
         )
         self.set_array(interest_rate_array, name="agents/farmers/interest_rate")
 
-    @build_method(depends_on=["setup_hydrography"], required=True)
-    def setup_flood_protection_standards(self) -> None:
+    @build_method(depends_on=["setup_hydrography", "setup_buildings"], required=True)
+    def setup_flood_protection_standards(
+        self,
+        building_density_threshold_per_km2: float = 500.0,
+        minimum_upstream_area_km2: float = 250.0,
+        only_non_natural: bool = True,
+    ) -> None:
         """Set up flood protection standards for river subbasins using FLOPROS.
 
-        Writes a parquet table mapping COMID -> flood protection standard (years).
+        For non-natural river stretches (characterized by building density within the derived floodplain
+        exceeding building_density_threshold_per_km2 and contributing upstream area exceeding minimum_upstream_area_km2),
+        flood protection standards from FLOPROS are applied. For natural stretches (rural valleys or headwaters),
+        flood protection defaults to geomorphic bankfull capacity (2.0 years).
+
+        Writes a parquet table mapping COMID -> flood protection standard (whole years, because
+        routing designs levees for the simulated discharge of that return period, which is
+        fitted in whole years).
+
+        Args:
+            building_density_threshold_per_km2: Minimum building density within the derived floodplain (buildings/km²)
+                required to classify a reach as non-natural. Default is 500.0.
+            minimum_upstream_area_km2: Minimum contributing upstream area (km²) required to have engineered flood protection.
+                Headwaters below this area remain natural (T = 2 years). Default is 250.0 km².
+            only_non_natural: Whether to restrict elevated protection levels exclusively to non-natural river reaches.
+
+        Raises:
+            ValueError: If any river subbasin has no FLOPROS protection standard.
         """
-        flopros_gdf = self.data_catalog.fetch("flopros").read()
+        flopros: gpd.GeoDataFrame = self.data_catalog.fetch("flopros").read()
+        subbasins: gpd.GeoDataFrame = self.geom["routing/subbasins"]
+        if flopros.crs != subbasins.crs:
+            flopros = flopros.to_crs(subbasins.crs)
 
-        # do a spatial join to get the FPS for each river subbasin
-        river_subbasins = self.geom["routing/subbasins"]
-
-        # check if the CRS of the FLOPROS data matches the CRS of the river subbasins, and reproject if necessary
-        if flopros_gdf.crs != river_subbasins.crs:
-            flopros_gdf = flopros_gdf.to_crs(river_subbasins.crs)
-
-        river_subbasins_with_fps = gpd.sjoin(
-            river_subbasins, flopros_gdf, how="left", predicate="intersects"
+        # Protection standard per subbasin; take the highest standard if a subbasin
+        # intersects multiple FLOPROS regions
+        subbasins_with_flopros: gpd.GeoDataFrame = gpd.sjoin(
+            subbasins, flopros, how="left", predicate="intersects"
         ).reset_index()
-        # Create a table of COMID -> FPS (aggregate if a subbasin intersects multiple FLOPROS features)
-        comid_to_fps = (
-            river_subbasins_with_fps[["COMID", "flood_protection_standard"]]
-            .groupby("COMID", as_index=True)["flood_protection_standard"]
+        protection_standards: pd.DataFrame = (
+            subbasins_with_flopros.groupby("COMID")["flood_protection_standard"]
             .max()
+            .round()
             .to_frame()
         )
+        missing_comids: pd.Index = protection_standards.index[
+            protection_standards["flood_protection_standard"].isna()
+        ]
+        if len(missing_comids) > 0:
+            raise ValueError(
+                f"{len(missing_comids)} river subbasins do not intersect any FLOPROS "
+                f"polygon with a protection standard (e.g. COMIDs {list(missing_comids[:10])}). "
+                "FLOPROS data is unavailable for (part of) this region."
+            )
 
-        # write to table
+        if only_non_natural:
+            flow_directions: xr.DataArray = self.other[
+                "drainage/original_d8_flow_directions"
+            ]
+            elevation: xr.DataArray = self.other["drainage/original_d8_elevation"]
+            upstream_area_m2: xr.DataArray = self.other[
+                "drainage/original_d8_upstream_area_m2"
+            ]
+            river_ids: xr.DataArray = self.grid["routing/river_ids"]
+            outflow_indices: xr.DataArray = self.grid["idxs_outflow"]
+            cell_area: xr.DataArray = self.grid["cell_area"]
+
+            is_land: TwoDArrayBool = ~np.isnan(flow_directions.values) & (
+                flow_directions.values > 0
+            )
+            flow_raster: pyflwdir.FlwdirRaster = pyflwdir.from_array(
+                np.nan_to_num(flow_directions.values, nan=0.0).astype(np.uint8),
+                ftype="d8",
+                transform=flow_directions.rio.transform(recalc=True),
+                latlon=True,
+                mask=is_land,
+            )
+
+            # Derive floodplains with GFPLAIN hydrogeomorphic scaling
+            is_floodplain: TwoDArrayBool = (
+                flow_raster.floodplains(
+                    elevtn=np.nan_to_num(elevation.values, nan=0.0).astype(np.float32),
+                    uparea=np.nan_to_num(upstream_area_m2.values, nan=0.0).astype(
+                        np.float32
+                    )
+                    / 1e6,
+                    upa_min=1.0,
+                    b=0.3,
+                )
+                > 0
+            )
+
+            # Delineate the high-resolution catchment draining into each river cell
+            is_river_cell: TwoDArrayBool = (river_ids.values != -1) & ~np.isnan(
+                outflow_indices.values
+            )
+            river_cells: ArrayInt64 = np.flatnonzero(is_river_cell)
+            n_river_cells: int = river_cells.size
+            river_cell_catchments: TwoDArrayInt32 = flow_raster.basins(
+                idxs=outflow_indices.values.ravel()[river_cells].astype(np.int64),
+                ids=np.arange(1, n_river_cells + 1, dtype=np.uint32),
+            )
+
+            # Locate buildings on the high-resolution grid; buildings outside the
+            # drainage raster cannot lie in a modelled floodplain
+            buildings: gpd.GeoDataFrame = self.geom["assets/open_building_map"]
+            column_float, row_float = ~flow_directions.rio.transform(recalc=True) * (
+                buildings["x"].values,
+                buildings["y"].values,
+            )
+            columns: ArrayInt64 = np.floor(column_float).astype(np.int64)
+            rows: ArrayInt64 = np.floor(row_float).astype(np.int64)
+            in_raster: ArrayBool = (
+                (columns >= 0)
+                & (columns < flow_directions.shape[1])
+                & (rows >= 0)
+                & (rows < flow_directions.shape[0])
+            )
+            columns, rows = columns[in_raster], rows[in_raster]
+
+            # Count floodplain buildings and floodplain area per river cell catchment
+            building_catchments: ArrayInt32 = river_cell_catchments[rows, columns]
+            building_catchments = building_catchments[
+                is_floodplain[rows, columns] & (building_catchments > 0)
+            ]
+            floodplain_building_count: ArrayInt64 = np.bincount(
+                building_catchments, minlength=n_river_cells + 1
+            )[1:]
+
+            floodplain_pixel_count: ArrayInt64 = np.bincount(
+                river_cell_catchments[is_floodplain & (river_cell_catchments > 0)],
+                minlength=n_river_cells + 1,
+            )[1:]
+            pixel_area_m2: ArrayFloat32 = (
+                cell_area.values.ravel()[river_cells] / self.ldd_scale_factor**2
+            )
+            floodplain_area_km2: ArrayFloat64 = (
+                floodplain_pixel_count * pixel_area_m2 / 1e6
+            ).astype(np.float64)
+
+            # Aggregate river cells to river reaches
+            reach_floodplain: pd.DataFrame = (
+                pd.DataFrame(
+                    {
+                        "COMID": river_ids.values.ravel()[river_cells],
+                        "building_count": floodplain_building_count,
+                        "floodplain_area_km2": floodplain_area_km2,
+                    }
+                )
+                .groupby("COMID")
+                .sum()
+            )
+            reach_building_density_per_km2: pd.Series = reach_floodplain[
+                "building_count"
+            ] / np.maximum(reach_floodplain["floodplain_area_km2"], 1e-4)
+
+            # Subbasins without river cells in the routing grid have no derived floodplain
+            building_density_per_km2: pd.Series = (
+                reach_building_density_per_km2.reindex(
+                    protection_standards.index
+                ).fillna(0.0)
+            )
+            upstream_area_km2: pd.Series = (
+                self.geom["routing/rivers"]["uparea_m2"].loc[protection_standards.index]
+                / 1e6
+            )
+
+            is_natural: pd.Series = (
+                building_density_per_km2 < building_density_threshold_per_km2
+            ) | (upstream_area_km2 < minimum_upstream_area_km2)
+            protection_standards["is_natural"] = is_natural
+            protection_standards["building_density_per_km2"] = building_density_per_km2
+            protection_standards["upstream_area_km2"] = upstream_area_km2
+            protection_standards.loc[is_natural, "flood_protection_standard"] = 2.0
+
         self.set_table(
-            comid_to_fps, name="flood_protection_standards/flood_protection_standards"
+            protection_standards,
+            name="flood_protection_standards/flood_protection_standards",
         )
 
     @build_method(depends_on=[], required=True)
