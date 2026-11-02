@@ -880,6 +880,7 @@ class Floods(Module):
                     hydrograph_shape=_shape_config.get("method", "triangular"),
                     shape_window_days=_shape_config.get("window_days", 3.5),
                     shape_tolerance=_shape_config.get("tolerance", 0.1),
+                    output_root=self.simulation_root / sfincs_inland_root_model.name,
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
@@ -1066,7 +1067,10 @@ class Floods(Module):
                 ax.set_title(
                     f"Maximum Flood Depth — {return_period}-year Return Period"
                 )
-                figures_dir: Path = sfincs_inland_root_models[0]._root
+                figures_dir: Path = (
+                    self.simulation_root / sfincs_inland_root_models[0].name / "figures"
+                )
+                figures_dir.mkdir(parents=True, exist_ok=True)
                 fig.savefig(
                     figures_dir / f"flood_depth_rp{return_period}.png",
                     dpi=300,

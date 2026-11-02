@@ -1571,6 +1571,7 @@ class SFINCSRootModel:
         hydrograph_shape: str = "triangular",
         shape_window_days: float = 3.5,
         shape_tolerance: float = 0.1,
+        output_root: Path | None = None,
     ) -> None:
         """Estimate discharge for specified return periods and create hydrographs.
 
@@ -1595,6 +1596,9 @@ class SFINCSRootModel:
             shape_tolerance: Fractional tolerance (±) around anchor discharge
                 used to identify events. Only used for ``'direct'`` and
                 ``'anchor'``. Default 0.1 (±10%).
+            output_root: Run-specific directory for generated files. Defaults to the
+                SFINCS model directory.
+
 
         Raises:
             ValueError: If ``hydrograph_shape`` is not one of ``'triangular'``,
@@ -1602,6 +1606,10 @@ class SFINCSRootModel:
             ValueError: If fewer than 3 historical events are found near the
                 anchor discharge when using ``'direct'`` or ``'anchor'``.
         """
+        if output_root is None:
+            output_root = self.path
+        output_root.mkdir(parents=True, exist_ok=True)
+
         if hydrograph_shape not in ("triangular", "direct", "anchor"):
             raise ValueError(
                 f"Unknown hydrograph_shape '{hydrograph_shape}'. "
@@ -1631,14 +1639,16 @@ class SFINCSRootModel:
             fixed_shape=fixed_shape,
             selection_strategy=selection_strategy,
             write_figures=write_figures,
-            output_directory=self.figures_path / "return_periods",
+            output_directory=(
+                output_root / "figures" / "return_periods" if write_figures else None
+            ),
         )
 
         for return_period in return_periods:
             self.rivers[f"hydrograph_{return_period}"] = None
 
         figures_path = (
-            self.figures_path / "hydrograph_shapes" if write_figures else None
+            output_root / "figures" / "hydrograph_shapes" if write_figures else None
         )
 
         for river_idx in rivers_with_return_period.index:
@@ -1698,7 +1708,7 @@ class SFINCSRootModel:
                     hydrograph_dict
                 )
 
-        export_rivers(self.path, self.rivers, postfix="_return_periods")
+        export_rivers(output_root, self.rivers, postfix="_return_periods")
 
     @property
     def root(self) -> Path:
