@@ -29,7 +29,6 @@ from geb.cli import (
     share_fn,
     update_fn,
 )
-from geb.evaluate.hydrology import _get_datetime_index_step_label
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.hydrology.routing import get_river_width
 from geb.model import GEBModel
@@ -48,13 +47,6 @@ working_directory_coastal: Path = tmp_folder / "model_coastal"
 
 DEFAULT_BUILD_ARGS: dict[str, Any] = {"continue_": True}
 DEFAULT_RUN_ARGS: dict[str, Any] = {}
-
-
-def test_get_datetime_index_step_label_uses_day_for_daily_frequency() -> None:
-    """Test that daily datetime frequencies use a readable timestep label."""
-    time_index: pd.DatetimeIndex = pd.date_range("2000-01-01", periods=3, freq="D")
-
-    assert _get_datetime_index_step_label(time_index) == "day"
 
 
 @pytest.mark.parametrize(

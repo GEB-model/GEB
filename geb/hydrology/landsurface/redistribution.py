@@ -177,7 +177,8 @@ def distribute_soil_water_ross(
     water_content_field_capacity_m: np.ndarray,
     soil_enthalpy_J_per_m2: np.ndarray,
     solid_heat_capacity_J_per_m2_K: np.ndarray,
-    saturated_hydraulic_conductivity_m_per_s: np.ndarray,
+    vertical_saturated_hydraulic_conductivity_m_per_s: np.ndarray,
+    horizontal_saturated_hydraulic_conductivity_m_per_s: np.ndarray,
     interface_dist_m: np.ndarray,
     soil_layer_height: np.ndarray,
     bubbling_pressure_m_positive: np.ndarray,
@@ -211,7 +212,8 @@ def distribute_soil_water_ross(
         water_content_field_capacity_m: Field capacity soil water content in each layer (m).
         soil_enthalpy_J_per_m2: Soil enthalpy in each layer (J/m2).
         solid_heat_capacity_J_per_m2_K: Heat capacity of the solid fraction in each layer (J/m2/K).
-        saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for each layer (m/s).
+        vertical_saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for vertical redistribution (m/s).
+        horizontal_saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for horizontal interflow (m/s).
         interface_dist_m: Distance between centers of soil layers (m).
         soil_layer_height: Height of each soil layer (m).
         bubbling_pressure_m_positive: Bubbling pressure in each layer (m). Must be positive.
@@ -290,7 +292,7 @@ def distribute_soil_water_ross(
         # When there is an active wetting front, the vertical flux is handled in the infiltration
         # module, so we set the vertical conductivity to near-zero here to effectively "turn off" the Richards
         # vertical redistribution for layers within or above the wetting front.
-        sat_cond_s = saturated_hydraulic_conductivity_m_per_s[i]
+        sat_cond_s = vertical_saturated_hydraulic_conductivity_m_per_s[i]
         if green_ampt_active_layer_idx >= 0 and i < green_ampt_active_layer_idx:
             sat_cond_s = np.float32(1e-25)
 
@@ -341,7 +343,7 @@ def distribute_soil_water_ross(
                 / soil_layer_height[i],
             )
             lateral_K_m_per_s = (
-                saturated_hydraulic_conductivity_m_per_s[i]
+                horizontal_saturated_hydraulic_conductivity_m_per_s[i]
                 * np.float32(10.0)
                 * interflow_multiplier
             )
@@ -373,7 +375,12 @@ def distribute_soil_water_ross(
                 (water_content_saturated_m[i] - water_content_residual_m[i])
                 / soil_layer_height[i],
             )
-            lateral_K_m_per_s = K[i] * np.float32(10.0) * interflow_multiplier
+            lateral_K_matrix_s = horizontal_saturated_hydraulic_conductivity_m_per_s[
+                i
+            ] * (s_eff ** pore_size_index[i])
+            lateral_K_m_per_s = (
+                lateral_K_matrix_s * np.float32(10.0) * interflow_multiplier
+            )
             interflow_drainage_rate_s = (lateral_K_m_per_s * slope_m_per_m) / (
                 drainable_porosity * hillslope_length_m
             )
@@ -381,7 +388,8 @@ def distribute_soil_water_ross(
                 interflow_drainage_rate_s * free_water_m * liquid_fractions[i]
             )
 
-            d_lateral_K_dS = dK_dS[i] * np.float32(10.0)
+            d_lateral_K_matrix_dS = pore_size_index[i] * (lateral_K_matrix_s / s_eff)
+            d_lateral_K_dS = d_lateral_K_matrix_dS * np.float32(10.0)
             d_interflow_drainage_rate_dS = (
                 (d_lateral_K_dS * slope_m_per_m)
                 / (drainable_porosity * hillslope_length_m)
@@ -513,7 +521,7 @@ def distribute_soil_water_ross(
         bubbling_pressure_m_positive=bubbling_pressure_m_positive[bottom_layer_index],
         lambda_=lambda_[bottom_layer_index],
         pore_size_index=pore_size_index[bottom_layer_index],
-        saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s[
+        saturated_hydraulic_conductivity_m_per_s=vertical_saturated_hydraulic_conductivity_m_per_s[
             bottom_layer_index
         ],
         matric_flux_potential_bottom=phi[bottom_layer_index],

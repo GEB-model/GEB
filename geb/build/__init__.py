@@ -8,11 +8,11 @@ import inspect
 import logging
 import os
 import time
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal, cast
+from typing import Any, Callable, Literal, cast
 
 import contextily as ctx
 import geopandas as gpd
@@ -32,10 +32,11 @@ from shapely.geometry import Point, box, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from geb import GEB_PACKAGE_DIR, __version__
+from geb import GEB_PACKAGE_DIR
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
 from geb.build.version_updates import get_and_maybe_do_version_updates
+from geb.version import __version__
 from geb.workflows.io import (
     read_params,
     write_array,
@@ -100,7 +101,7 @@ os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
 
 @contextmanager
-def suppress_logging_warning(logger: logging.Logger) -> Iterator[None]:
+def suppress_logging_warning(logger: logging.Logger) -> Generator[None, None, None]:
     """A context manager to suppress logging warning messages temporarily.
 
     Args:
@@ -2595,6 +2596,26 @@ class GEBModel(
             return "ssp370"
         elif self.ssp == "ssp5":
             return "ssp585"
+        else:
+            raise ValueError(f"SSP {self.ssp} not supported.")
+
+    @property
+    def ssp_rcp(self) -> int:
+        """Returns the SSP-RCP identifier.
+
+        Raises:
+            ValueError: If the SSP is not supported.
+        """
+        if self.ssp == "ssp1":
+            return 126
+        elif self.ssp == "ssp2":
+            return 245
+        elif self.ssp == "ssp3":
+            return 370
+        elif self.ssp == "ssp4":
+            return 434
+        elif self.ssp == "ssp5":
+            return 585
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
 

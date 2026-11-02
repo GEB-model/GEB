@@ -6,12 +6,13 @@ import inspect
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import click
 
-from geb import GEB_PACKAGE_DIR, __version__
+from geb import GEB_PACKAGE_DIR
 from geb.build.data_catalog import DataCatalog
 from geb.evaluate import Evaluate
 from geb.runner import (
@@ -38,6 +39,7 @@ from geb.runner import (
     update_fn,
     update_version_fn,
 )
+from geb.version import __version__
 from geb.workflows.io import WorkingDirectory
 from geb.workflows.merge import merge_model_outputs
 from geb.workflows.raster import rechunk_zarr_file
@@ -1225,7 +1227,6 @@ def clean(
 @cli.group()
 def tool() -> None:
     """Useful tools for GEB."""
-    pass
 
 
 @tool.command()

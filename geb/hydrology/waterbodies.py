@@ -41,87 +41,6 @@ RESERVOIR: int = 2
 LAKE_CONTROL: int = 3  # currently modelled as normal lake
 
 
-GRAVITY: np.float32 = np.float32(9.81)
-SHAPE: str = "parabola"
-# http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-if SHAPE == "rectangular":
-    overflow_coefficient_mu: np.float32 = np.float32(0.577)
-
-    def estimate_lake_outflow(
-        lake_factor: ArrayFloat32,
-        height_above_outflow: ArrayFloat32,
-    ) -> ArrayFloat32:
-        """Estimates the outflow from a lake given its height above the outflow for a rectangular shape.
-
-        References:
-            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-        Args:
-            lake_factor: A lake-specific constant factor used in the lake outflow equations.
-            height_above_outflow: Height of the lake above elevation of the outflow [m]
-
-        Returns:
-            Outflow in m3/s
-        """
-        return lake_factor * height_above_outflow**1.5
-
-    def outflow_to_height_above_outflow(
-        lake_factor: ArrayFloat32, outflow: ArrayFloat32
-    ) -> ArrayFloat32:
-        """Inverse function of estimate_lake_outflow for a rectangular shape.
-
-        Args:
-            lake_factor: A lake-specific constant factor used in the lake outflow equations.
-            outflow: Outflow in m3/s
-
-        Returns:
-            Height of the lake above elevation of the outflow [m]
-        """
-        return (outflow / lake_factor) ** np.float32((2 / 3))
-
-elif SHAPE == "parabola":
-    overflow_coefficient_mu: np.float32 = np.float32(0.612)
-
-    def estimate_lake_outflow(
-        lake_factor: ArrayFloat32,
-        height_above_outflow: ArrayFloat32,
-    ) -> ArrayFloat32:
-        """Estimates the outflow from a lake given its height above the outflow for a parabolic shape.
-
-        References:
-            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-        Args:
-            lake_factor: A lake-specific constant factor used in the lake outflow equations.
-            height_above_outflow: Height of the lake above the outflow [m]
-
-        Returns:
-            Outflow in m3/s
-        """
-        return lake_factor * height_above_outflow**2
-
-    def outflow_to_height_above_outflow(
-        lake_factor: ArrayFloat32, outflow: ArrayFloat32
-    ) -> ArrayFloat32:
-        """Inverse function of estimate_lake_outflow for a parabolic shape.
-
-        References:
-            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-        Args:
-            lake_factor: A lake-specific constant factor used in the lake outflow equations.
-            outflow: Outflow in m3/s
-
-        Returns:
-            Height of the lake above the outflow [m]
-        """
-        return np.sqrt(outflow / lake_factor)
-
-else:
-    raise ValueError("Invalid shape")
-
-
 def get_lake_height_from_bottom(
     lake_storage: ArrayFloat64, lake_area: ArrayFloat32
 ) -> ArrayFloat32:
@@ -180,118 +99,12 @@ def get_lake_height_above_outflow(
     return height_above_outflow
 
 
-def get_river_width(
-    average_discharge: ArrayFloat32,
-) -> ArrayFloat32:
-    """Estimate river width at lake outflow from average discharge using an empirical relationship.
-
-    TODO: Check if this can be improved using river width data from the hydrological model.
-
-    Args:
-        average_discharge: Average discharge in m3/s
-
-    Returns:
-        Estimated river width in m
-    """
-    return np.float32(7.1) * np.power(average_discharge, np.float32(0.539))
-
-
-def get_lake_factor(
-    river_width: ArrayFloat32,
-    overflow_coefficient_mu: np.float32,
-    lake_a_factor: np.float32,
-) -> ArrayFloat32:
-    """A lake-constant factor that is used in the equations for lake outflow.
-
-    Pre-calculated to save computation time.
-
-    References:
-        http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-    Args:
-        river_width: Width of the river in m
-        overflow_coefficient_mu: Overflow coefficient, depends on the shape of the lake outflow
-        lake_a_factor: Calibration factor for the lake outflow
-
-    Returns:
-        A lake-specific constant factor used in the lake outflow equations.
-    """
-    return (
-        lake_a_factor
-        * overflow_coefficient_mu
-        * np.float32((2 / 3))
-        * river_width
-        * np.float32((2 * GRAVITY) ** 0.5)
-    )
-
-
-def estimate_outflow_height(
-    lake_capacity: ArrayFloat64,
-    lake_factor: ArrayFloat32,
-    lake_area: ArrayFloat32,
-    avg_outflow: ArrayFloat32,
-) -> ArrayFloat32:
-    """Estimate the outflow height of a lake given its capacity, lake factor, area, and average outflow.
-
-    Args:
-        lake_capacity: Capacity of the lake in m3
-        lake_factor: Factor for the Modified Puls approach to calculate retention of the lake
-        lake_area: Area of the lake in m2
-        avg_outflow: Average outflow in m3/s
-
-    Returns:
-        outflow_height: Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
-
-    """
-    height_above_outflow = outflow_to_height_above_outflow(lake_factor, avg_outflow)
-    lake_height_when_full = get_lake_height_from_bottom(lake_capacity, lake_area)
-    outflow_height = lake_height_when_full - height_above_outflow
-    outflow_height[outflow_height < 0] = 0
-    return outflow_height
-
-
-def get_lake_outflow(
-    dt: float,
-    storage: ArrayFloat64,
-    lake_factor: ArrayFloat32,
-    lake_area: ArrayFloat32,
-    outflow_height: ArrayFloat32,
-) -> tuple[ArrayFloat32, ArrayFloat32]:
-    """Calculate outflow and storage for a lake using the Modified Puls method.
-
-    Args:
-        dt: Time step in seconds
-        storage: Current storage in m3
-        lake_factor: Factor for the Modified Puls approach to calculate retention of the lake
-        lake_area: Area of the lake in m2
-        outflow_height: Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
-
-    Returns:
-        outflow_m3: Outflow in m3.
-        height_above_outflow: Height of the lake above the outflow in m.
-    """
-    height_above_outflow = get_lake_height_above_outflow(
-        lake_storage=storage, lake_area=lake_area, outflow_height=outflow_height
-    )
-    storage_above_outflow = height_above_outflow * lake_area
-    storage_above_outflow = np.minimum(storage_above_outflow, storage)
-
-    outflow_m3_s = estimate_lake_outflow(lake_factor, height_above_outflow)
-    outflow_m3 = outflow_m3_s * dt
-
-    outflow_m3 = np.minimum(outflow_m3, storage_above_outflow)
-
-    assert (outflow_m3 <= storage).all()
-    return outflow_m3, height_above_outflow
-
-
 class WaterBodyVariables(Bucket):
     """Variables for the Lakes and Reservoirs module."""
 
     waterbodies: gpd.GeoDataFrame
     storage: ArrayFloat64
     lake_area: ArrayFloat32
-    lake_factor: ArrayFloat32
     waterbody_mapping: ArrayInt32
     average_discharge_m3_per_s: ArrayFloat32
     capacity: ArrayFloat64
@@ -431,46 +244,12 @@ class WaterBodies(Module):
             self.var.capacity, fill_value=0
         )
 
-        # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
-        # Lake parameter A (suggested  value equal to outflow width in [m])
-        average_discharge = np.maximum(
-            self.var.average_discharge_m3_per_s,
-            0.1,
-        )
-
-        # channel width in [m]
-        river_width: ArrayFloat32 = get_river_width(average_discharge)
-
-        self.var.lake_factor = get_lake_factor(
-            river_width,
-            overflow_coefficient_mu,
-            self.model.config["parameters"]["lake_outflow_multiplier"],
-        )
-
         self.var.storage = np.zeros_like(self.var.capacity, dtype=np.float64)
 
-        # initialize storage to 50% of the capacity. This is arbitrary, but
+        # initialize reservoir storage to 50% of the capacity. This is arbitrary, but
         # ok since we use a spinup period
         self.reservoir_storage = self.reservoir_capacity * 0.5
-        self.var.outflow_height = estimate_outflow_height(
-            self.var.capacity,
-            self.var.lake_factor,
-            self.var.lake_area,
-            average_discharge,
-        )
-
-        # initialize lake storage to exactly the level of the outflow height
-        self.lake_storage = get_lake_storage_from_height_above_bottom(
-            self.var.outflow_height[self.is_lake], self.var.lake_area[self.is_lake]
-        )
-        assert (
-            get_lake_height_above_outflow(
-                self.lake_storage,
-                self.var.lake_area[self.is_lake],
-                self.var.outflow_height[self.is_lake],
-            )
-            < 1e-5
-        ).all()
+        self.var.outflow_height = np.zeros_like(self.var.capacity, dtype=np.float32)
 
     def map_waterbody_ids(
         self, waterbody_id_unmapped: ArrayInt32, order_of_waterbodies: ArrayInt32

@@ -1,5 +1,16 @@
 (function() {
   var map = {{ this._parent.get_name() }};
+  if (!map.getPane("stationsPane")) {
+    var sp = map.createPane("stationsPane");
+    sp.style.zIndex = 620;
+    sp.style.pointerEvents = "auto";
+  }
+  if (!map._paneRenderers) {
+    map._paneRenderers = {};
+  }
+  if (!map._paneRenderers["stationsPane"]) {
+    map._paneRenderers["stationsPane"] = L.svg({pane: "stationsPane"}).addTo(map);
+  }
   var layer = {{ this.data.layer }};
   var payload = {{ this.data.payload | script_json }};
   var stations = [];
@@ -39,30 +50,12 @@
     ['2', 'Selected original subgrid pixel', '#92400E', '3px'],
     ['3', 'Snapped model cell', '#1D4ED8', '0']
   ];
-  var control = L.control({position: 'bottomright'});
-  control.onAdd = function() {
-    var box = L.DomUtil.create('div', 'geb-snapping-legend');
-    box.style.display = 'none';
-    box.innerHTML = '<b>Station snapping: 1 → 2 → 3</b>' +
-      '<div><i style="background:#BE123C;border-radius:50%">1</i> Original gauge (observations)</div>' +
-      '<div><i style="background:#92400E;border-radius:3px">2</i> Selected original subgrid pixel</div>' +
-      '<div><i style="background:#1D4ED8">3</i> Snapped model-cell centre (simulation)</div>' +
-      '<small>Overview dots: green = PASS, orange = area warning, red = excluded.<br>' +
-      'Click a dot for its three snapping steps, or zoom in.<br>' +
-      'Dashed lines connect the three locations.<br>' +
-      'Coincident symbols can overlap; each popup lists all coordinates.</small>' +
-      '<small class="geb-snapping-status"></small>';
-    L.DomEvent.disableClickPropagation(box);
-    L.DomEvent.disableScrollPropagation(box);
-    return box;
-  };
-  control.addTo(map);
-  var style = document.createElement('style');
-  style.textContent = '.geb-snapping-legend{background:white;color:#111827;padding:12px;border-radius:8px;box-shadow:0 2px 10px #0004;font:12px system-ui;max-width:310px}' +
-    '.geb-snapping-legend div{margin-top:6px;display:flex;align-items:center;gap:8px}' +
-    '.geb-snapping-legend i{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;color:white;font-style:normal;font-weight:bold}' +
-    '.geb-snapping-legend small{display:block;margin-top:8px;line-height:1.5}';
-  document.head.appendChild(style);
+  function updateSnappingStatus(text) {
+    var statusEls = document.querySelectorAll('.geb-snapping-status');
+    statusEls.forEach(function(el) {
+      el.textContent = text;
+    });
+  }
 
   function openPopup(station, heading, location) {
     if (!popup) popup = L.popup({maxWidth: 440});
@@ -72,7 +65,8 @@
     var station = stations[index];
     var group = L.featureGroup();
     var connector = L.polyline(station.locations, {
-      renderer: renderer, color: station.color, weight: 3, opacity: 0.85, dashArray: '6 4'
+      pane: 'stationsPane',
+      color: station.color, weight: 3, opacity: 0.85, dashArray: '6 4'
     }).addTo(group);
     connector.on('click', function(event) {openPopup(station, '', event.latlng);});
     station.locations.forEach(function(coordinates, position) {
@@ -94,7 +88,8 @@
   function overview(index) {
     var station = stations[index];
     var dot = L.circleMarker(station.locations[0], {
-      renderer: renderer, radius: 5, color: station.color, fillColor: station.color,
+      pane: 'stationsPane',
+      radius: 5, color: station.color, fillColor: station.color,
       fillOpacity: 0.85, weight: 1
     });
     dot.bindTooltip(station.tooltip);
@@ -141,9 +136,10 @@
       layer.removeLayer(selectedLayer); selectedLayer = null; selectedIndex = null;
       if (popup) map.closePopup(popup);
     }
-    control.getContainer().querySelector('.geb-snapping-status').textContent =
+    updateSnappingStatus(
       visible.length + ' stations in view. ' + (detailed ? (labels ? 'Numbered steps and labels shown.' : 'Zoom further for labels.') :
-        'Zoom in for all steps (up to 150 stations), or click a dot.');
+        'Zoom in for all steps (up to 150 stations), or click a dot.')
+    );
   }
   function schedule() {
     if (map.hasLayer(layer) && updateTimer === null) {
@@ -155,7 +151,6 @@
   function overlayChanged(event) {
     if (event.layer !== layer) return;
     var enabled = map.hasLayer(layer);
-    control.getContainer().style.display = enabled ? '' : 'none';
     if (enabled) schedule();
     else {
       if (updateTimer !== null) clearTimeout(updateTimer);

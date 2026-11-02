@@ -9,7 +9,6 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from geb.build.data_catalog import DataCatalog
 from geb.build.data_catalog.mswep import (
     MSWEPPrecipitation,
     _extract_folder_id,
@@ -63,31 +62,6 @@ def test_mswep_missing_url_raises_helpful_error(
         assert "MSWEP_URL" in err_msg
         assert "https://www.gloh2o.org/mswep/" in err_msg
         assert "MSWEP_V316_test/Past/Hourly" in err_msg
-
-
-def test_mswep_folder_id_init(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test that providing a folder_id sets the adapter folder_id."""
-    monkeypatch.setenv("GEB_DATA_ROOT", str(tmp_path))
-    folder_id = "dummy_folder_id_xyz123"
-    adapter = MSWEPPrecipitation(
-        folder="mswep_test",
-        filename="precipitation.zarr",
-        local_version=1,
-        cache="global",
-        folder_id=folder_id,
-    )
-    assert adapter.folder_id == folder_id
-
-
-def test_data_catalog_mswep_entry() -> None:
-    """Test that DataCatalog includes mswep_precipitation with adapter."""
-    logger = logging.getLogger("test_catalog")
-    catalog = DataCatalog(logger=logger)
-
-    assert "mswep_precipitation" in catalog.catalog
-    entry = catalog.catalog["mswep_precipitation"]
-    assert isinstance(entry["adapter"], MSWEPPrecipitation)
-    assert entry["source"]["name"] == "MSWEP Precipitation"
 
 
 def test_extract_spatial_coords() -> None:

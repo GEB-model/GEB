@@ -13,13 +13,19 @@
   }
 
   decompress(payload).then(function(geoJsonData) {
-    L.geoJson(geoJsonData, {
+    var catchmentLayer = L.geoJson(geoJsonData, {
+      interactive: false,
       style: {
         fill: false,
         fillOpacity: 0,
         color: "black",
-        weight: 2
+        weight: 2,
+        interactive: false
       }
-    }).addTo(layerGroup);
+    });
+    catchmentLayer.addTo(layerGroup);
+    if (catchmentLayer.bringToBack) {
+      try { catchmentLayer.bringToBack(); } catch(e) {}
+    }
   });
 })();

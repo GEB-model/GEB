@@ -567,7 +567,7 @@ class HillSlopeErosion(Module):
 
         detachment_from_raindrops_clay = get_detachment_from_raindrops(
             self.var.K_clay,
-            self.HRU.var.clay_percentage[0]
+            self.HRU.var.clay_percentage[:, 0]
             / np.float32(100.0),  # only consider top layer
             kinetic_energy,
             self.HRU.var.no_erosion,
@@ -576,7 +576,7 @@ class HillSlopeErosion(Module):
 
         detachment_from_raindrops_silt = get_detachment_from_raindrops(
             self.var.K_silt,
-            self.HRU.var.silt_percentage[0]
+            self.HRU.var.silt_percentage[:, 0]
             / np.float32(100.0),  # only consider top layer
             kinetic_energy,
             self.HRU.var.no_erosion,
@@ -585,7 +585,7 @@ class HillSlopeErosion(Module):
 
         detachment_from_raindrops_sand = get_detachment_from_raindrops(
             self.var.K_sand,
-            self.HRU.var.sand_percentage[0]
+            self.HRU.var.sand_percentage[:, 0]
             / np.float32(100.0),  # only consider top layer
             kinetic_energy,
             self.HRU.var.no_erosion,
@@ -600,7 +600,7 @@ class HillSlopeErosion(Module):
 
         detachment_from_flow_clay = get_detachment_from_flow(
             self.var.detachability_due_to_runoff_clay,
-            self.HRU.var.clay_percentage[0]
+            self.HRU.var.clay_percentage[:, 0]
             / np.float32(100.0),  # only consider top layer
             overland_runoff_m * 1000.0,  # convert m to mm
             self.HRU.var.slope_m_per_m,
@@ -610,7 +610,7 @@ class HillSlopeErosion(Module):
 
         detachment_from_flow_silt = get_detachment_from_flow(
             self.var.detachability_due_to_runoff_silt,
-            self.HRU.var.silt_percentage[0]
+            self.HRU.var.silt_percentage[:, 0]
             / np.float32(100.0),  # only consider top layer
             overland_runoff_m * 1000.0,
             self.HRU.var.slope_m_per_m,
@@ -620,7 +620,7 @@ class HillSlopeErosion(Module):
 
         detachment_from_flow_sand = get_detachment_from_flow(
             self.var.detachability_due_to_runoff_sand,
-            self.HRU.var.sand_percentage[0]
+            self.HRU.var.sand_percentage[:, 0]
             / np.float32(100.0),  # only consider top layer
             overland_runoff_m * 1000.0,
             self.HRU.var.slope_m_per_m,

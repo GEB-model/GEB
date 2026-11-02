@@ -1,5 +1,7 @@
 """Tests for scalar soil water functions in GEB."""
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -30,6 +32,9 @@ from geb.hydrology.landsurface.water import (
 )
 
 from ...testconfig import output_folder
+
+output_folder_water: Path = output_folder / "water"
+output_folder_water.mkdir(exist_ok=True, parents=True)
 
 DEFAULT_TEST_LUT = generate_rainfall_lookup_table(sigma=0.8)
 
@@ -1055,7 +1060,7 @@ def test_infiltration_variable_runoff_plot() -> None:
 
     ax.legend()
     ax.set_title("Infiltration with Variable Runoff")
-    fig.savefig(output_folder / "test_infiltration_variable_runoff_plot.png")
+    fig.savefig(output_folder_water / "test_infiltration_variable_runoff_plot.png")
 
 
 def test_pedotransfer_functions_consistency() -> None:

@@ -27,7 +27,7 @@ def test_plot_sunburst_simple() -> None:
     assert isinstance(fig, plt.Figure)
 
     # Check if we can save it
-    output_path = output_folder / "test_sunburst_simple.svg"
+    output_path = output_folder / "visualise" / "test_sunburst_simple.svg"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path)
     assert output_path.exists()

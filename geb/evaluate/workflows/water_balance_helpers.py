@@ -357,9 +357,16 @@ def _get_datetime_index_step_label(time_index: pd.DatetimeIndex) -> str:
         frequency_label: str = str(time_index.freq.freqstr).upper()
         return frequency_label_map.get(frequency_label, frequency_label)
 
-    inferred_frequency: str | None = pd.infer_freq(time_index)
+    inferred_frequency: str | pd.tseries.offsets.BaseOffset | None = pd.infer_freq(
+        time_index
+    )
     if inferred_frequency is not None:
-        normalized_frequency: str = inferred_frequency.upper()
+        freq_str: str = (
+            inferred_frequency
+            if isinstance(inferred_frequency, str)
+            else (inferred_frequency.freqstr or "")
+        )
+        normalized_frequency: str = freq_str.upper()
         return frequency_label_map.get(normalized_frequency, normalized_frequency)
 
     raise ValueError(
