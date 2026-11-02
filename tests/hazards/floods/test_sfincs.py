@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -19,6 +20,7 @@ from geb.cli import CONFIG_DEFAULT
 from geb.geb_types import TwoDArrayFloat64, TwoDArrayInt32
 from geb.hazards.event import Event
 from geb.hazards.floods import create_river_graph, group_subbasins
+from geb.hazards.floods import sfincs as sfincs_module
 from geb.hazards.floods.sfincs import SFINCSRootModel
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
@@ -811,3 +813,85 @@ def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
 
         simulation.cleanup()
         sfincs_model.cleanup()
+
+
+@pytest.mark.parametrize("write_figures", [False, True])
+def test_return_period_outputs_use_run_output_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write_figures: bool
+) -> None:
+    """Keep return-period artifacts out of a shared SFINCS root model.
+
+    Args:
+        tmp_path: Temporary directory used for shared and run-specific outputs.
+        monkeypatch: Pytest fixture for replacing file and plotting operations.
+        write_figures: Whether diagnostic figures should be generated.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If outputs are written to the shared model directory.
+    """
+    shared_root: Path = tmp_path / "shared"
+    run_output_root: Path = tmp_path / "run" / "SFINCS" / "inland"
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"is_downstream_outflow": [False]},
+        geometry=[LineString([(0, 0), (1, 1)])],
+        index=[1],
+        crs="EPSG:4326",
+    )
+    root_model: SFINCSRootModel = SFINCSRootModel(
+        shared_root, "inland", logger=logger
+    )
+    root_model._rivers = rivers.copy()
+    root_model._subbasins = gpd.GeoDataFrame(
+        geometry=[LineString([(0, 0), (1, 1)])],
+        index=rivers.index,
+        crs=rivers.crs,
+    )
+    return_period_rivers: gpd.GeoDataFrame = rivers.copy()
+    return_period_rivers["Q_2"] = 10.0
+    assign_return_periods_mock: MagicMock = MagicMock(
+        return_value=return_period_rivers
+    )
+    hydrograph_mock: MagicMock = MagicMock(
+        return_value=pd.DataFrame(
+            {"discharge": [10.0]},
+            index=pd.DatetimeIndex([pd.Timestamp("2024-01-01")]),
+        )
+    )
+    export_rivers_mock: MagicMock = MagicMock()
+
+    monkeypatch.setattr(
+        root_model, "assign_return_periods", assign_return_periods_mock
+    )
+    monkeypatch.setattr(
+        sfincs_module, "create_hydrograph_from_discharge_shape", hydrograph_mock
+    )
+    monkeypatch.setattr(sfincs_module, "export_rivers", export_rivers_mock)
+
+    root_model.estimate_discharge_for_return_periods(
+        discharge_by_river=pd.DataFrame(
+            {1: [1.0]}, index=pd.DatetimeIndex([pd.Timestamp("2024-01-01")])
+        ),
+        return_periods=[2],
+        write_figures=write_figures,
+        hydrograph_shape="direct",
+        output_root=run_output_root,
+    )
+
+    if write_figures:
+        assert assign_return_periods_mock.call_args.kwargs["output_directory"] == (
+            run_output_root / "figures" / "return_periods"
+        )
+        assert hydrograph_mock.call_args.kwargs["output_path"] == (
+            run_output_root / "figures" / "hydrograph_shapes"
+        )
+    else:
+        assert assign_return_periods_mock.call_args.kwargs["output_directory"] is None
+        assert hydrograph_mock.call_args.kwargs["output_path"] is None
+        assert not (run_output_root / "figures").exists()
+    assert export_rivers_mock.call_args.args[0] == run_output_root
+    assert run_output_root.exists()
+    assert not (shared_root / "inland" / "rivers_return_periods.geoparquet").exists()
+    assert not (shared_root / "inland" / "figures").exists()
