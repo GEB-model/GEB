@@ -750,6 +750,17 @@ def infiltration(
     for i in range(green_ampt_active_layer_idx + 1):
         current_layer_depth_limit += soil_layer_height_m[i]
 
+    total_soil_depth: np.float32 = np.sum(soil_layer_height_m)
+
+    saturated_conductivity_of_most_restrictive_layer = (
+        saturated_hydraulic_conductivity_m_per_s[0]
+    ) * np.float32(0.2)
+    for i in range(1, green_ampt_active_layer_idx + 1):
+        saturated_conductivity_of_most_restrictive_layer = min(
+            saturated_conductivity_of_most_restrictive_layer,
+            saturated_hydraulic_conductivity_m_per_s[i],
+        )
+
     # Steeper slopes hold less puddle storage before spilling over.
     # Sealed surfaces have lower storage (0.4 - 1.5 mm) than natural ground (0.8 - 2.5 mm).
     if land_use_type == PADDY_IRRIGATED:
@@ -883,28 +894,19 @@ def infiltration(
                 bubbling_pressure_m_positive,
                 lambda_pore_size_distribution,
             )
-            # Update limit for the new layer
+            # Update limit and restrictive conductivity for the new layer
             current_layer_depth_limit = np.float32(0.0)
             for i in range(green_ampt_active_layer_idx + 1):
                 current_layer_depth_limit += soil_layer_height_m[i]
+            saturated_conductivity_of_most_restrictive_layer = min(
+                saturated_conductivity_of_most_restrictive_layer,
+                saturated_hydraulic_conductivity_m_per_s[green_ampt_active_layer_idx],
+            )
 
         # Calculate current cumulative infiltration implied by the wetting front depth
         current_cumulative_infiltration: np.float32 = (
             wetting_front_depth_m * wetting_front_moisture_deficit
         )
-
-        saturated_conductivity_of_most_restrictive_layer = (
-            saturated_hydraulic_conductivity_m_per_s[0]
-        ) * np.float32(
-            0.2
-        )  # Apply a crust factor to the top layer to account for surface sealing.
-
-        # Loop through other layers up to the active layer to find the most restrictive conductivity.
-        for i in range(1, green_ampt_active_layer_idx + 1):
-            saturated_conductivity_of_most_restrictive_layer = min(
-                saturated_conductivity_of_most_restrictive_layer,
-                saturated_hydraulic_conductivity_m_per_s[i],
-            )
 
         # Calculate effective time since start of infiltration event
         # If wetting_front_depth is negligible, we start at t=0
@@ -962,7 +964,6 @@ def infiltration(
         for i in range(end_layer_idx):
             space_available += max(np.float32(0.0), ws[i] - w[i])
 
-        total_soil_depth: np.float32 = np.sum(soil_layer_height_m)
         wetting_front_at_bottom: bool = bool(
             wetting_front_depth_m >= total_soil_depth - np.float32(1e-4)
         )
