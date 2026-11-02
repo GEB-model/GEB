@@ -26,6 +26,7 @@ from geb.geb_types import (
     ArrayWithScalar,
     T_OneorTwoDArray,
     ThreeDArray,
+    ThreeDArrayFloat32,
     ThreeDArrayWithScalar,
     TwoDArray,
     TwoDArrayBool,
@@ -702,6 +703,7 @@ class HRUVariables(Bucket):
     potential_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32
     crop_map: ArrayInt32
     topwater: ArrayFloat32
+    packed_soil_properties: ThreeDArrayFloat32
     soil_layer_height_m: TwoDArrayFloat32
     water_content_field_capacity_m: TwoDArrayFloat32
     water_content_m: TwoDArrayFloat32

@@ -6,8 +6,10 @@ import numpy as np
 import pytest
 
 from geb.hydrology.landsurface.constants import (
+    N_STATIC_SOIL_PROPS,
     RHO_WATER_KG_PER_M3,
     SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
+    STATIC_SOIL_PROPERTY_NAMES,
     THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN,
     THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN,
 )
@@ -126,6 +128,17 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
     pre_interception_storage_m: np.ndarray = inputs["interception_storage_m"].copy()
     pre_soil_enthalpy: np.ndarray = inputs["soil_enthalpy_J_per_m2"].copy()
 
+    if "packed_soil_properties" not in inputs:
+        num_cells_input: int = inputs["slope_m_per_m"].shape[0]
+        n_layers_input: int = inputs["water_content_residual_m"].shape[1]
+        dtype = np.float64 if asfloat64 else np.float32
+        packed_soil: np.ndarray = np.empty(
+            (num_cells_input, N_STATIC_SOIL_PROPS, n_layers_input), dtype=dtype
+        )
+        for idx, prop in enumerate(STATIC_SOIL_PROPERTY_NAMES):
+            packed_soil[:, idx, :] = inputs.pop(prop)
+        inputs["packed_soil_properties"] = packed_soil
+
     raw_results = land_surface_model(**inputs)
     trimmed_results = raw_results
 
@@ -173,9 +186,7 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
     assert np.all(out_runoff_m >= 0.0), f"Negative runoff: {np.min(out_runoff_m)}"
 
     # Perform water balance check using in-place updated water content
-    post_water_content_m: np.ndarray = padded_inputs.water_content_m[
-        :num_original_cells
-    ]
+    post_water_content_m: np.ndarray = inputs["water_content_m"]
 
     is_water_balanced: bool = balance_check(
         name=f"Water balance: {error_case_path.name}",
@@ -222,9 +233,7 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
     )
 
     # Perform enthalpy balance check using in-place updated soil enthalpy
-    post_soil_enthalpy: np.ndarray = padded_inputs.soil_enthalpy_J_per_m2[
-        :num_original_cells
-    ]
+    post_soil_enthalpy: np.ndarray = inputs["soil_enthalpy_J_per_m2"]
 
     is_enthalpy_balanced: bool = balance_check(
         name=f"Enthalpy balance: {error_case_path.name}",
@@ -288,7 +297,11 @@ def _create_mock_land_surface(
 
     inputs_dict: dict = {}
     for field in LandSurfaceInputs._fields:
-        if "water_content" in field or "soil_enthalpy" in field:
+        if field == "packed_soil_properties":
+            inputs_dict[field] = np.zeros(
+                (num_cells, N_STATIC_SOIL_PROPS, 6), dtype=np.float32
+            )
+        elif "water_content" in field or "soil_enthalpy" in field:
             inputs_dict[field] = np.zeros((num_cells, 6), dtype=np.float32)
         elif field in (
             "pr_kg_per_m2_per_s",

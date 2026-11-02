@@ -12,6 +12,7 @@ from geb.geb_types import (
     ArrayFloat32,
     ArrayFloat64,
     ArrayInt32,
+    ThreeDArrayFloat32,
     TwoDArrayBool,
     TwoDArrayFloat32,
     TwoDArrayFloat64,
@@ -28,7 +29,22 @@ from .constants import (
     MIN_ACTIVE_SNOW_SWE_M,
     N_SNOW_LAYERS,
     N_SOIL_LAYERS,
+    N_STATIC_SOIL_PROPS,
     RHO_WATER_KG_PER_M3,
+    SOIL_PROP_BUBBLING_PRESSURE_M_POSITIVE,
+    SOIL_PROP_HORIZONTAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S,
+    SOIL_PROP_LAMBDA_PORE_SIZE_DISTRIBUTION,
+    SOIL_PROP_SAND_PERCENTAGE,
+    SOIL_PROP_SOIL_LAYER_HEIGHT_M,
+    SOIL_PROP_SOLID_HEAT_CAPACITY_J_PER_M2_K,
+    SOIL_PROP_THERMAL_CONDUCTIVITY_DRY_SOIL_W_PER_M_K,
+    SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_FROZEN_W_PER_M_K,
+    SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_UNFROZEN_W_PER_M_K,
+    SOIL_PROP_VERTICAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S,
+    SOIL_PROP_WATER_CONTENT_FIELD_CAPACITY_M,
+    SOIL_PROP_WATER_CONTENT_RESIDUAL_M,
+    SOIL_PROP_WATER_CONTENT_SATURATED_M,
+    SOIL_PROP_WATER_CONTENT_WILTING_POINT_M,
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
     THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN,
     THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN,
@@ -123,18 +139,9 @@ def land_surface_model(
     slope_m_per_m: ArrayFloat32,
     hillslope_length_m: ArrayFloat32,
     water_content_m: TwoDArrayFloat32,
-    water_content_residual_m: TwoDArrayFloat32,
-    water_content_wilting_point_m: TwoDArrayFloat32,
-    water_content_field_capacity_m: TwoDArrayFloat32,
-    water_content_saturated_m: TwoDArrayFloat32,
+    packed_soil_properties: ThreeDArrayFloat32,
     soil_enthalpy_J_per_m2: TwoDArrayFloat32,
-    solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32,
-    thermal_conductivity_saturated_unfrozen_W_per_m_K: TwoDArrayFloat32,
-    thermal_conductivity_saturated_frozen_W_per_m_K: TwoDArrayFloat32,
-    thermal_conductivity_dry_soil_W_per_m_K: TwoDArrayFloat32,
-    sand_percentage: TwoDArrayFloat32,
     delta_z: TwoDArrayFloat32,
-    soil_layer_height: TwoDArrayFloat32,
     root_depth_m: ArrayFloat32,
     topwater_m: ArrayFloat32,
     variable_runoff_shape_beta: ArrayFloat32,
@@ -157,14 +164,10 @@ def land_surface_model(
     actual_irrigation_consumption_m: ArrayFloat32,
     groundwater_depth_m: ArrayFloat32,
     groundwater_toplayer_conductivity_m_per_day: ArrayFloat32,
-    horizontal_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32,
-    vertical_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32,
     wetting_front_depth_m: ArrayFloat32,
     wetting_front_suction_head_m: ArrayFloat32,
     wetting_front_moisture_deficit: ArrayFloat32,
     green_ampt_active_layer_idx: ArrayInt32,
-    lambda_pore_size_distribution: TwoDArrayFloat32,
-    bubbling_pressure_m_positive: TwoDArrayFloat32,
     crop_group_number: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
     interflow_multiplier: np.float32,
@@ -222,20 +225,15 @@ def land_surface_model(
         slope_m_per_m: Slope of the hydrological response unit in m/m.
         hillslope_length_m: Hillslope length of the hydrological response unit in m.
         water_content_m: Soil water storage per layer (m), i.e. equivalent water depth in the layer.
-        water_content_residual_m: Residual soil water storage per layer (m).
-        water_content_wilting_point_m: Wilting point soil water storage per layer (m).
-        water_content_field_capacity_m: Field capacity soil water storage per layer (m).
-        water_content_saturated_m: Saturated soil water storage per layer (m).
+        packed_soil_properties: Packed static 2D soil properties array of shape
+            (num_cells, N_STATIC_SOIL_PROPS, N_SOIL_LAYERS), containing residual water content (m),
+            wilting point (m), field capacity (m), saturation capacity (m), solid heat capacity (J/m2/K),
+            saturated unfrozen thermal conductivity (W/m/K), saturated frozen thermal conductivity (W/m/K),
+            dry soil thermal conductivity (W/m/K), sand percentage (%), soil layer height (m),
+            bubbling pressure (m), pore size distribution parameter lambda (-), and horizontal and vertical
+            saturated hydraulic conductivities (m/s).
         soil_enthalpy_J_per_m2: Soil enthalpy per layer (J/m2), relative to 0°C liquid water.
-        solid_heat_capacity_J_per_m2_K: Solid heat capacity of soil layers [J/m2/K].
-        thermal_conductivity_saturated_unfrozen_W_per_m_K: Saturated thermal conductivity
-            in unfrozen state [W/m/K].
-        thermal_conductivity_saturated_frozen_W_per_m_K: Saturated thermal conductivity
-            in frozen state [W/m/K].
-        thermal_conductivity_dry_soil_W_per_m_K: Thermal conductivity of dry soil per layer [W/(m·K)].
-        sand_percentage: Sand percentage of soil layers [%].
         delta_z: The distance between the centers of adjacent soil layers in meters, shape (N_SOIL_LAYERS - 1,).
-        soil_layer_height: Soil layer heights for the cell in meters, shape (N_SOIL_LAYERS,).
         root_depth_m: Root depth for the cell in meters.
         topwater_m: Topwater in meters, which is >=0 for paddy and 0 for non-paddy. Within
             this function topwater is used to add water from natural infiltration and
@@ -259,22 +257,18 @@ def land_surface_model(
         crop_factor: Crop factor for each HRU. Dimensionless.
         actual_irrigation_consumption_m: Actual irrigation consumption in meters.
         groundwater_depth_m: Depth of groundwater table below surface in meters.
-        horizontal_saturated_hydraulic_conductivity_m_per_s: Horizontal saturated hydraulic conductivity in m/s.
-        vertical_saturated_hydraulic_conductivity_m_per_s: Vertical saturated hydraulic conductivity in m/s.
+        groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/day.
         wetting_front_depth_m: Wetting front depth in meters.
         wetting_front_suction_head_m: Wetting front suction head [m].
         wetting_front_moisture_deficit: Moisture deficit at the wetting front [-].
         green_ampt_active_layer_idx: Index of the active soil layer for Green-Ampt infiltration.
-        groundwater_toplayer_conductivity_m_per_day: Groundwater top layer conductivity in m/day.
-        lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
-        bubbling_pressure_m_positive: Bubbling pressure in m. Must be positive.
         crop_group_number: Crop group number per HRU, pre-resolved from land use type and crop map (see WOFOST 6.0).
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
         interflow_multiplier: Calibration factor for interflow calculation.
         deep_soil_temperature_C: Deep soil temperature in Celsius.
-        daily_reference_evapotranspiration_grass_m: Daily reference evapotranspiration for grass (meters).
         leaf_area_index: Leaf area index for the cell.
         rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
+        daily_reference_evapotranspiration_grass_m: Daily reference evapotranspiration for grass (meters).
         max_capillary_rise_m: Maximum available groundwater storage for capillary rise per cell (meters).
 
     Returns:
@@ -393,11 +387,42 @@ def land_surface_model(
         snow_enthalpy_layers_J_per_m2 = stack_empty(N_SNOW_LAYERS, np.float32)
         snow_density_layers_kg_per_m3 = stack_empty(N_SNOW_LAYERS, np.float32)
 
-        lambda_ = lambda_pore_size_distribution[i, :]
+        # Packed static soil properties views for cell i
+        wres = packed_soil_properties[i, SOIL_PROP_WATER_CONTENT_RESIDUAL_M]
+        wwp = packed_soil_properties[i, SOIL_PROP_WATER_CONTENT_WILTING_POINT_M]
+        wfc = packed_soil_properties[i, SOIL_PROP_WATER_CONTENT_FIELD_CAPACITY_M]
+        ws = packed_soil_properties[i, SOIL_PROP_WATER_CONTENT_SATURATED_M]
+        solid_heat_capacity = packed_soil_properties[
+            i, SOIL_PROP_SOLID_HEAT_CAPACITY_J_PER_M2_K
+        ]
+        thermal_cond_unfrozen = packed_soil_properties[
+            i,
+            SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_UNFROZEN_W_PER_M_K,
+        ]
+        thermal_cond_frozen = packed_soil_properties[
+            i, SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_FROZEN_W_PER_M_K
+        ]
+        thermal_cond_dry = packed_soil_properties[
+            i, SOIL_PROP_THERMAL_CONDUCTIVITY_DRY_SOIL_W_PER_M_K
+        ]
+        sand_pct = packed_soil_properties[i, SOIL_PROP_SAND_PERCENTAGE]
+        soil_layer_h = packed_soil_properties[i, SOIL_PROP_SOIL_LAYER_HEIGHT_M]
+        bubbling_press = packed_soil_properties[
+            i, SOIL_PROP_BUBBLING_PRESSURE_M_POSITIVE
+        ]
+        lambda_pore = packed_soil_properties[i, SOIL_PROP_LAMBDA_PORE_SIZE_DISTRIBUTION]
+        ksat_h = packed_soil_properties[
+            i,
+            SOIL_PROP_HORIZONTAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S,
+        ]
+        ksat_v = packed_soil_properties[
+            i, SOIL_PROP_VERTICAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S
+        ]
+
         pore_size_index_cell = stack_empty(N_SOIL_LAYERS, np.float32)
         for _layer in range(N_SOIL_LAYERS):
             pore_size_index_cell[_layer] = np.float32(3.0) + (
-                np.float32(2.0) / lambda_[_layer]
+                np.float32(2.0) / lambda_pore[_layer]
             )
 
         snow_water_equivalent_top_m_cell = snow_water_equivalent_m[i, 0]
@@ -472,19 +497,13 @@ def land_surface_model(
                 top_layer_frozen_fraction,
             ) = solve_soil_enthalpy_column(
                 soil_enthalpies_J_per_m2=soil_enthalpy_J_per_m2[i, :],
-                layer_thicknesses_m=soil_layer_height[i, :],
-                thermal_conductivity_dry_soil_W_per_m_K=thermal_conductivity_dry_soil_W_per_m_K[
-                    i, :
-                ],
-                solid_heat_capacities_J_per_m2_K=solid_heat_capacity_J_per_m2_K[i, :],
-                thermal_conductivity_saturated_unfrozen_W_per_m_K=thermal_conductivity_saturated_unfrozen_W_per_m_K[
-                    i, :
-                ],
-                thermal_conductivity_saturated_frozen_W_per_m_K=thermal_conductivity_saturated_frozen_W_per_m_K[
-                    i, :
-                ],
-                water_content_saturated_m=water_content_saturated_m[i, :],
-                sand_percentage=sand_percentage[i, :],
+                layer_thicknesses_m=soil_layer_h,
+                thermal_conductivity_dry_soil_W_per_m_K=thermal_cond_dry,
+                solid_heat_capacities_J_per_m2_K=solid_heat_capacity,
+                thermal_conductivity_saturated_unfrozen_W_per_m_K=thermal_cond_unfrozen,
+                thermal_conductivity_saturated_frozen_W_per_m_K=thermal_cond_frozen,
+                water_content_saturated_m=ws,
+                sand_percentage=sand_pct,
                 water_content_m=water_content_m[i, :],
                 shortwave_radiation_W_per_m2=rsds_W_per_m2_val,
                 longwave_radiation_W_per_m2=rlds_W_per_m2_val,
@@ -659,11 +678,9 @@ def land_surface_model(
                 soil_enthalpy_J_per_m2[i, 0],
             ) = infiltration(
                 seed=(unix_time_seconds + hour * np.int64(3600)) ^ np.int64(i),
-                ws=water_content_saturated_m[i, :],
-                wres=water_content_residual_m[i, :],
-                saturated_hydraulic_conductivity_m_per_s=vertical_saturated_hydraulic_conductivity_m_per_s[
-                    i, :
-                ],
+                ws=ws,
+                wres=wres,
+                saturated_hydraulic_conductivity_m_per_s=ksat_v,
                 groundwater_toplayer_conductivity_m_per_s=groundwater_toplayer_conductivity_m_per_s[
                     i
                 ],
@@ -675,13 +692,11 @@ def land_surface_model(
                 wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
                 green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
                 variable_runoff_shape_beta=variable_runoff_shape_beta[i],
-                bubbling_pressure_m_positive=bubbling_pressure_m_positive[i, :],
-                soil_layer_height_m=soil_layer_height[i, :],
-                lambda_pore_size_distribution=lambda_pore_size_distribution[i, :],
+                bubbling_pressure_m_positive=bubbling_press,
+                soil_layer_height_m=soil_layer_h,
+                lambda_pore_size_distribution=lambda_pore,
                 soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
-                solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                    i, 0
-                ],
+                solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity[0],
                 rain_temperature_C=tas_C,
                 new_surface_water_input_m=new_surface_water_input_m,
                 rainfall_lookup_table=rainfall_lookup_table,
@@ -716,21 +731,17 @@ def land_surface_model(
             ) = distribute_soil_water_ross(
                 timestep_length_s=np.float32(3600.0),
                 water_content_m=water_content_m[i, :],
-                water_content_residual_m=water_content_residual_m[i, :],
-                water_content_saturated_m=water_content_saturated_m[i, :],
-                water_content_field_capacity_m=water_content_field_capacity_m[i, :],
+                water_content_residual_m=wres,
+                water_content_saturated_m=ws,
+                water_content_field_capacity_m=wfc,
                 soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, :],
-                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[i, :],
-                vertical_saturated_hydraulic_conductivity_m_per_s=vertical_saturated_hydraulic_conductivity_m_per_s[
-                    i, :
-                ],
-                horizontal_saturated_hydraulic_conductivity_m_per_s=horizontal_saturated_hydraulic_conductivity_m_per_s[
-                    i, :
-                ],
+                solid_heat_capacity_J_per_m2_K=solid_heat_capacity,
+                vertical_saturated_hydraulic_conductivity_m_per_s=ksat_v,
+                horizontal_saturated_hydraulic_conductivity_m_per_s=ksat_h,
                 interface_dist_m=delta_z[i, :],
-                soil_layer_height=soil_layer_height[i, :],
-                bubbling_pressure_m_positive=bubbling_pressure_m_positive[i, :],
-                lambda_=lambda_,
+                soil_layer_height=soil_layer_h,
+                bubbling_pressure_m_positive=bubbling_press,
+                lambda_=lambda_pore,
                 pore_size_index=pore_size_index_cell,
                 slope_m_per_m=slope_m_per_m[i],
                 hillslope_length_m=hillslope_length_m[i],
@@ -778,7 +789,7 @@ def land_surface_model(
                     accum_depth: np.float32 = np.float32(0.0)
                     new_active_idx: int = 0
                     for layer_idx in range(N_SOIL_LAYERS):
-                        accum_depth += soil_layer_height[i, layer_idx]
+                        accum_depth += soil_layer_h[layer_idx]
                         if wetting_front_depth_m[i] <= accum_depth:
                             new_active_idx = layer_idx
                             break
@@ -791,10 +802,10 @@ def land_surface_model(
 
             transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
                 soil_is_frozen=soil_is_frozen,
-                wwp_m=water_content_wilting_point_m[i, :],
-                wfc_m=water_content_field_capacity_m[i, :],
-                wres_m=water_content_residual_m[i, :],
-                soil_layer_height_m=soil_layer_height[i, :],
+                wwp_m=wwp,
+                wfc_m=wfc,
+                wres_m=wres,
+                soil_layer_height_m=soil_layer_h,
                 land_use_type=land_use_type[i],
                 root_depth_m=root_depth_m[i],
                 crop_group_number=crop_group_number[i],
@@ -820,9 +831,7 @@ def land_surface_model(
                     layer_temperature_C, _ = (
                         get_temperature_and_frozen_fraction_from_enthalpy_scalar(
                             enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, layer],
-                            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                                i, layer
-                            ],
+                            solid_heat_capacity_J_per_m2_K=solid_heat_capacity[layer],
                             water_content_m=water_content_before_transpiration_m[layer],
                             topwater_m=(
                                 topwater_before_transpiration_m
@@ -848,9 +857,7 @@ def land_surface_model(
                 top_layer_temperature_C, _ = (
                     get_temperature_and_frozen_fraction_from_enthalpy_scalar(
                         enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
-                        solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
-                            i, 0
-                        ],
+                        solid_heat_capacity_J_per_m2_K=solid_heat_capacity[0],
                         water_content_m=water_content_before_transpiration_m[0],
                         topwater_m=topwater_before_transpiration_m,
                     )
@@ -879,8 +886,8 @@ def land_surface_model(
                 potential_direct_evaporation_m=potential_direct_evaporation_m,
                 open_water_evaporation_m=open_water_evaporation_m_cell_hour,
                 w_m=water_content_m[i, :],
-                wres_m=water_content_residual_m[i, :],
-                ws_m=water_content_saturated_m[i, :],
+                wres_m=wres,
+                ws_m=ws,
             )
             bare_soil_evaporation[i] += bare_soil_evaporation_m_cell_hour
 
@@ -895,7 +902,7 @@ def land_surface_model(
             _, frozen_fraction_top_layer = (
                 get_temperature_and_frozen_fraction_from_enthalpy_scalar(
                     enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
-                    solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[i, 0],
+                    solid_heat_capacity_J_per_m2_K=solid_heat_capacity[0],
                     water_content_m=water_content_m[i, 0],
                     topwater_m=topwater_m[i],
                 )
@@ -972,18 +979,9 @@ class LandSurfaceInputs(NamedTuple):
     slope_m_per_m: ArrayFloat32
     hillslope_length_m: ArrayFloat32
     water_content_m: TwoDArrayFloat32
-    water_content_residual_m: TwoDArrayFloat32
-    water_content_wilting_point_m: TwoDArrayFloat32
-    water_content_field_capacity_m: TwoDArrayFloat32
-    water_content_saturated_m: TwoDArrayFloat32
+    packed_soil_properties: ThreeDArrayFloat32
     soil_enthalpy_J_per_m2: TwoDArrayFloat32
-    solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
-    thermal_conductivity_saturated_unfrozen_W_per_m_K: TwoDArrayFloat32
-    thermal_conductivity_saturated_frozen_W_per_m_K: TwoDArrayFloat32
-    thermal_conductivity_dry_soil_W_per_m_K: TwoDArrayFloat32
-    sand_percentage: TwoDArrayFloat32
     delta_z: TwoDArrayFloat32
-    soil_layer_height: TwoDArrayFloat32
     root_depth_m: ArrayFloat32
     topwater_m: ArrayFloat32
     variable_runoff_shape_beta: ArrayFloat32
@@ -1006,14 +1004,10 @@ class LandSurfaceInputs(NamedTuple):
     actual_irrigation_consumption_m: ArrayFloat32
     groundwater_depth_m: ArrayFloat32
     groundwater_toplayer_conductivity_m_per_day: ArrayFloat32
-    horizontal_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
-    vertical_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
     wetting_front_depth_m: ArrayFloat32
     wetting_front_suction_head_m: ArrayFloat32
     wetting_front_moisture_deficit: ArrayFloat32
     green_ampt_active_layer_idx: ArrayInt32
-    lambda_pore_size_distribution: TwoDArrayFloat32
-    bubbling_pressure_m_positive: TwoDArrayFloat32
     crop_group_number: ArrayFloat32
     minimum_effective_root_depth_m: np.float32
     interflow_multiplier: np.float32
@@ -1166,17 +1160,9 @@ class LandSurface(Module):
             slope_m_per_m=self.HRU.var.slope_m_per_m,
             hillslope_length_m=self.HRU.var.hillslope_length_m,
             water_content_m=self.HRU.var.water_content_m,
-            water_content_residual_m=self.HRU.var.water_content_residual_m,
-            water_content_wilting_point_m=self.HRU.var.water_content_wilting_point_m,
-            water_content_field_capacity_m=self.HRU.var.water_content_field_capacity_m,
-            water_content_saturated_m=self.HRU.var.water_content_saturated_m,
+            packed_soil_properties=self.HRU.var.packed_soil_properties,
             soil_enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2,
-            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K,
-            thermal_conductivity_saturated_unfrozen_W_per_m_K=self.HRU.var.thermal_conductivity_saturated_unfrozen_W_per_m_K,
-            thermal_conductivity_saturated_frozen_W_per_m_K=self.HRU.var.thermal_conductivity_saturated_frozen_W_per_m_K,
-            sand_percentage=self.HRU.var.sand_percentage,
             delta_z=delta_z,
-            soil_layer_height=self.HRU.var.soil_layer_height_m,
             root_depth_m=root_depth_m,
             topwater_m=self.HRU.var.topwater_m,
             variable_runoff_shape_beta=self.HRU.var.variable_runoff_shape_beta,
@@ -1199,15 +1185,10 @@ class LandSurface(Module):
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
             groundwater_depth_m=groundwater_depth_m,
             groundwater_toplayer_conductivity_m_per_day=groundwater_toplayer_conductivity_m_per_day,
-            horizontal_saturated_hydraulic_conductivity_m_per_s=self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s,
-            vertical_saturated_hydraulic_conductivity_m_per_s=self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s,
-            thermal_conductivity_dry_soil_W_per_m_K=self.HRU.var.thermal_conductivity_dry_soil_W_per_m_K,
             wetting_front_depth_m=self.HRU.var.wetting_front_depth_m,
             wetting_front_suction_head_m=self.HRU.var.wetting_front_suction_head_m,
             wetting_front_moisture_deficit=self.HRU.var.wetting_front_moisture_deficit,
             green_ampt_active_layer_idx=self.HRU.var.green_ampt_active_layer_idx,
-            lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
-            bubbling_pressure_m_positive=self.HRU.var.bubbling_pressure_m_positive,
             crop_group_number=crop_group_number,
             minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
             interflow_multiplier=np.float32(
@@ -1269,10 +1250,13 @@ class LandSurface(Module):
             if isinstance(val, np.ndarray) and val.shape[0] == num_cells:
                 if val.ndim == 1:
                     sliced_fields[field] = val[index : index + 1]
-                else:
+                elif val.ndim == 2:
                     # Inputs are in cell-major layout [num_cells, N_LAYERS] or
                     # time-major layout [num_cells, 24]; cell axis is 0.
                     sliced_fields[field] = val[index : index + 1, :]
+                else:
+                    # 3-D packed properties layout [num_cells, N_PROPS, N_LAYERS]
+                    sliced_fields[field] = val[index : index + 1, :, :]
             else:
                 sliced_fields[field] = val
 
@@ -2108,6 +2092,128 @@ class LandSurface(Module):
         )
         self.HRU.var.crop_group_number_grassland_like = self.hydrology.to_HRU(
             data=crop_group_number_grassland_like
+        )
+
+        # Pack all 14 static 2D soil properties into a contiguous 3D array
+        # to maximize hardware cache locality and eliminate redundant LLVM register descriptors.
+        packed_soil_properties: ThreeDArrayFloat32 = np.empty(
+            (self.HRU.compressed_size, N_STATIC_SOIL_PROPS, N_SOIL_LAYERS),
+            dtype=np.float32,
+        )
+        packed_soil_properties[:, SOIL_PROP_WATER_CONTENT_RESIDUAL_M, :] = (
+            self.HRU.var.water_content_residual_m
+        )
+        packed_soil_properties[:, SOIL_PROP_WATER_CONTENT_WILTING_POINT_M, :] = (
+            self.HRU.var.water_content_wilting_point_m
+        )
+        packed_soil_properties[:, SOIL_PROP_WATER_CONTENT_FIELD_CAPACITY_M, :] = (
+            self.HRU.var.water_content_field_capacity_m
+        )
+        packed_soil_properties[:, SOIL_PROP_WATER_CONTENT_SATURATED_M, :] = (
+            self.HRU.var.water_content_saturated_m
+        )
+        packed_soil_properties[:, SOIL_PROP_SOLID_HEAT_CAPACITY_J_PER_M2_K, :] = (
+            self.HRU.var.solid_heat_capacity_J_per_m2_K
+        )
+        packed_soil_properties[
+            :, SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_UNFROZEN_W_PER_M_K, :
+        ] = self.HRU.var.thermal_conductivity_saturated_unfrozen_W_per_m_K
+        packed_soil_properties[
+            :, SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_FROZEN_W_PER_M_K, :
+        ] = self.HRU.var.thermal_conductivity_saturated_frozen_W_per_m_K
+        packed_soil_properties[
+            :, SOIL_PROP_THERMAL_CONDUCTIVITY_DRY_SOIL_W_PER_M_K, :
+        ] = self.HRU.var.thermal_conductivity_dry_soil_W_per_m_K
+        packed_soil_properties[:, SOIL_PROP_SAND_PERCENTAGE, :] = (
+            self.HRU.var.sand_percentage
+        )
+        packed_soil_properties[:, SOIL_PROP_SOIL_LAYER_HEIGHT_M, :] = (
+            self.HRU.var.soil_layer_height_m
+        )
+        packed_soil_properties[:, SOIL_PROP_BUBBLING_PRESSURE_M_POSITIVE, :] = (
+            self.HRU.var.bubbling_pressure_m_positive
+        )
+        packed_soil_properties[:, SOIL_PROP_LAMBDA_PORE_SIZE_DISTRIBUTION, :] = (
+            self.HRU.var.lambda_pore_size_distribution
+        )
+        packed_soil_properties[
+            :,
+            SOIL_PROP_HORIZONTAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S,
+            :,
+        ] = self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s
+        packed_soil_properties[
+            :,
+            SOIL_PROP_VERTICAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S,
+            :,
+        ] = self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s
+
+        self.HRU.var.packed_soil_properties = packed_soil_properties
+
+        # Point existing HRU variable attributes to slices of the packed array
+        # to avoid holding duplicate arrays in memory while preserving downstream access.
+        self.HRU.var.water_content_residual_m = self.HRU.var.packed_soil_properties[
+            :, SOIL_PROP_WATER_CONTENT_RESIDUAL_M, :
+        ]
+        self.HRU.var.water_content_wilting_point_m = (
+            self.HRU.var.packed_soil_properties[
+                :, SOIL_PROP_WATER_CONTENT_WILTING_POINT_M, :
+            ]
+        )
+        self.HRU.var.water_content_field_capacity_m = (
+            self.HRU.var.packed_soil_properties[
+                :, SOIL_PROP_WATER_CONTENT_FIELD_CAPACITY_M, :
+            ]
+        )
+        self.HRU.var.water_content_saturated_m = self.HRU.var.packed_soil_properties[
+            :, SOIL_PROP_WATER_CONTENT_SATURATED_M, :
+        ]
+        self.HRU.var.solid_heat_capacity_J_per_m2_K = (
+            self.HRU.var.packed_soil_properties[
+                :, SOIL_PROP_SOLID_HEAT_CAPACITY_J_PER_M2_K, :
+            ]
+        )
+        self.HRU.var.thermal_conductivity_saturated_unfrozen_W_per_m_K = (
+            self.HRU.var.packed_soil_properties[
+                :, SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_UNFROZEN_W_PER_M_K, :
+            ]
+        )
+        self.HRU.var.thermal_conductivity_saturated_frozen_W_per_m_K = (
+            self.HRU.var.packed_soil_properties[
+                :, SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_FROZEN_W_PER_M_K, :
+            ]
+        )
+        self.HRU.var.thermal_conductivity_dry_soil_W_per_m_K = (
+            self.HRU.var.packed_soil_properties[
+                :, SOIL_PROP_THERMAL_CONDUCTIVITY_DRY_SOIL_W_PER_M_K, :
+            ]
+        )
+        self.HRU.var.sand_percentage = self.HRU.var.packed_soil_properties[
+            :, SOIL_PROP_SAND_PERCENTAGE, :
+        ]
+        self.HRU.var.soil_layer_height_m = self.HRU.var.packed_soil_properties[
+            :, SOIL_PROP_SOIL_LAYER_HEIGHT_M, :
+        ]
+        self.HRU.var.bubbling_pressure_m_positive = self.HRU.var.packed_soil_properties[
+            :, SOIL_PROP_BUBBLING_PRESSURE_M_POSITIVE, :
+        ]
+        self.HRU.var.lambda_pore_size_distribution = (
+            self.HRU.var.packed_soil_properties[
+                :, SOIL_PROP_LAMBDA_PORE_SIZE_DISTRIBUTION, :
+            ]
+        )
+        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s = (
+            self.HRU.var.packed_soil_properties[
+                :,
+                SOIL_PROP_HORIZONTAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S,
+                :,
+            ]
+        )
+        self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s = (
+            self.HRU.var.packed_soil_properties[
+                :,
+                SOIL_PROP_VERTICAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S,
+                :,
+            ]
         )
 
     def step(

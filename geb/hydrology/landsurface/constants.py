@@ -58,4 +58,39 @@ C_MINERAL_VOLUMETRIC_J_PER_M3_K: np.float32 = np.float32(2.13e6)
 RHO_MINERAL_KG_PER_M3: np.float32 = np.float32(2650.0)
 
 N_SOIL_LAYERS: int = 6
+
+# Packed static soil property indices
+SOIL_PROP_WATER_CONTENT_RESIDUAL_M: int = 0
+SOIL_PROP_WATER_CONTENT_WILTING_POINT_M: int = 1
+SOIL_PROP_WATER_CONTENT_FIELD_CAPACITY_M: int = 2
+SOIL_PROP_WATER_CONTENT_SATURATED_M: int = 3
+SOIL_PROP_SOLID_HEAT_CAPACITY_J_PER_M2_K: int = 4
+SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_UNFROZEN_W_PER_M_K: int = 5
+SOIL_PROP_THERMAL_CONDUCTIVITY_SATURATED_FROZEN_W_PER_M_K: int = 6
+SOIL_PROP_THERMAL_CONDUCTIVITY_DRY_SOIL_W_PER_M_K: int = 7
+SOIL_PROP_SAND_PERCENTAGE: int = 8
+SOIL_PROP_SOIL_LAYER_HEIGHT_M: int = 9
+SOIL_PROP_BUBBLING_PRESSURE_M_POSITIVE: int = 10
+SOIL_PROP_LAMBDA_PORE_SIZE_DISTRIBUTION: int = 11
+SOIL_PROP_HORIZONTAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S: int = 12
+SOIL_PROP_VERTICAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S: int = 13
+N_STATIC_SOIL_PROPS: int = 14
+
+STATIC_SOIL_PROPERTY_NAMES: tuple[str, ...] = (
+    "water_content_residual_m",
+    "water_content_wilting_point_m",
+    "water_content_field_capacity_m",
+    "water_content_saturated_m",
+    "solid_heat_capacity_J_per_m2_K",
+    "thermal_conductivity_saturated_unfrozen_W_per_m_K",
+    "thermal_conductivity_saturated_frozen_W_per_m_K",
+    "thermal_conductivity_dry_soil_W_per_m_K",
+    "sand_percentage",
+    "soil_layer_height",
+    "bubbling_pressure_m_positive",
+    "lambda_pore_size_distribution",
+    "horizontal_saturated_hydraulic_conductivity_m_per_s",
+    "vertical_saturated_hydraulic_conductivity_m_per_s",
+)
+
 N_SNOW_LAYERS: int = 2
