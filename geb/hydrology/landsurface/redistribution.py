@@ -262,9 +262,8 @@ def distribute_soil_water_ross(
 
     for i in range(N_SOIL_LAYERS):
         # Effective saturation and suction potential, limit to [0.001, 0.999] for numerical stability.
-        s_eff = (water_content_m[i] - water_content_residual_m[i]) / (
-            water_content_saturated_m[i] - water_content_residual_m[i]
-        )
+        available_capacity = water_content_saturated_m[i] - water_content_residual_m[i]
+        s_eff = (water_content_m[i] - water_content_residual_m[i]) / available_capacity
         s_eff = max(np.float32(0.001), min(np.float32(0.999), s_eff))
         effective_saturation[i] = s_eff
 
@@ -296,7 +295,8 @@ def distribute_soil_water_ross(
         # Campbell conductivity function
         # Campbell, G. S. (1974). A simple method for determining unsaturated conductivity
         # from moisture retention data. Soil science, 117(6), 311-314.
-        K[i] = sat_cond_s * s_eff ** pore_size_index[i]
+        s_eff_pow_pore_size = s_eff ** pore_size_index[i]
+        K[i] = sat_cond_s * s_eff_pow_pore_size
 
         # Ross (2003) rewrites the Richards equation using the matric flux
         # potential, a Kirchhoff-style transform of hydraulic conductivity.
@@ -354,9 +354,7 @@ def distribute_soil_water_ross(
             # Saturated lateral conductivity does not depend on S; derivative is purely dW/dS:
             if free_water_m > np.float32(0.0):
                 dq_interflow_dS[i] = (
-                    interflow_drainage_rate_s
-                    * (water_content_saturated_m[i] - water_content_residual_m[i])
-                    * liquid_fractions[i]
+                    interflow_drainage_rate_s * available_capacity * liquid_fractions[i]
                 )
             else:
                 dq_interflow_dS[i] = np.float32(0.0)
@@ -369,12 +367,12 @@ def distribute_soil_water_ross(
             )
             drainable_porosity = max(
                 np.float32(1e-6),
-                (water_content_saturated_m[i] - water_content_residual_m[i])
-                / soil_layer_height[i],
+                available_capacity / soil_layer_height[i],
             )
-            lateral_K_matrix_s = horizontal_saturated_hydraulic_conductivity_m_per_s[
-                i
-            ] * (s_eff ** pore_size_index[i])
+            lateral_K_matrix_s = (
+                horizontal_saturated_hydraulic_conductivity_m_per_s[i]
+                * s_eff_pow_pore_size
+            )
             lateral_K_m_per_s = (
                 lateral_K_matrix_s * np.float32(10.0) * interflow_multiplier
             )
@@ -394,8 +392,7 @@ def distribute_soil_water_ross(
 
             dq_interflow_dS[i] = (
                 d_interflow_drainage_rate_dS * free_water_m
-                + interflow_drainage_rate_s
-                * (water_content_saturated_m[i] - water_content_residual_m[i])
+                + interflow_drainage_rate_s * available_capacity
             ) * liquid_fractions[i]
 
     # q holds vertical fluxes at layer interfaces:
