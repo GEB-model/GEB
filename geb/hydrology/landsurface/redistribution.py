@@ -260,7 +260,6 @@ def distribute_soil_water_ross(
     b = stack_empty(N_SOIL_LAYERS, np.float32)
     c = stack_empty(N_SOIL_LAYERS, np.float32)
     d = stack_empty(N_SOIL_LAYERS, np.float32)
-    dS = stack_empty(N_SOIL_LAYERS, np.float32)
     inv_timestep_s: np.float32 = np.float32(1.0) / timestep_length_s
 
     for i in range(N_SOIL_LAYERS):
@@ -573,10 +572,10 @@ def distribute_soil_water_ross(
         b[i] = b[i] - m * c[i - 1]
         d[i] = d[i] - m * d[i - 1]
 
-    # Backward substitution:
-    dS[N_SOIL_LAYERS - 1] = d[N_SOIL_LAYERS - 1] / b[N_SOIL_LAYERS - 1]
+    # Backward substitution writing directly into d:
+    d[N_SOIL_LAYERS - 1] = d[N_SOIL_LAYERS - 1] / b[N_SOIL_LAYERS - 1]
     for i in range(N_SOIL_LAYERS - 2, -1, -1):
-        dS[i] = (d[i] - c[i] * dS[i + 1]) / b[i]
+        d[i] = (d[i] - c[i] * d[i + 1]) / b[i]
 
     # Total interflow tracking
     total_lateral_outflow_m = np.float32(0.0)
@@ -587,7 +586,7 @@ def distribute_soil_water_ross(
     # update layer water contents, and advect enthalpy with the moving water.
     for i in range(N_SOIL_LAYERS - 1):
         corrected_q_interface_m_per_s = q[i + 1] + (
-            dq_dS_i[i + 1] * dS[i] + dq_dS_iplus1[i + 1] * dS[i + 1]
+            dq_dS_i[i + 1] * d[i] + dq_dS_iplus1[i + 1] * d[i + 1]
         )
         flux_m: np.float32 = corrected_q_interface_m_per_s * timestep_length_s
 
@@ -684,7 +683,7 @@ def distribute_soil_water_ross(
         N_SOIL_LAYERS - 1
     )  # lowest soil layer is the interface with groundwater
     linearized_gw_flux_m_per_s: np.float32 = q[N_SOIL_LAYERS] + (
-        dq_dS_i[N_SOIL_LAYERS] * dS[bottom_layer]
+        dq_dS_i[N_SOIL_LAYERS] * d[bottom_layer]
     )
     # Downward gravity drainage cannot turn into upward capillary rise through Taylor linearization
     if q[N_SOIL_LAYERS] >= np.float32(0.0):
@@ -733,8 +732,9 @@ def distribute_soil_water_ross(
     # Since interflow is in the matrix, it's already accounted for in dS,
     # but we need to get it separately for to be able to return the total
     # interflow, and to apply the enthalpy loss from interflow advection.
+    interflow_temp_C: np.float32 = np.float32(0.0)
     for i in range(N_SOIL_LAYERS):
-        corrected_q_interflow_m_per_s = q_interflow[i] + (dq_interflow_dS[i] * dS[i])
+        corrected_q_interflow_m_per_s = q_interflow[i] + (dq_interflow_dS[i] * d[i])
         in_active_wetting_front_apply: bool = bool(
             green_ampt_active_layer_idx >= 0 and i <= green_ampt_active_layer_idx
         )

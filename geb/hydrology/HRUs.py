@@ -26,6 +26,7 @@ from geb.geb_types import (
     ArrayWithScalar,
     T_OneorTwoDArray,
     ThreeDArray,
+    ThreeDArrayFloat32,
     ThreeDArrayWithScalar,
     TwoDArray,
     TwoDArrayBool,
@@ -141,6 +142,40 @@ def _to_grid_1d(
 
 
 @njit(cache=True, parallel=True)
+def _to_grid_2d_from_hru(
+    data: TwoDArrayFloat32,
+    cell_start_indices: ArrayInt32,
+    grid_to_HRU: ArrayInt32,
+    land_use_ratio: ArrayFloat32,
+) -> TwoDArrayFloat32:
+    """Numba parallel kernel for 2D HRU-major (n_HRUs, n_timesteps) → grid weighted mean.
+
+    Parallelised over grid cells. For each grid cell, all timesteps are accumulated
+    contiguously per HRU, pulling the entire cell's timesteps into cache at once.
+
+    Args:
+        data: HRU values, shape (n_HRUs, n_timesteps).
+        cell_start_indices: Inclusive start index of each grid cell's HRUs (size n_grid_cells).
+        grid_to_HRU: Exclusive end index of each grid cell's HRUs (size n_grid_cells).
+        land_use_ratio: Fractional area of each HRU within its grid cell.
+
+    Returns:
+        Weighted-mean per grid cell, shape (n_timesteps, n_grid_cells).
+    """
+    n_timesteps: int = data.shape[1]
+    n_grid_cells: int = grid_to_HRU.size
+    out: TwoDArrayFloat32 = np.zeros((n_timesteps, n_grid_cells), dtype=np.float32)
+    for i in prange(n_grid_cells):
+        start: int = cell_start_indices[i]
+        end: int = grid_to_HRU[i]
+        for j in range(start, end):
+            r: np.float32 = land_use_ratio[j]
+            for t in range(n_timesteps):
+                out[t, i] += data[j, t] * r
+    return out
+
+
+@njit(cache=True, parallel=True)
 def _to_grid_2d(
     data: TwoDArrayFloat32,
     cell_start_indices: ArrayInt32,
@@ -230,6 +265,13 @@ def to_grid(
             cast(ArrayFloat32, data), cell_start_indices, grid_to_HRU, land_use_ratio
         )
     elif data.ndim == 2:
+        if data.shape[0] == grid_to_HRU[-1]:
+            return _to_grid_2d_from_hru(
+                cast(TwoDArrayFloat32, data),
+                cell_start_indices,
+                grid_to_HRU,
+                land_use_ratio,
+            )
         return _to_grid_2d(
             cast(TwoDArrayFloat32, data),
             cell_start_indices,
@@ -702,6 +744,7 @@ class HRUVariables(Bucket):
     potential_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32
     crop_map: ArrayInt32
     topwater: ArrayFloat32
+    packed_soil_properties: ThreeDArrayFloat32
     soil_layer_height_m: TwoDArrayFloat32
     water_content_field_capacity_m: TwoDArrayFloat32
     water_content_m: TwoDArrayFloat32
