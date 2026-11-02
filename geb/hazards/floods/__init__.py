@@ -1068,9 +1068,7 @@ class Floods(Module):
                     f"Maximum Flood Depth — {return_period}-year Return Period"
                 )
                 figures_dir: Path = (
-                    self.simulation_root
-                    / sfincs_inland_root_models[0].name
-                    / "figures"
+                    self.simulation_root / sfincs_inland_root_models[0].name / "figures"
                 )
                 figures_dir.mkdir(parents=True, exist_ok=True)
                 fig.savefig(
