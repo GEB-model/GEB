@@ -414,7 +414,7 @@ class SFINCSRootModel:
             DEM["elevation"] = clip_with_geometry(
                 DEM["elevation"]["elevation"],
                 gpd.GeoDataFrame(
-                    [self.subbasins.union_all().buffer(0.3)],
+                    [self.subbasins.union_all().buffer(0.1)],
                     columns=["geometry"],
                     crs=self.subbasins.crs,
                 ),
@@ -1305,7 +1305,7 @@ class SFINCSRootModel:
         )
 
     def get_flood_plain(
-        self, maximum_height_above_nearest_drainage_m: float = 30.0
+        self, maximum_height_above_nearest_drainage_m: float = 10.0
     ) -> gpd.GeoDataFrame:
         """Returns the flood plain grid of the SFINCS model.
 
