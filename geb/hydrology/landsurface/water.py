@@ -750,9 +750,14 @@ def infiltration(
     for i in range(green_ampt_active_layer_idx + 1):
         current_layer_depth_limit += soil_layer_height_m[i]
 
+    # Total soil depth is invariant during infiltration; computing it here hoists the sum out of the substep loop.
     total_soil_depth: np.float32 = np.sum(soil_layer_height_m)
 
-    saturated_conductivity_of_most_restrictive_layer = (
+    # Restrictive saturated hydraulic conductivity:
+    # Apply a crust factor of 0.2 to the surface layer to account for raindrop impact and surface sealing.
+    # Initializing here and updating only when the wetting front crosses a layer boundary avoids redundant
+    # scanning loops over layers during each Green-Ampt temporal substep.
+    saturated_conductivity_of_most_restrictive_layer: np.float32 = (
         saturated_hydraulic_conductivity_m_per_s[0]
     ) * np.float32(0.2)
     for i in range(1, green_ampt_active_layer_idx + 1):

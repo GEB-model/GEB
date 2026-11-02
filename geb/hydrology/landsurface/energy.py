@@ -1163,8 +1163,11 @@ def solve_soil_enthalpy_column(
     )
 
     # Thomas algorithm forward sweep and back substitution.
-    # Reuses upper_diagonal_c (for c') and rhs_vector_d (for d' and final updated enthalpies)
-    # to eliminate 3 temporary stack arrays while computing bit-for-bit identical results.
+    # Scratch memory optimization:
+    # 1. upper_diagonal_c is overwritten in-place to store the forward substitution coefficients c'.
+    # 2. rhs_vector_d is overwritten in-place to store d' and the back-substituted enthalpy solutions.
+    # 3. Subdiagonal element a[i] = -conductance * dT_dH is evaluated on the fly in a CPU register (lower_diagonal_sub_a),
+    #    eliminating the need to allocate and write into a dedicated lower_diagonal_a stack array.
     if main_diagonal_b[0] == np.float32(0.0):
         upper_diagonal_c[0] = np.float32(0.0)
         rhs_vector_d[0] = np.float32(0.0)
@@ -1173,17 +1176,18 @@ def solve_soil_enthalpy_column(
         rhs_vector_d[0] = rhs_vector_d[0] / main_diagonal_b[0]
 
     for layer_idx in range(1, n_total_layers):
-        lower_a = (
+        lower_diagonal_sub_a: np.float32 = (
             -thermal_conductances_between_layer_centers_W_per_m2_K[layer_idx - 1]
             * dT_dH_linearized[layer_idx - 1]
         )
         denominator = (
-            main_diagonal_b[layer_idx] - lower_a * upper_diagonal_c[layer_idx - 1]
+            main_diagonal_b[layer_idx]
+            - lower_diagonal_sub_a * upper_diagonal_c[layer_idx - 1]
         )
         if layer_idx < n_total_layers - 1:
             upper_diagonal_c[layer_idx] = upper_diagonal_c[layer_idx] / denominator
         rhs_vector_d[layer_idx] = (
-            rhs_vector_d[layer_idx] - lower_a * rhs_vector_d[layer_idx - 1]
+            rhs_vector_d[layer_idx] - lower_diagonal_sub_a * rhs_vector_d[layer_idx - 1]
         ) / denominator
 
     for layer_idx in range(n_total_layers - 2, -1, -1):

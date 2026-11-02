@@ -151,7 +151,8 @@ def _to_grid_2d_from_hru(
     """Numba parallel kernel for 2D HRU-major (n_HRUs, n_timesteps) → grid weighted mean.
 
     Parallelised over grid cells. For each grid cell, all timesteps are accumulated
-    contiguously per HRU, pulling the entire cell's timesteps into cache at once.
+    contiguously per HRU, pulling the entire cell's timesteps into cache at once
+    and eliminating the need for an expensive matrix transpose.
 
     Args:
         data: HRU values, shape (n_HRUs, n_timesteps).
@@ -169,9 +170,9 @@ def _to_grid_2d_from_hru(
         start: int = cell_start_indices[i]
         end: int = grid_to_HRU[i]
         for j in range(start, end):
-            r: np.float32 = land_use_ratio[j]
+            hru_area_ratio: np.float32 = land_use_ratio[j]
             for t in range(n_timesteps):
-                out[t, i] += data[j, t] * r
+                out[t, i] += data[j, t] * hru_area_ratio
     return out
 
 

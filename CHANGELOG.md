@@ -1,5 +1,6 @@
 # dev
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
+- Optimized LandSurface model preparation and daily water and enthalpy balance checks: fused cellwise validation and balance budget closures into parallel Numba kernels with zero allocations on the happy path, cached static crop and groundwater tables, and eliminated unused 25 MB delta_z allocations.
 
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.
