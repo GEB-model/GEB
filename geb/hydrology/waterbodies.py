@@ -137,7 +137,7 @@ class WaterBodies(Module):
 
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
-        self.hydrological_year_start_month = self.model.config["general"][
+        self.hydrological_year_start_month = self.model.config["hydrology"][
             "hydrological_year_start_month"
         ]
         if self.model.in_spinup:

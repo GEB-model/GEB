@@ -76,7 +76,7 @@ class Evaluate:
                 f"Method {method} is not implemented in Evaluate class."
             ) from exc
 
-        self.model.in_spinup = self.model.config["general"]["spinup_name"] == run_name
+        self.model.in_spinup = self.model.config["spinup_name"] == run_name
         self.run_name = run_name
 
         # Merge run_name into kwargs to pass all evaluation options as keyword arguments.
@@ -92,9 +92,7 @@ class Evaluate:
     def output_folder_evaluate(self) -> Path:
         """Returns the output folder for evaluation results."""
         folder: Path = (
-            Path(self.model.config["general"]["output_folder"])
-            / self.run_name
-            / "evaluate"
+            Path(self.model.config["output_folder"]) / self.run_name / "evaluate"
         )
         folder.mkdir(parents=True, exist_ok=True)
         return folder

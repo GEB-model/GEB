@@ -13,6 +13,12 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b40": [
+        "[update-method;setup_flood_protection_standards]",
+    ],
+    "1.0.0b39": [
+        "[manual] Fully replace your model config with the new format as shown in the examples. Also define the study region in a separate 'region.yml' instead of 'model.yml'.",
+    ],
     "1.0.0b38": [
         "[update-method;setup_hydrography]",
         "[update-method;setup_floodplains]",

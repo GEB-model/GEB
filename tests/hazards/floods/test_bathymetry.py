@@ -12,6 +12,7 @@ from shapely.geometry import LineString
 
 from geb.hazards.floods.workflows.bathymetry import (
     burn_rivers,
+    capture_subgrid_initial_water_level,
     skip_subgrid_tiles_without_river_bed_levels,
 )
 from tests.testconfig import output_folder
@@ -311,7 +312,7 @@ def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
     if with_obstacles:
         da_elv = add_river_obstacles(da_elv, gdf_riv)
 
-    da_elv_out, da_man_out = burn_rivers(
+    da_elv_out, da_man_out, da_ini_out = burn_rivers(
         elevation_grid=da_elv,
         manning_grid=da_man,
         rivers=gdf_riv,
@@ -319,7 +320,15 @@ def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
 
     # Structural validations
     assert da_elv_out.shape == da_elv.shape
+    assert da_ini_out.shape == da_elv.shape
     assert not np.isnan(da_elv_out.values).all()
+    burned_mask = np.isfinite(da_ini_out.values)
+    assert burned_mask.any()
+    assert np.all(da_ini_out.values[burned_mask] > da_elv_out.values[burned_mask])
+    np.testing.assert_array_equal(
+        da_elv_out.values[~burned_mask],
+        da_elv.values[~burned_mask],
+    )
 
     crs_lbl: Literal["projected", "geographic"] = (
         "projected" if crs == 32631 else "geographic"
@@ -378,3 +387,60 @@ def test_subgrid_tile_without_river_bed_levels() -> None:
     # the original function must be restored afterwards
     with pytest.raises(ValueError, match="Lengths of inputs do not match"):
         burn_river_rect(da_elv=elevation, da_man=manning, gdf_riv=river_on_tile_edge)
+
+
+def test_capture_subgrid_initial_water_level() -> None:
+    """Capturing subgrid initial water levels must match the exact burned subgrid pixels."""
+    import hydromt_sfincs.workflows.bathymetry as hydromt_sfincs_bathymetry
+
+    nr_subgrid_pixels: int = 2
+    # Coarse grid is 4x4 with 100 m cells; subgrid tile has +1 overlap cell -> (5*2, 5*2) = (10, 10) at 50 m
+    coarse_x: np.ndarray = np.arange(0.5, 4.5) * 100.0 + 500000.0
+    coarse_y: np.ndarray = np.arange(3.5, -0.5, -1.0) * 100.0 + 5000000.0
+    grid_mask: xr.DataArray = xr.DataArray(
+        np.ones((4, 4), dtype=np.uint8),
+        coords={"y": coarse_y, "x": coarse_x},
+        dims=("y", "x"),
+    ).rio.write_crs(32631)
+
+    subgrid_x: np.ndarray = np.arange(0.5, 10.5) * 50.0 + 500000.0
+    subgrid_y: np.ndarray = np.arange(9.5, -0.5, -1.0) * 50.0 + 4999900.0
+    elevation: xr.DataArray = xr.DataArray(
+        np.full((10, 10), 12.0, dtype=np.float32),
+        coords={"y": subgrid_y, "x": subgrid_x},
+        dims=("y", "x"),
+    )
+    elevation.raster.set_crs(32631)
+    manning: xr.DataArray = elevation * 0 + 0.03
+    river: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"rivwth": [100.0], "rivdph": [3.0], "manning": [0.03]},
+        geometry=[LineString([(500050.0, 5000225.0), (500350.0, 5000225.0)])],
+        crs=32631,
+    )
+
+    with capture_subgrid_initial_water_level(
+        grid_mask=grid_mask,
+        nr_subgrid_pixels=nr_subgrid_pixels,
+    ) as initial_water_level:
+        burned_elv, _ = hydromt_sfincs_bathymetry.burn_river_rect(
+            da_elv=elevation,
+            da_man=manning,
+            gdf_riv=river,
+        )
+
+    burned_subgrid = (
+        burned_elv.values[:-nr_subgrid_pixels, :-nr_subgrid_pixels]
+        < elevation.values[:-nr_subgrid_pixels, :-nr_subgrid_pixels]
+    )
+    expected_burned_coarse = burned_subgrid.reshape(
+        4, nr_subgrid_pixels, 4, nr_subgrid_pixels
+    ).any(axis=(1, 3))
+    assert expected_burned_coarse.any()
+    np.testing.assert_array_equal(
+        initial_water_level.notnull().values,
+        expected_burned_coarse,
+    )
+    np.testing.assert_allclose(
+        initial_water_level.values[expected_burned_coarse],
+        12.0,
+    )

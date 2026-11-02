@@ -22,10 +22,12 @@ from geb.hydrology.routing.geometry import (
     compute_cfl_area_and_top_width,
     compute_cross_section_from_depth,
     compute_hydraulic_geometry_width,
+    compute_overbank_area_from_depth,
     compute_overbank_depth_and_top_width,
     compute_static_geometry,
     compute_top_width_from_depth,
 )
+from geb.hydrology.routing.inertial_kernel import _compute_reach_stage_and_cfl_depth
 
 
 class DummyGridVar:
@@ -124,6 +126,7 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         inverse_reach_length=inverse_reach_length[0],
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
@@ -153,6 +156,7 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         inverse_reach_length=inverse_reach_length[0],
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
@@ -189,6 +193,7 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         inverse_reach_length=inverse_reach_length[0],
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
@@ -241,6 +246,7 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         inverse_reach_length=inverse_reach_length[0],
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
@@ -282,6 +288,7 @@ def test_compute_cross_section_from_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area_arr[0],
         bankfull_perimeter_m=bankfull_perimeter_arr[0],
@@ -301,6 +308,7 @@ def test_compute_cross_section_from_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area_arr[0],
         bankfull_perimeter_m=bankfull_perimeter_arr[0],
@@ -374,6 +382,7 @@ def test_compute_cross_section_divided_channel_conveyance_monotonicity() -> None
             bankfull_width_m=bankfull_width_m,
             shape_exponent=shape_exponent,
             bankfull_depth_m=bankfull_depth_m,
+            levee_depth_m=bankfull_depth_m,
             inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
             bankfull_area_m2=bankfull_area_arr[0],
             bankfull_perimeter_m=bankfull_perimeter_arr[0],
@@ -503,9 +512,12 @@ class DummyModel:
         """
         self.in_spinup: bool = False
         self.config: dict[str, Any] = {
-            "parameters": {
-                "bankfull_discharge_multiplier": mult,
-                "mannings_n_multiplier": 1.0,
+            "hydrology": {
+                "routing": {
+                    "bankfull_discharge_multiplier": mult,
+                    "mannings_n_multiplier": 1.0,
+                    "lake_outflow_multiplier": 1.0,
+                }
             }
         }
         self.files: dict[str, Any] = {
@@ -545,17 +557,13 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
     routing.config = {
         "max_threads": None,
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            },
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            },
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -661,17 +669,13 @@ def test_routing_updates_rivers_geometry() -> None:
     routing.grid = DummyGrid(5)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -707,6 +711,7 @@ def test_routing_updates_rivers_geometry() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=floodplain_profile_widths_grid_m,
         floodplain_side_slope_grid_m_per_m=floodplain_side_slope_grid_m_per_m,
@@ -736,17 +741,13 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
     routing.grid = DummyGrid(3)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -779,6 +780,7 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
         routing._update_rivers_geometry(
             width_grid=width_grid,
             depth_grid=depth_grid,
+            levee_depth_grid=depth_grid,
             manning_grid=manning_grid,
             floodplain_profile_widths_grid_m=np.zeros(
                 (len(width_grid), 10), dtype=np.float32
@@ -806,17 +808,13 @@ def test_routing_unobserved_channel_width_depth_estimation() -> None:
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            },
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            },
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -873,18 +871,15 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
     routing.config = {
         "max_threads": None,
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            },
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            },
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
+        "flood_protection": {"enabled": True},
         "retention_basins": {"release_threshold_factor": 1.0},
         "riverbed_hydraulic_conductivity_multiplier": 0.1,
     }
@@ -916,6 +911,8 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
             "width": [np.nan, np.nan],
             "depth": [np.nan, np.nan],
             "manning": [np.nan, np.nan],
+            # T = 2 yr: no levees above bankfull, isolates the width estimate
+            "flood_protection_standard": [2.0, 2.0],
         },
         index=[10, 20],
     )
@@ -991,17 +988,13 @@ def test_unrepresented_river_geometry_confluence() -> None:
     routing.grid = DummyGrid(4)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1035,6 +1028,7 @@ def test_unrepresented_river_geometry_confluence() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
             (len(width_grid), 10), dtype=np.float32
@@ -1075,17 +1069,13 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
     routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1118,6 +1108,7 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
             (len(width_grid), 10), dtype=np.float32
@@ -1150,17 +1141,13 @@ def test_unrepresented_river_cascade_with_bankfull_multiplier() -> None:
     routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1193,6 +1180,7 @@ def test_unrepresented_river_cascade_with_bankfull_multiplier() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
             (len(width_grid), 10), dtype=np.float32
@@ -1233,17 +1221,13 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1276,6 +1260,7 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
             (len(width_grid), 10), dtype=np.float32
@@ -1301,17 +1286,13 @@ def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1346,6 +1327,7 @@ def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
             (len(width_grid), 10), dtype=np.float32
@@ -1372,17 +1354,13 @@ def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1415,6 +1393,7 @@ def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
             (len(width_grid), 10), dtype=np.float32
@@ -1442,17 +1421,13 @@ def test_unrepresented_river_confluence_both_observed_widths() -> None:
     routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1485,6 +1460,7 @@ def test_unrepresented_river_confluence_both_observed_widths() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
             (len(width_grid), 10), dtype=np.float32
@@ -1507,17 +1483,13 @@ def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
     routing.grid = DummyGrid(2)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1552,6 +1524,7 @@ def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
             (len(width_grid), 10), dtype=np.float32
@@ -1574,17 +1547,13 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1617,6 +1586,7 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
             (len(width_grid), 10), dtype=np.float32
@@ -1640,17 +1610,13 @@ def test_unrepresented_river_non_positive_width_raises_assertion() -> None:
     routing.grid = DummyGrid(1)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -1680,6 +1646,7 @@ def test_unrepresented_river_non_positive_width_raises_assertion() -> None:
         routing._update_rivers_geometry(
             width_grid=np.array([0.0], dtype=np.float32),
             depth_grid=np.array([1.0], dtype=np.float32),
+            levee_depth_grid=np.array([1.0], dtype=np.float32),
             manning_grid=np.array([0.03], dtype=np.float32),
             floodplain_profile_widths_grid_m=np.zeros((1, 10), dtype=np.float32),
             floodplain_side_slope_grid_m_per_m=np.array([2.0], dtype=np.float32),
@@ -1711,17 +1678,13 @@ def test_parabolic_channel_geometry_and_mean_depth_conversion() -> None:
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -1796,17 +1759,13 @@ def test_routing_calculate_bankfull_depth_continuity_scaling_with_observed_width
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -1901,17 +1860,13 @@ def test_routing_calculate_bankfull_depth_flag_revert_machinery() -> None:
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -1945,9 +1900,7 @@ def test_routing_calculate_bankfull_depth_flag_revert_machinery() -> None:
     assert np.isclose(float(depth_cold_true[0]), expected_depth_q100, rtol=1e-3)
 
     # 2. Cold-start with Flag False: q_proxy = (72.0 / 14.4)^2 = 25.0 m3/s -> depth scales by (0.25)^0.6
-    routing.config["river_depth"]["parameters"]["use_observed_width_as_bankfull"] = (
-        False
-    )
+    routing.config["river_depth"]["use_observed_width_as_bankfull"] = False
     depth_cold_false: ArrayFloat32 = routing.calculate_bankfull_depth(
         bankfull_top_width_m=widths,
         use_simulated_bankfull_q=False,
@@ -1969,11 +1922,9 @@ def test_routing_missing_config_keys_raise_key_error() -> None:
     # Missing river_width entirely raises KeyError
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
     }
     with pytest.raises(KeyError):
@@ -1982,16 +1933,12 @@ def test_routing_missing_config_keys_raise_key_error() -> None:
     # Missing use_observed_width_as_bankfull raises KeyError
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     with pytest.raises(KeyError):
@@ -2007,17 +1954,13 @@ def test_routing_calculate_bankfull_width() -> None:
     routing.grid = DummyGrid(3)  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -2078,17 +2021,13 @@ def test_routing_unobserved_river_width_and_depth_uses_parameters() -> None:
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 0.5
@@ -2159,17 +2098,13 @@ def test_bankfull_discharge_multiplier_scaling() -> None:
         r.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
         r.config = {
             "river_width": {
-                "parameters": {
-                    "default_alpha": 7.2,
-                    "beta": 0.5,
-                },
+                "default_alpha": 7.2,
+                "beta": 0.5,
             },
             "river_depth": {
-                "parameters": {
-                    "min_depth_m": 0.1,
-                    "shape_exponent": 0.5,
-                    "use_observed_width_as_bankfull": False,
-                },
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": False,
             },
         }
         r.default_missing_channel_width = 0.5
@@ -2244,6 +2179,8 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     from geb.workflows.io import read_geom, write_geom
 
     routing = Routing.__new__(Routing)
+    # Flood protection is not under test here; disable it so no standards table is needed
+    routing.config = {"flood_protection": {"enabled": False}}
 
     # 1x4 grid:
     # (0, 0): Lake 5 (non-outflow), drains East (6)
@@ -2396,6 +2333,7 @@ def test_compute_overbank_depth_and_top_width_10_point_profile() -> None:
         river_width=np.array([20.0, 30.0], dtype=np.float32),
         shape_exponent=np.array([0.5, 0.5], dtype=np.float32),
         bankfull_depth=np.array([2.0, 3.0], dtype=np.float32),
+        levee_depth=np.array([2.0, 3.0], dtype=np.float32),
         bed_elevation=np.array([10.0, 5.0], dtype=np.float32),
         ds_bed_elevation=np.array([5.0, 0.0], dtype=np.float32),
         interface_bed_elevation_max=np.array([10.0, 5.0], dtype=np.float32),
@@ -2435,17 +2373,13 @@ def test_routing_calculate_bankfull_width_and_depth_limited_by_floodplain() -> N
     routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 1.0
@@ -2530,17 +2464,13 @@ def test_routing_calculate_bankfull_depth_slope_scaling_swot() -> None:
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": 7.2,
-                "beta": 0.5,
-            }
+            "default_alpha": 7.2,
+            "beta": 0.5,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -2640,17 +2570,13 @@ def test_routing_calculate_bankfull_width_depth_coupled_system() -> None:
 
     routing.config = {
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
         "river_width": {
-            "parameters": {
-                "default_alpha": alpha_val,
-                "beta": beta_val,
-            }
+            "default_alpha": alpha_val,
+            "beta": beta_val,
         },
     }
     routing.default_missing_channel_width = 10.0
@@ -2750,6 +2676,7 @@ def test_compute_top_width_from_depth() -> None:
     assert compute_top_width_from_depth(
         water_depth_m=np.float32(0.0),
         bankfull_depth_m=bankfull_depth,
+        levee_depth_m=bankfull_depth,
         bankfull_width_m=bankfull_width,
         shape_exponent=shape_exponent,
         floodplain_widths=fp_widths,
@@ -2758,6 +2685,7 @@ def test_compute_top_width_from_depth() -> None:
     assert compute_top_width_from_depth(
         water_depth_m=np.float32(-1.0),
         bankfull_depth_m=bankfull_depth,
+        levee_depth_m=bankfull_depth,
         bankfull_width_m=bankfull_width,
         shape_exponent=shape_exponent,
         floodplain_widths=fp_widths,
@@ -2768,6 +2696,7 @@ def test_compute_top_width_from_depth() -> None:
     w_inbank: np.float32 = compute_top_width_from_depth(
         water_depth_m=np.float32(0.5),
         bankfull_depth_m=bankfull_depth,
+        levee_depth_m=bankfull_depth,
         bankfull_width_m=bankfull_width,
         shape_exponent=shape_exponent,
         floodplain_widths=fp_widths,
@@ -2780,6 +2709,7 @@ def test_compute_top_width_from_depth() -> None:
     w_overbank: np.float32 = compute_top_width_from_depth(
         water_depth_m=np.float32(2.1),
         bankfull_depth_m=bankfull_depth,
+        levee_depth_m=bankfull_depth,
         bankfull_width_m=bankfull_width,
         shape_exponent=shape_exponent,
         floodplain_widths=fp_widths,
@@ -3092,13 +3022,11 @@ def test_routing_calculate_bankfull_depth_steady_backwater_integration() -> None
     routing.var = var
 
     routing.config = {
-        "river_width": {"parameters": {"default_alpha": 7.2, "beta": 0.5}},
+        "river_width": {"default_alpha": 7.2, "beta": 0.5},
         "river_depth": {
-            "parameters": {
-                "min_depth_m": 0.1,
-                "shape_exponent": 0.5,
-                "use_observed_width_as_bankfull": True,
-            }
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
         },
     }
 
@@ -3121,3 +3049,428 @@ def test_routing_calculate_bankfull_depth_steady_backwater_integration() -> None
     assert len(depths_with_kin) == 3
     assert np.all(np.isfinite(depths_with_kin))
     assert depths_with_kin[0] >= 0.1
+
+
+def test_compute_cross_section_and_top_width_with_levees() -> None:
+    """Verifies cross-sectional hydraulic geometry and top width under embanked levees.
+
+    Tests the 3 geometric regimes:
+    1. In-bank (y <= h_bf): Parabolic power-law profile W(y) = W_bf * sqrt(y / h_bf), A = (2/3) * W_bf * y.
+    2. Embanked within levees (h_bf < y <= h_levee): Top width is strictly held at W_bf (no premature
+       floodplain spilling), area expands linearly A = A_bf + W_bf * (y - h_bf), and wetted perimeter
+       grows with vertical levee embankments P = P_bf + 2 * (y - h_bf), preserving high hydraulic radius.
+    3. Overbank overtopping (y > h_levee): Water inundates the protected floodplain behind the
+       levees, which lies at natural ground, so overbank depth is referenced to bankfull level
+       h_fp = y - h_bf.
+    """
+    bankfull_width_m: np.float32 = np.float32(50.0)
+    bankfull_depth_m: np.float32 = np.float32(4.0)
+    levee_depth_m: np.float32 = np.float32(7.0)  # 3 m levee above bankfull
+    shape_exponent: np.float32 = np.float32(0.5)  # Parabolic channel
+    side_slope_z: np.float32 = np.float32(2.0)
+
+    (
+        _,
+        inverse_shape_exponent_plus_one,
+        bankfull_area_arr,
+        _,
+        bankfull_perimeter_arr,
+        width_over_sqrt_bankfull_depth_arr,
+    ) = compute_static_geometry(
+        river_length=np.array([1000.0], dtype=np.float32),
+        river_width=np.array([bankfull_width_m], dtype=np.float32),
+        shape_exponent=np.array([shape_exponent], dtype=np.float32),
+        bankfull_depth=np.array([bankfull_depth_m], dtype=np.float32),
+    )
+
+    # 10-point floodplain widths: at depth 0 m width is 100 m, expanding by 20 m per depth increment
+    floodplain_widths: ArrayFloat32 = np.zeros(NUM_FLOODPLAIN_LEVELS, dtype=np.float32)
+    for k, depth in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
+        floodplain_widths[k] = np.float32(100.0 + 20.0 * depth)
+
+    # Regime 1: In-bank (y = 2.0 m < h_bf)
+    w_inbank: np.float32 = compute_top_width_from_depth(
+        water_depth_m=np.float32(2.0),
+        bankfull_depth_m=bankfull_depth_m,
+        bankfull_width_m=bankfull_width_m,
+        shape_exponent=shape_exponent,
+        floodplain_widths=floodplain_widths,
+        side_slope_z=side_slope_z,
+        levee_depth_m=levee_depth_m,
+    )
+    # W(2) = 50 * sqrt(2 / 4) = 50 * sqrt(0.5) ≈ 35.355 m
+    assert np.isclose(float(w_inbank), 50.0 * math.sqrt(0.5), rtol=1e-4)
+
+    area_inbank, w_sec_inbank, perim_inbank = compute_cross_section_from_depth(
+        effective_depth_m=np.float32(2.0),
+        bankfull_width_m=bankfull_width_m,
+        shape_exponent=shape_exponent,
+        bankfull_depth_m=bankfull_depth_m,
+        inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
+        bankfull_area_m2=bankfull_area_arr[0],
+        bankfull_perimeter_m=bankfull_perimeter_arr[0],
+        width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
+        levee_depth_m=levee_depth_m,
+    )
+    # A_inbank = (1 / 1.5) * W(2) * 2 = (2/3) * 35.3553 * 2 ≈ 47.14 m²
+    assert np.isclose(
+        float(area_inbank), (2.0 / 3.0) * float(w_inbank) * 2.0, rtol=1e-3
+    )
+    assert np.isclose(float(w_sec_inbank), float(w_inbank), rtol=1e-3)
+    assert perim_inbank > float(w_inbank)
+
+    # Regime 2: Embanked between bankfull and levee crest (y = 5.5 m, where h_bf = 4.0 < y <= h_levee = 7.0)
+    w_embanked: np.float32 = compute_top_width_from_depth(
+        water_depth_m=np.float32(5.5),
+        bankfull_depth_m=bankfull_depth_m,
+        bankfull_width_m=bankfull_width_m,
+        shape_exponent=shape_exponent,
+        floodplain_widths=floodplain_widths,
+        side_slope_z=side_slope_z,
+        levee_depth_m=levee_depth_m,
+    )
+    # Width must remain confined to bankfull width, NOT spilling onto floodplain!
+    assert np.isclose(float(w_embanked), float(bankfull_width_m), rtol=1e-5)
+
+    area_embanked, w_sec_embanked, perim_embanked = compute_cross_section_from_depth(
+        effective_depth_m=np.float32(5.5),
+        bankfull_width_m=bankfull_width_m,
+        shape_exponent=shape_exponent,
+        bankfull_depth_m=bankfull_depth_m,
+        inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
+        bankfull_area_m2=bankfull_area_arr[0],
+        bankfull_perimeter_m=bankfull_perimeter_arr[0],
+        width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
+        levee_depth_m=levee_depth_m,
+    )
+    # A_bf = (2/3) * 50 * 4 = 133.333 m²
+    # Delta h = 5.5 - 4.0 = 1.5 m -> Delta A = 50 * 1.5 = 75 m² -> Total A = 208.333 m²
+    expected_area_embanked: float = (2.0 / 3.0) * 50.0 * 4.0 + 50.0 * 1.5
+    assert np.isclose(float(area_embanked), expected_area_embanked, rtol=1e-3)
+    assert np.isclose(float(w_sec_embanked), float(bankfull_width_m), rtol=1e-5)
+    # Hydraulic radius R_h = A / P expands in embanked channel
+    rh_inbank: float = float(area_inbank) / float(perim_inbank)
+    rh_embanked: float = float(area_embanked) / float(perim_embanked)
+    assert rh_embanked > rh_inbank
+
+    # Regime 3: Overbank overtopping (y = 8.0 m > h_levee = 7.0)
+    w_overbank: np.float32 = compute_top_width_from_depth(
+        water_depth_m=np.float32(8.0),
+        bankfull_depth_m=bankfull_depth_m,
+        bankfull_width_m=bankfull_width_m,
+        shape_exponent=shape_exponent,
+        floodplain_widths=floodplain_widths,
+        side_slope_z=side_slope_z,
+        levee_depth_m=levee_depth_m,
+    )
+    # h_fp = 8.0 - 4.0 = 4.0 m above natural ground -> W = 100 + 20 * 4 = 180 m
+    assert np.isclose(float(w_overbank), 180.0, rtol=1e-5)
+
+    area_overbank, _, perim_overbank = compute_cross_section_from_depth(
+        effective_depth_m=np.float32(8.0),
+        bankfull_width_m=bankfull_width_m,
+        shape_exponent=shape_exponent,
+        bankfull_depth_m=bankfull_depth_m,
+        inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
+        bankfull_area_m2=bankfull_area_arr[0],
+        bankfull_perimeter_m=bankfull_perimeter_arr[0],
+        width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
+        levee_depth_m=levee_depth_m,
+    )
+    assert float(area_overbank) > float(area_embanked)
+    assert float(perim_overbank) > float(perim_embanked)
+
+
+def _make_profile_geometry(levee_depth_m: float | None = None) -> Any:
+    """Builds single-reach inertial geometry with a linear 10-point floodplain profile.
+
+    The reach is 1000 m long with a 50 m wide, 4 m deep parabolic channel and floodplain
+    widths of 100 + 20 * d meters at depth d above bankfull.
+
+    Args:
+        levee_depth_m: Levee crest depth above the channel bed (meters), or None for a
+            reach without levees.
+
+    Returns:
+        InertialGeometry for the single reach.
+    """
+    return build_inertial_geometry(
+        river_length=np.array([1000.0], dtype=np.float32),
+        river_width=np.array([50.0], dtype=np.float32),
+        shape_exponent=np.array([0.5], dtype=np.float32),
+        bankfull_depth=np.array([4.0], dtype=np.float32),
+        bed_elevation=np.array([0.0], dtype=np.float32),
+        ds_bed_elevation=np.array([-1.0], dtype=np.float32),
+        interface_bed_elevation_max=np.array([0.0], dtype=np.float32),
+        manning_n_sq=np.array([0.03**2], dtype=np.float32),
+        inv_dx_interface=np.array([1e-3], dtype=np.float32),
+        pit_slope=np.array([1e-3], dtype=np.float32),
+        floodplain_side_slope_m_per_m=np.array([2.0], dtype=np.float32),
+        floodplain_profile_widths=np.array(
+            [[100.0 + 20.0 * d for d in FLOODPLAIN_PROFILE_DEPTHS]], dtype=np.float32
+        ),
+        levee_depth=np.array(
+            [4.0 if levee_depth_m is None else levee_depth_m], dtype=np.float32
+        ),
+    )
+
+
+def test_compute_overbank_area_from_depth_inverts_profile_lookup() -> None:
+    """Verifies compute_overbank_area_from_depth is the inverse of compute_overbank_depth_and_top_width.
+
+    Checks depths within the shallowest slice, between profile levels, exactly at a level
+    and beyond the 5 m profile where side-slope extrapolation applies.
+    """
+    geom = _make_profile_geometry()
+    areas: ArrayFloat32 = geom.geom_floodplain_areas[0]
+    widths: ArrayFloat32 = geom.geom_floodplain_widths[0]
+
+    assert compute_overbank_area_from_depth(
+        np.float32(0.0), np.float32(50.0), areas, widths, np.float32(2.0)
+    ) == np.float32(0.0)
+    # Exactly at profile level 4 (1.0 m) the area equals the precomputed cumulative area
+    assert np.isclose(
+        float(
+            compute_overbank_area_from_depth(
+                np.float32(1.0), np.float32(50.0), areas, widths, np.float32(2.0)
+            )
+        ),
+        float(areas[4]),
+        rtol=1e-5,
+    )
+    for depth in [0.05, 0.3, 1.7, 3.0, 4.5, 6.0, 9.0]:
+        area: np.float32 = compute_overbank_area_from_depth(
+            np.float32(depth), np.float32(50.0), areas, widths, np.float32(2.0)
+        )
+        depth_back, _ = compute_overbank_depth_and_top_width(
+            overbank_area=area,
+            bankfull_width_m=np.float32(50.0),
+            floodplain_areas=areas,
+            floodplain_widths=widths,
+            floodplain_side_slope_m_per_m=np.float32(2.0),
+        )
+        assert np.isclose(float(depth_back), depth, rtol=1e-4)
+
+
+def test_build_inertial_geometry_rejects_levee_below_bankfull() -> None:
+    """Verifies that a levee crest below bankfull depth is rejected instead of clamped."""
+    with pytest.raises(ValueError, match="levee_depth"):
+        _make_profile_geometry(levee_depth_m=3.0)
+
+
+def test_levee_overtopping_fills_protected_floodplain_from_natural_ground() -> None:
+    """Verifies the stage-volume relation of a leveed reach once the levee crest is overtopped.
+
+    The protected floodplain behind the levees lies at natural ground (bankfull level), so:
+    1. Stage is continuous and non-decreasing in volume across all regimes.
+    2. After overtopping, stage stays at the crest while the protected floodplain fills.
+    3. Once the floodplain has filled to crest level, the stage-volume relation equals that of
+       the same reach without levees: overtopped levees no longer change storage.
+    """
+    bankfull_depth_m: float = 4.0
+    levee_depth_m: float = 7.0
+    reach_length_m: float = 1000.0
+    leveed = _make_profile_geometry(levee_depth_m)
+    natural = _make_profile_geometry()
+
+    def stage(geom: Any, volume_m3: float) -> float:
+        return float(
+            _compute_reach_stage_and_cfl_depth(
+                0,
+                np.float32(volume_m3),
+                geom.geom_inbank,
+                geom.geom_floodplain_areas,
+                geom.geom_floodplain_widths,
+            )[0]
+        )
+
+    bankfull_area: float = (2.0 / 3.0) * 50.0 * bankfull_depth_m
+    levee_volume: float = (
+        bankfull_area + 50.0 * (levee_depth_m - bankfull_depth_m)
+    ) * reach_length_m
+    crest_fill_area: float = float(
+        compute_overbank_area_from_depth(
+            np.float32(levee_depth_m - bankfull_depth_m),
+            np.float32(50.0),
+            leveed.geom_floodplain_areas[0],
+            leveed.geom_floodplain_widths[0],
+            np.float32(2.0),
+        )
+    )
+    filled_volume: float = (bankfull_area + crest_fill_area) * reach_length_m
+    assert filled_volume > levee_volume
+
+    # 1. Continuous and non-decreasing stage across in-bank, embanked, filling and overbank regimes
+    volumes: np.ndarray = np.linspace(1.0, 2.0 * filled_volume, 4001)
+    stages: np.ndarray = np.array([stage(leveed, v) for v in volumes])
+    assert np.all(np.diff(stages) >= -1e-4)
+    for boundary_volume in [levee_volume, filled_volume]:
+        assert np.isclose(
+            stage(leveed, 0.9999 * boundary_volume),
+            stage(leveed, 1.0001 * boundary_volume),
+            atol=5e-3,
+        )
+
+    # 2. Stage holds at the levee crest while the protected floodplain fills
+    for frac in [0.01, 0.5, 0.99]:
+        volume: float = levee_volume + frac * (filled_volume - levee_volume)
+        assert np.isclose(stage(leveed, volume), levee_depth_m, atol=1e-3)
+
+    # 3. Beyond the filled state, storage equals that of the unleveed reach at the same stage
+    for volume in [1.01 * filled_volume, 1.5 * filled_volume, 3.0 * filled_volume]:
+        assert stage(leveed, volume) > levee_depth_m
+        assert np.isclose(stage(leveed, volume), stage(natural, volume), atol=1e-3)
+
+    # The volume-based CFL geometry uses the floodplain width at crest level while filling
+    _, top_width_filling = compute_cfl_area_and_top_width(
+        volume_m3=np.float32(0.5 * (levee_volume + filled_volume)),
+        bankfull_width_m=np.float32(50.0),
+        shape_exponent=np.float32(0.5),
+        bankfull_depth_m=np.float32(bankfull_depth_m),
+        inverse_reach_length=np.float32(1.0 / reach_length_m),
+        inverse_shape_exponent_plus_one=np.float32(1.0 / 1.5),
+        bankfull_area_m2=np.float32(bankfull_area),
+        bankfull_volume_m3=np.float32(bankfull_area * reach_length_m),
+        floodplain_side_slope_m_per_m=np.float32(2.0),
+        floodplain_areas=leveed.geom_floodplain_areas[0],
+        floodplain_widths=leveed.geom_floodplain_widths[0],
+        levee_depth_m=np.float32(levee_depth_m),
+    )
+    # Floodplain width at crest level (3 m above bankfull): 100 + 20 * 3 = 160 m
+    assert np.isclose(float(top_width_filling), 160.0, rtol=1e-4)
+
+
+def test_routing_calculate_levee_depth_integration() -> None:
+    """Verifies Routing.calculate_levee_depth under disabled and enabled flood protection.
+
+    Verifies:
+    1. When flood_protection is disabled (enabled=False), levee_depth identically equals bankfull_depth.
+    2. When flood_protection is enabled with standard=2 years, levee_depth equals bankfull_depth.
+    3. When reaches have flood protection standards T_prot > 2 years (e.g. 100 years for Rhine-like flood protection),
+       levee_depth is strictly greater than bankfull_depth (h_levee > h_bf).
+    4. Derived levee depths are properly synchronized via _update_rivers_geometry to self.var.rivers['levee_depth'].
+    """
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
+    routing.grid = DummyGrid(3)  # ty:ignore[invalid-assignment]
+    routing._compressed_routing_seq = np.array([0, 1, 2], dtype=np.int32)
+    routing._compressed_ds = np.array([1, 2, -1], dtype=np.int32)
+
+    class MockWB:
+        n: int = 0
+
+    class MockHydro:
+        waterbodies: MockWB = MockWB()
+
+    routing.hydrology = MockHydro()  # ty:ignore[invalid-assignment]
+    routing.default_missing_channel_width = 10.0
+
+    var: RoutingVariables = RoutingVariables()
+    var.river_ids = np.array([0, 1, 2], dtype=np.int32)
+    var.river_width_alpha = np.full(3, 7.2, dtype=np.float32)
+    var.river_width_beta = np.full(3, 0.5, dtype=np.float32)
+    widths: ArrayFloat32 = np.array([30.0, 50.0, 100.0], dtype=np.float32)
+    var.observed_average_river_width = widths.copy()
+
+    # Reach 0: unprotected (T = 2 years)
+    # Reach 1: moderate protection (T = 50 years)
+    # Reach 2: major river protection (T = 250 years)
+    rivers_df: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [30.0, 100.0, 500.0],
+            "return_period_50_years_daily_m3_per_s": [80.0, 250.0, 1200.0],
+            "return_period_250_years_daily_m3_per_s": [120.0, 380.0, 1800.0],
+            "flood_protection_standard": [2.0, 50.0, 250.0],
+            "represented_in_grid": [True, True, True],
+            "width": [30.0, 50.0, 100.0],
+            "depth": [np.nan, np.nan, np.nan],
+            "manning": [0.03, 0.03, 0.03],
+        },
+        index=[0, 1, 2],
+    )
+    var.rivers = rivers_df
+    routing.var = var
+
+    # Config with flood protection enabled
+    routing.config = {
+        "river_width": {"default_alpha": 7.2, "beta": 0.5},
+        "river_depth": {
+            "min_depth_m": 0.1,
+            "shape_exponent": 0.5,
+            "use_observed_width_as_bankfull": True,
+        },
+        "flood_protection": {"enabled": True},
+        "bankfull_discharge_multiplier": 1.0,
+    }
+
+    bankfull_depths: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths, use_simulated_bankfull_q=True
+    )
+    levee_depths: ArrayFloat32 = routing.calculate_levee_depth(
+        bankfull_top_width_m=widths,
+        bankfull_depth_m=bankfull_depths,
+        use_simulated_bankfull_q=True,
+    )
+
+    # Reach 0 (T = 2): Levee depth exactly matches bankfull depth
+    assert np.isclose(float(levee_depths[0]), float(bankfull_depths[0]), rtol=1e-5)
+
+    # Reach 1 (T = 50) and Reach 2 (T = 250): Levee crest is strictly higher than bankfull depth
+    assert float(levee_depths[1]) > float(bankfull_depths[1])
+    assert float(levee_depths[2]) > float(bankfull_depths[2])
+    # Higher return period yields higher levee elevation above bankfull
+    delta_h_reach1: float = float(levee_depths[1] - bankfull_depths[1])
+    delta_h_reach2: float = float(levee_depths[2] - bankfull_depths[2])
+    assert delta_h_reach1 > 0.1
+    assert delta_h_reach2 > 0.1
+
+    # Test with flood protection disabled: levee depth is identical to bankfull depth everywhere
+    routing.config["flood_protection"]["enabled"] = False
+    levee_depths_disabled: ArrayFloat32 = routing.calculate_levee_depth(
+        bankfull_top_width_m=widths,
+        bankfull_depth_m=bankfull_depths,
+        use_simulated_bankfull_q=True,
+    )
+    assert np.allclose(levee_depths_disabled, bankfull_depths)
+
+    # Test geometry sync with levee depth
+    routing.config["flood_protection"]["enabled"] = True
+    fp_widths = np.zeros((3, NUM_FLOODPLAIN_LEVELS), dtype=np.float32)
+    fp_slopes = np.full(3, 2.0, dtype=np.float32)
+    routing._update_rivers_geometry(
+        width_grid=widths,
+        depth_grid=bankfull_depths,
+        manning_grid=routing.grid.var.river_mannings,
+        floodplain_profile_widths_grid_m=fp_widths,
+        floodplain_side_slope_grid_m_per_m=fp_slopes,
+        levee_depth_grid=levee_depths,
+    )
+    assert "levee_depth" in routing.var.rivers.columns
+    assert np.isclose(
+        float(routing.var.rivers.loc[0, "levee_depth"]),
+        float(bankfull_depths[0]),
+        rtol=1e-4,
+    )
+    assert float(routing.var.rivers.loc[1, "levee_depth"]) > float(bankfull_depths[1])
+    assert float(routing.var.rivers.loc[2, "levee_depth"]) > float(bankfull_depths[2])
+
+    # Missing simulated design discharges for protected reaches raise instead of
+    # silently falling back to an estimate
+    routing.var.rivers.loc[2, "return_period_250_years_daily_m3_per_s"] = np.nan
+    with pytest.raises(ValueError, match="simulated design discharges"):
+        routing.calculate_levee_depth(
+            bankfull_top_width_m=widths,
+            bankfull_depth_m=bankfull_depths,
+            use_simulated_bankfull_q=True,
+        )
+    routing.var.rivers = gpd.GeoDataFrame(
+        routing.var.rivers.drop(columns="return_period_250_years_daily_m3_per_s")
+    )
+    with pytest.raises(KeyError):
+        routing.calculate_levee_depth(
+            bankfull_top_width_m=widths,
+            bankfull_depth_m=bankfull_depths,
+            use_simulated_bankfull_q=True,
+        )

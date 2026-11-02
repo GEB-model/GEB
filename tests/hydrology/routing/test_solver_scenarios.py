@@ -137,6 +137,7 @@ def run_channel_routing_simulation(
         river_width=widths,
         shape_exponent=shapes,
         bankfull_depth=bankfull_depths,
+        levee_depth=bankfull_depths,
         bed_elevation=bed_elevation_m,
         ds_bed_elevation=ds_bed_elevation,
         interface_bed_elevation_max=interface_bed_elevation_max,

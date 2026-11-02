@@ -109,9 +109,7 @@ def export_discharge_publication_data(
     publication_folder: Path = (
         self.evaluate_discharge_output_folder / "publication_data"
     )
-    run_output_folder: Path = (
-        Path(self.model.config["general"]["output_folder"]) / run_name
-    )
+    run_output_folder: Path = Path(self.model.config["output_folder"]) / run_name
     create_discharge_publication_package(
         routing_folder=run_output_folder / "report" / "hydrology.routing",
         evaluation_metrics_xlsx=(

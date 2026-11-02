@@ -123,26 +123,22 @@ class Households(AgentBaseClass):
             self.HRU = model.hydrology.HRU
             self.grid = model.hydrology.grid
 
-        self.config = (
-            self.model.config["agent_settings"]["households"]
-            if "households" in self.model.config["agent_settings"]
-            else {}
-        )
+        self.config = self.model.config["agents"]["households"]
         self.decision_module = DecisionModule()
         if (
             self.config["adapt"]
-            or self.model.config["agent_settings"]["households"]["warning_response"]
+            or self.model.config["agents"]["households"]["warning_response"]
         ):
             self.load_objects()
             self.flood_risk_module = FloodRiskModule(model=self.model, households=self)
             if self.config["adapt"]:
                 self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
                 self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
-            if self.model.config["agent_settings"]["households"]["warning_response"]:
+            if self.model.config["agents"]["households"]["warning_response"]:
                 self.early_warning_module = EarlyWarningModule(
                     model=self.model, households=self
                 )
-                if self.model.config["agent_settings"]["households"]["warning_system"][
+                if self.model.config["agents"]["households"]["warning_system"][
                     "warning_target"
                 ]["critical_infrastructure"]["enabled"]:
                     self.load_critical_infrastructure()
@@ -181,7 +177,7 @@ class Households(AgentBaseClass):
         self.rail = read_geom(self.model.files["geom"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
-        if self.model.config["general"]["forecasts"]["use"]:
+        if self.model.config["forecasts"]["use"]:
             # Load postal codes --
             # TODO: maybe move it to another function? (not really an object)
             self.postal_codes = read_geom(self.model.files["geom"]["postal_codes"])
@@ -459,13 +455,13 @@ class Households(AgentBaseClass):
         )
 
         # initiate array with risk perception [dummy data for now]
-        self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
+        self.var.risk_perc_min = self.model.config["agents"]["households"][
             "expected_utility"
         ]["flood_risk_calculations"]["risk_perception"]["min"]
-        self.var.risk_perc_max = self.model.config["agent_settings"]["households"][
+        self.var.risk_perc_max = self.model.config["agents"]["households"][
             "expected_utility"
         ]["flood_risk_calculations"]["risk_perception"]["max"]
-        self.var.risk_decr = self.model.config["agent_settings"]["households"][
+        self.var.risk_decr = self.model.config["agents"]["households"][
             "expected_utility"
         ]["flood_risk_calculations"]["risk_perception"]["coef"]
 
@@ -704,15 +700,15 @@ class Households(AgentBaseClass):
 
         NOTE: This function is currently disabled due to missing infrastructure data.
         """
-        asset_types = self.model.config["agent_settings"]["households"][
-            "warning_system"
-        ]["warning_target"]["critical_infrastructure"]["asset_type"]
+        asset_types = self.model.config["agents"]["households"]["warning_system"][
+            "warning_target"
+        ]["critical_infrastructure"]["asset_type"]
         # Load postal codes
         postal_codes = self.postal_codes.copy()
 
         # Get critical facilities (vulnerable and emergency) and update buildings with relevant attributes
         # TODO move loading of critical facilities to build phase and save it as a file, instead of loading it from OSM every time in the spinup
-        if self.model.config["agent_settings"]["households"]["warning_system"][
+        if self.model.config["agents"]["households"]["warning_system"][
             "warning_target"
         ]["critical_infrastructure"]["get_critical_facilities"]:
             self.get_critical_facilities()
@@ -976,7 +972,7 @@ class Households(AgentBaseClass):
         """This function runs the spin-up process for the household agents."""
         self.construct_income_distribution()
         self.assign_household_attributes()
-        if self.model.config["agent_settings"]["households"]["warning_response"]:
+        if self.model.config["agents"]["households"]["warning_response"]:
             self.assign_households_and_buildings_to_postal_codes()
 
         self.var.water_demand_per_household_year = (
@@ -1216,7 +1212,7 @@ class Households(AgentBaseClass):
                     self.decide_household_strategy()
 
                 end_time: datetime = datetime.combine(
-                    self.model.config["general"]["end_time"], datetime.min.time()
+                    self.model.config["end_time"], datetime.min.time()
                 )
 
                 if self.model.current_time == end_time:

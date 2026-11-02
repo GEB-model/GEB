@@ -81,8 +81,8 @@ class GroundWater(Module):
         boundary_hydraulic_conductivity: ThreeDArrayFloat64 = read_zarr(
             self.model.files["other"]["groundwater/boundary_hydraulic_conductivity"]
         ).values.astype(np.float64) * np.float32(
-            self.model.config["parameters"][
-                "groundwater_hydraulic_conductivity_multiplier"
+            self.model.config["hydrology"]["groundwater"][
+                "hydraulic_conductivity_multiplier"
             ]
         )
         boundary_layer_boundary_elevation: ThreeDArrayFloat64 = read_zarr(

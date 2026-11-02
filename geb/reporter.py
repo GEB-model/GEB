@@ -939,11 +939,7 @@ class Reporter:
             fast_rmtree(self.report_folder)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
-        if (
-            self.model.mode == "w"
-            and "report" in self.model.config
-            and self.variables_to_report
-        ):
+        if self.model.mode == "w" and self.variables_to_report:
             self.is_activated = True
 
             to_delete: list[str] = []
@@ -1202,6 +1198,22 @@ class Reporter:
                                         "day": 1,
                                     },
                                     "_group": "bankfull_width_rivers_yearly_m",
+                                    "_group_key": str(river_ID_int),
+                                }
+                                bankfull_reporters[
+                                    f"levee_depth_river_yearly_m_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": (
+                                        f"sample_loc,{river_ID_int},levee_depth"
+                                    ),
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "levee_depth_rivers_yearly_m",
                                     "_group_key": str(river_ID_int),
                                 }
                                 for k in range(10):

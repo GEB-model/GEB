@@ -25,6 +25,9 @@ theme:
         icon: material/brightness-4
         name: Switch to dark mode
 
+hooks:
+  - docs/hooks/config_reference.py
+
 plugins:
   - search
   - mkdocstrings:

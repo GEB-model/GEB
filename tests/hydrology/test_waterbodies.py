@@ -68,8 +68,10 @@ def test_waterbodies_depth_and_stage_calculations() -> None:
     mock_model = MagicMock()
     mock_model.in_spinup = False
     mock_model.config = {
-        "general": {"hydrological_year_start_month": 10},
-        "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
+        "hydrology": {
+            "hydrological_year_start_month": 10,
+            "routing": {"lake_outflow_multiplier": np.float32(1.0)},
+        },
     }
     mock_hydrology = MagicMock()
 
@@ -108,8 +110,10 @@ def test_flatten_waterbody_elevations() -> None:
     mock_model = MagicMock()
     mock_model.in_spinup = False
     mock_model.config = {
-        "general": {"hydrological_year_start_month": 10},
-        "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
+        "hydrology": {
+            "hydrological_year_start_month": 10,
+            "routing": {"lake_outflow_multiplier": np.float32(1.0)},
+        },
     }
     mock_hydrology = MagicMock()
     mock_grid = MagicMock()
@@ -150,8 +154,10 @@ def test_off_waterbodies_filtered_out_at_spinup() -> None:
     mock_model = MagicMock()
     mock_model.in_spinup = False
     mock_model.config = {
-        "general": {"hydrological_year_start_month": 10},
-        "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
+        "hydrology": {
+            "hydrological_year_start_month": 10,
+            "routing": {"lake_outflow_multiplier": np.float32(1.0)},
+        },
     }
     mock_hydrology = MagicMock()
     mock_grid = MagicMock()

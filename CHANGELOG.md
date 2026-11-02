@@ -1,5 +1,10 @@
 # dev
+
+# v1.0.0b39
+- Cleaned model configuration. This requires manual updating of config if you use any custom configuration. Some works, but this was really needed for future-proofing.
+- Added experimental "geb run --with some.config.parameter" to run model with a specific configuration without changing to the config on disk.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
+- Move region definition from `model.yml` into a separate `region.yml`, removing the circular dependency between model building and simulation configuration.
 - Optimized LandSurface model preparation and daily water and enthalpy balance checks: fused cellwise validation and balance budget closures into parallel Numba kernels with zero allocations on the happy path, cached static crop and groundwater tables, and eliminated unused 25 MB delta_z allocations.
 
 # v1.0.0b37

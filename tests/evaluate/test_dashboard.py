@@ -719,6 +719,8 @@ def test_build_river_chart_data() -> None:
         depth=[2.0, 2.2],
         floodplain_side_slope_m_per_m=2.0,
         floodplain_profile_widths=profile_widths,
+        levee_depth=2.2,
+        flood_protection_standard=2.0,
     )
     assert river_data["type"] == "river"
     assert river_data["riverId"] == "10"
@@ -732,6 +734,26 @@ def test_build_river_chart_data() -> None:
     assert river_data["crossSection"]["depth"] == 2.2
     assert river_data["crossSection"]["profileWidths"] == profile_widths
     assert river_data["crossSection"]["floodplainSideSlope"] == 2.0
+    assert river_data["crossSection"]["leveeDepth"] == 2.2
+    assert river_data["crossSection"]["leveeHeight"] == 0.0
+    assert river_data["crossSection"]["floodProtectionStandard"] == 2.0
+
+    # With levee depth and flood protection standard
+    protected_river_data: dict[str, Any] = build_river_chart_data(
+        river_id="10",
+        upstream_area_km2=125.5,
+        time=["2020-01-01", "2021-01-01"],
+        bankfull_discharge=[30.0, 35.0],
+        width=[15.0, 15.0],
+        depth=[2.0, 2.2],
+        floodplain_side_slope_m_per_m=2.0,
+        floodplain_profile_widths=profile_widths,
+        levee_depth=3.5,
+        flood_protection_standard=100.0,
+    )
+    assert protected_river_data["crossSection"]["leveeDepth"] == 3.5
+    assert protected_river_data["crossSection"]["leveeHeight"] == 1.3
+    assert protected_river_data["crossSection"]["floodProtectionStandard"] == 100.0
 
 
 def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
@@ -750,6 +772,8 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     df_d = pd.DataFrame({"20": [2.1, 2.3]}, index=yearly_idx)
     df_w = pd.DataFrame({"20": [25.0, 25.0]}, index=yearly_idx)
     df_fp_s = pd.DataFrame({"20": [3.0, 3.0]}, index=yearly_idx)
+    df_levee_d = pd.DataFrame({"20": [3.4, 3.6]}, index=yearly_idx)
+    df_levee_d.to_parquet(routing_dir / "levee_depth_rivers_yearly_m.parquet")
     df_q.to_parquet(routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet")
     df_d.to_parquet(routing_dir / "bankfull_depth_rivers_yearly_m.parquet")
     df_w.to_parquet(routing_dir / "bankfull_width_rivers_yearly_m.parquet")
@@ -765,7 +789,11 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
         )
 
     rivers_gdf = gpd.GeoDataFrame(
-        {"uparea_m2": [50_000_000.0], "geometry": [sg.LineString([(0, 0), (1, 1)])]},
+        {
+            "uparea_m2": [50_000_000.0],
+            "flood_protection_standard": [100.0],
+            "geometry": [sg.LineString([(0, 0), (1, 1)])],
+        },
         index=pd.Index([20]),
         crs="EPSG:4326",
     )
@@ -792,6 +820,73 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     assert decoded["river_20"]["crossSection"]["profileWidths"][0] == 50.0
     assert decoded["river_20"]["crossSection"]["profileWidths"][9] == 140.0
     assert decoded["river_20"]["crossSection"]["floodplainSideSlope"] == 3.0
+    assert decoded["river_20"]["crossSection"]["leveeDepth"] == 3.6
+    assert decoded["river_20"]["crossSection"]["leveeHeight"] == 1.3
+    assert decoded["river_20"]["crossSection"]["floodProtectionStandard"] == 100.0
+
+
+def test_attach_end_of_run_river_dimensions_with_levees(tmp_path: Path) -> None:
+    """Test attach_end_of_run_river_dimensions attaches levee heights and protection standards.
+
+    Also verifies that river segments missing from the flood protection standards table
+    raise an error instead of receiving a default standard.
+    """
+    from geb.evaluate.workflows.dashboard import attach_end_of_run_river_dimensions
+
+    run_output = tmp_path / "run"
+    routing_dir = run_output / "report" / "hydrology.routing"
+    routing_dir.mkdir(parents=True)
+
+    yearly_idx = pd.date_range("2020-01-01", periods=2, freq="YS")
+    pd.DataFrame({"10": [2.0, 2.0], "20": [3.0, 3.0]}, index=yearly_idx).to_parquet(
+        routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
+    )
+    pd.DataFrame({"10": [10.0, 10.0], "20": [20.0, 20.0]}, index=yearly_idx).to_parquet(
+        routing_dir / "bankfull_width_rivers_yearly_m.parquet"
+    )
+    # Reach 10 has no levees (levee depth equals bankfull depth), reach 20 has a 1.5 m levee
+    pd.DataFrame({"10": [2.0, 2.0], "20": [4.5, 4.5]}, index=yearly_idx).to_parquet(
+        routing_dir / "levee_depth_rivers_yearly_m.parquet"
+    )
+
+    fps_file: Path = tmp_path / "flood_protection_standards.parquet"
+    pd.DataFrame(
+        {"flood_protection_standard": [2.0, 100.0]}, index=pd.Index([10, 20])
+    ).to_parquet(fps_file)
+
+    rivers_gdf = gpd.GeoDataFrame(
+        {
+            "uparea_m2": [10_000_000.0, 80_000_000.0],
+            "geometry": [
+                sg.LineString([(0, 0), (1, 1)]),
+                sg.LineString([(1, 1), (2, 2)]),
+            ],
+        },
+        index=pd.Index([10, 20]),
+        crs="EPSG:4326",
+    )
+
+    enriched = attach_end_of_run_river_dimensions(
+        rivers=rivers_gdf,
+        run_output_folder=run_output,
+        flood_protection_standards_file=fps_file,
+    )
+    assert enriched.loc[10, "flood_protection_standard"] == 2.0
+    assert enriched.loc[20, "flood_protection_standard"] == 100.0
+    assert enriched.loc[10, "levee_height_m"] == 0.0
+    assert enriched.loc[20, "levee_height_m"] == 1.5
+    assert enriched.loc[20, "levee_depth_m"] == 4.5
+
+    # A river segment missing from the table raises instead of receiving a default
+    pd.DataFrame({"flood_protection_standard": [2.0]}, index=pd.Index([10])).to_parquet(
+        fps_file
+    )
+    with pytest.raises(ValueError, match="missing from the flood protection"):
+        attach_end_of_run_river_dimensions(
+            rivers=rivers_gdf,
+            run_output_folder=run_output,
+            flood_protection_standards_file=fps_file,
+        )
 
 
 def test_metric_layer_colormap_ranges() -> None:
@@ -1178,7 +1273,10 @@ def test_create_discharge_dashboard_filename_with_date(tmp_path: Path) -> None:
         evaluation_folder=eval_folder,
         run_output_folder=run_dir,
         geometry_files=geom_files,
-        table_files={},
+        table_files={
+            "flood_protection_standards/flood_protection_standards": tmp_path
+            / "flood_protection_standards.parquet"
+        },
         minimum_upstream_area_km2=0.0,
         logger=logging.getLogger("test_dashboard"),
         include_return_period_plots=False,

@@ -165,22 +165,18 @@ class ReservoirOperators(AgentBaseClass):
         """
         super().__init__(model)
         self.agents: Agents = agents
-        self.config = (
-            self.model.config["agent_settings"]["reservoir_operators"]
-            if "reservoir_operators" in self.model.config["agent_settings"]
-            else {}
-        )
+        self.config = self.model.config["agents"]["reservoir_operators"]
         self.environmental_flow_requirement = 0.0
         self.water_conveyance_efficiency = 1.0
-        self.hydrological_year_start_month = self.model.config["general"][
+        self.hydrological_year_start_month = self.model.config["hydrology"][
             "hydrological_year_start_month"
         ]
         if self.model.in_spinup:
             self.spinup()
 
-        self.reservoir_release_factor = self.model.config["parameters"][
-            "reservoir_release_factor"
-        ]
+        self.reservoir_release_factor = self.model.config["agents"][
+            "reservoir_operators"
+        ]["reservoir_release_factor"]
 
     @property
     def name(self) -> str:

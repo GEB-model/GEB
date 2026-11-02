@@ -18,7 +18,7 @@ __all__: list[str] = [
     "GEOM_IN_BANKFULL_AREA",
     "GEOM_IN_BANKFULL_DEPTH",
     "GEOM_IN_BANKFULL_PERIMETER",
-    "GEOM_IN_UNUSED",
+    "GEOM_IN_LEVEE_DEPTH",
     "GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M",
     "GEOM_IN_BANKFULL_VOLUME",
     "GEOM_IN_BED_ELEVATION",
@@ -40,6 +40,7 @@ __all__: list[str] = [
     "compute_cfl_area_and_top_width",
     "compute_cross_section_from_depth",
     "compute_hydraulic_geometry_width",
+    "compute_overbank_area_from_depth",
     "compute_overbank_depth_and_top_width",
     "compute_top_width_from_depth",
     "compute_top_width_from_overbank_depth",
@@ -64,7 +65,7 @@ GEOM_IN_BANKFULL_AREA: int = 10
 GEOM_IN_SHAPE_EXPONENT: int = 11
 GEOM_IN_RIVER_WIDTH: int = 12
 GEOM_IN_BANKFULL_PERIMETER: int = 13
-GEOM_IN_UNUSED: int = 14
+GEOM_IN_LEVEE_DEPTH: int = 14
 GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M: int = 15
 GEOM_IN_NUM_COLS: int = (
     16  # Padded to 16 columns (64 bytes) to strictly align with L1 CPU cache lines
@@ -203,12 +204,13 @@ def build_inertial_geometry(
     pit_slope: ArrayFloat32,
     floodplain_side_slope_m_per_m: ArrayFloat32,
     floodplain_profile_widths: TwoDArrayFloat32,
+    levee_depth: ArrayFloat32,
 ) -> InertialGeometry:
     """Precomputes reach-static channel cross-sections, thresholds, and CFL parameters.
 
-    Constructs dense 2D matrices containing in-bank geometry, overbank floodplain
-    properties, and CFL stability scaling terms to optimize CPU cache line utilization
-    during local inertial substepping.
+    Constructs dense 2D matrices containing in-bank geometry, embanked levee heights,
+    overbank floodplain properties, and CFL stability scaling terms to optimize CPU
+    cache line utilization during local inertial substepping.
 
     Args:
         river_length: Channel length of each reach (meters).
@@ -223,13 +225,21 @@ def build_inertial_geometry(
         pit_slope: Default channel slope for boundary pit reaches (dimensionless).
         floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
         floodplain_profile_widths: 10-point cross-sectional top widths at fixed depth levels (meters).
+        levee_depth: Depth from channel bed to levee crest (meters); equals bankfull_depth
+            where there are no levees.
 
     Returns:
         Structured InertialGeometry containing the packed 2D geometric matrices.
 
     Raises:
-        ValueError: If floodplain_profile_widths has an invalid shape.
+        ValueError: If floodplain_profile_widths has an invalid shape, or if levee_depth is
+            not finite or lies below bankfull_depth.
     """
+    if not np.all(np.isfinite(levee_depth)) or np.any(levee_depth < bankfull_depth):
+        raise ValueError(
+            "levee_depth must be finite and at least bankfull_depth for every reach."
+        )
+
     (
         inv_reach_length,
         inv_shape_exponent_plus_one,
@@ -277,6 +287,7 @@ def build_inertial_geometry(
     ).astype(np.float32)
     geom_inbank[:, GEOM_IN_RIVER_WIDTH] = river_width
     geom_inbank[:, GEOM_IN_BANKFULL_PERIMETER] = bankfull_perimeter
+    geom_inbank[:, GEOM_IN_LEVEE_DEPTH] = levee_depth
     geom_inbank[:, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M] = (
         floodplain_side_slope_m_per_m
     )
@@ -464,6 +475,57 @@ def compute_top_width_from_overbank_depth(
 
 
 @njit(inline="always")
+def compute_overbank_area_from_depth(
+    overbank_depth_m: np.float32,
+    bankfull_width_m: np.float32,
+    floodplain_areas: ArrayFloat32,
+    floodplain_widths: ArrayFloat32,
+    side_slope_z: np.float32,
+) -> np.float32:
+    """Calculates cross-sectional area above bankfull level at a given depth above bankfull.
+
+    Inverse of compute_overbank_depth_and_top_width: integrates the piecewise linear
+    10-point floodplain profile (including the water column above the channel) from
+    bankfull level up to overbank_depth_m, with side-slope extrapolation beyond 5.0 m.
+
+    Args:
+        overbank_depth_m: Water depth above bankfull level (meters).
+        bankfull_width_m: Bankfull channel width (meters).
+        floodplain_areas: Cumulative cross-sectional areas at the 10 depth levels (m²).
+        floodplain_widths: Top widths at the 10 depth levels (meters).
+        side_slope_z: Valley side-slope ratio z (m/m horizontal:vertical).
+
+    Returns:
+        Cross-sectional area above bankfull level (m²).
+    """
+    if overbank_depth_m <= np.float32(0.0):
+        return np.float32(0.0)
+
+    top_width: np.float32 = compute_top_width_from_overbank_depth(
+        overbank_depth_m=overbank_depth_m,
+        bankfull_width_m=bankfull_width_m,
+        floodplain_widths=floodplain_widths,
+        side_slope_z=side_slope_z,
+    )
+
+    d_0: np.float32 = FLOODPLAIN_PROFILE_DEPTHS_ARR[0]
+    if overbank_depth_m <= d_0:
+        return np.float32(0.5) * (bankfull_width_m + top_width) * overbank_depth_m
+
+    for k in range(1, NUM_FLOODPLAIN_LEVELS):
+        if overbank_depth_m <= FLOODPLAIN_PROFILE_DEPTHS_ARR[k]:
+            d_prev: np.float32 = FLOODPLAIN_PROFILE_DEPTHS_ARR[k - 1]
+            return floodplain_areas[k - 1] + np.float32(0.5) * (
+                floodplain_widths[k - 1] + top_width
+            ) * (overbank_depth_m - d_prev)
+
+    d_max: np.float32 = FLOODPLAIN_PROFILE_DEPTHS_ARR[NUM_FLOODPLAIN_LEVELS - 1]
+    return floodplain_areas[NUM_FLOODPLAIN_LEVELS - 1] + np.float32(0.5) * (
+        floodplain_widths[NUM_FLOODPLAIN_LEVELS - 1] + top_width
+    ) * (overbank_depth_m - d_max)
+
+
+@njit(inline="always")
 def compute_hydraulic_geometry_width(
     discharge_m3_s: np.float32,
     alpha: np.float32,
@@ -493,13 +555,16 @@ def compute_top_width_from_depth(
     shape_exponent: np.float32,
     floodplain_widths: ArrayFloat32,
     side_slope_z: np.float32,
+    levee_depth_m: np.float32,
 ) -> np.float32:
-    """Calculates channel top width across in-bank and overbank regimes from water depth.
+    """Calculates channel top width across in-bank, embanked, and overbank regimes from water depth.
 
     For water depths at or below bankfull depth, top width follows the in-bank power-law
-    profile w = w_bf * (h / h_bf)^r. For depths above bankfull, top width is derived
-    from the 10-point cross-sectional floodplain profile with piecewise linear
-    interpolation and side-slope extrapolation.
+    profile w = w_bf * (h / h_bf)^r. Between bankfull depth and levee depth, flow is confined
+    within the embanked channel/levees (top width = w_bf). For depths above levee depth,
+    the protected floodplain behind the levees is inundated, so top width is derived from the
+    10-point cross-sectional floodplain profile at the depth above natural ground (bankfull
+    level), with piecewise linear interpolation and side-slope extrapolation.
 
     Args:
         water_depth_m: Water depth relative to channel bed (meters).
@@ -508,6 +573,7 @@ def compute_top_width_from_depth(
         shape_exponent: Channel cross-sectional shape exponent (dimensionless).
         floodplain_widths: 10-point cross-sectional top widths at fixed depth levels (meters).
         side_slope_z: Valley side-slope ratio z (m/m horizontal:vertical).
+        levee_depth_m: Depth from channel bed to levee crest (meters); equals bankfull_depth_m without levees.
 
     Returns:
         Total top width across channel and floodplain (meters).
@@ -522,7 +588,11 @@ def compute_top_width_from_depth(
         )
         return bankfull_width_m * (depth_ratio**shape_exponent)
 
-    # Overbank regime: top width spills onto floodplain profiles
+    if water_depth_m <= levee_depth_m:
+        # Embanked flow regime: confined between levees
+        return bankfull_width_m
+
+    # Overbank regime: floodplain behind the levees lies at natural ground (bankfull level)
     return compute_top_width_from_overbank_depth(
         overbank_depth_m=water_depth_m - bankfull_depth_m,
         bankfull_width_m=bankfull_width_m,
@@ -541,17 +611,18 @@ def compute_cross_section_from_depth(
     bankfull_area_m2: np.float32,
     bankfull_perimeter_m: np.float32,
     width_over_sqrt_bankfull_depth: np.float32,
+    levee_depth_m: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32]:
     """Calculates cross-sectional area, top width, and wetted perimeter from effective interface depth.
 
     The river channel has curved sides (a bowl or parabola shape). When water
-    rises above the river banks, it spills onto the floodplain next to it.
+    rises above the river banks, it can either stay confined within embanked levees
+    (between bankfull depth and levee crest) or spill onto the floodplain beyond the levees.
 
-    In CaMa-Flood style routing (Yamazaki et al. 2011, 2012), water exceeding bankfull
-    depth spills onto the floodplain where it is stored (acting as a capacitive retention /
-    dead zone that attenuates the flood wave and raises the water level), while downstream
-    longitudinal conveyance between reaches is carried by the river channel section (channel
-    area plus the column of water directly above the river channel).
+    In CaMa-Flood style routing (Yamazaki et al. 2011, 2012), water exceeding the levee crest
+    spills onto the floodplain where it acts as dead storage, while longitudinal conveyance
+    is carried by the channel section. Between bankfull depth and levee crest, the water is
+    embanked, maintaining full conveyance and allowing hydraulic radius to increase naturally.
 
     Args:
         effective_depth_m: Water depth at the boundary between two river reaches (meters).
@@ -562,6 +633,7 @@ def compute_cross_section_from_depth(
         bankfull_area_m2: Water area when the channel is full to the banks (m²).
         bankfull_perimeter_m: Channel bed length touching water when full to the banks (meters).
         width_over_sqrt_bankfull_depth: Precomputed shortcut for parabola channels (r=0.5) (m^(1/2)).
+        levee_depth_m: Depth from channel bed to levee crest (meters); equals bankfull_depth_m without levees.
 
     Returns:
         A tuple containing:
@@ -593,31 +665,34 @@ def compute_cross_section_from_depth(
         wetted_perimeter: np.float32 = (
             top_width + np.float32(8.0 / 3.0) * (water_depth * water_depth) / top_width
         )
+    elif effective_depth_m <= levee_depth_m:
+        # Water is above bankfull but confined between levees.
+        # Top width remains bankfull width; wetted perimeter increases along levee walls,
+        # allowing hydraulic radius R = A / P to grow smoothly and conveyance to increase.
+        embanked_depth: np.float32 = effective_depth_m - bankfull_depth_m
+        area = bankfull_area_m2 + bankfull_width_m * embanked_depth
+        top_width = bankfull_width_m
+        wetted_perimeter = bankfull_perimeter_m + np.float32(2.0) * embanked_depth
     else:
-        # Water has risen above the river banks and spilled onto the floodplain.
+        # Water has risen above the levee crest and spilled onto the floodplain.
+        delta_h_levee: np.float32 = levee_depth_m - bankfull_depth_m
+        levee_area: np.float32 = bankfull_area_m2 + bankfull_width_m * delta_h_levee
+        levee_perimeter: np.float32 = (
+            bankfull_perimeter_m + np.float32(2.0) * delta_h_levee
+        )
+        levee_rh: np.float32 = levee_area / max(levee_perimeter, np.float32(1e-4))
+
         floodplain_depth: np.float32 = max(
-            effective_depth_m - bankfull_depth_m, np.float32(0.0)
+            effective_depth_m - levee_depth_m, np.float32(0.0)
         )
 
-        # Conveyance area includes the bankfull river channel plus the column of water
+        # Conveyance area includes the leveed river channel plus the column of water
         # flowing directly above it.
-        area = bankfull_area_m2 + bankfull_width_m * floodplain_depth
+        area = levee_area + bankfull_width_m * floodplain_depth
         top_width = bankfull_width_m
 
-        # Turbulent momentum exchange (apparent shear stress) during overbank flow:
-        # In compound channel hydraulics, water rushing down the main channel meets sluggish,
-        # shallow water on the rough, vegetated floodplain. This sharp velocity gradient generates
-        # turbulent shear vortices along the lateral boundaries, transferring momentum away
-        # from the main channel and acting as an hydraulic brake.
-        # Consequently, the hydraulic efficiency of the conveyed cross section cannot exceed its
-        # bankfull efficiency (R <= R_bankfull).
-        # To represent this turbulent shear drag in 1D routing and prevent artificial friction
-        # collapse and numerical spikiness, the wetted perimeter accounts for the bankfull hydraulic
-        # efficiency plus the lateral shear interfaces on either side of the overbank column.
-        bankfull_rh: np.float32 = bankfull_area_m2 / max(
-            bankfull_perimeter_m, np.float32(1e-4)
-        )
-        wetted_perimeter = (area / bankfull_rh) + np.float32(2.0) * floodplain_depth
+        # Turbulent momentum exchange (apparent shear stress) during overbank flow above levee:
+        wetted_perimeter = (area / levee_rh) + np.float32(2.0) * floodplain_depth
 
     return area, top_width, wetted_perimeter
 
@@ -635,6 +710,7 @@ def compute_cfl_area_and_top_width(
     floodplain_side_slope_m_per_m: np.float32,
     floodplain_areas: ArrayFloat32,
     floodplain_widths: ArrayFloat32,
+    levee_depth_m: np.float32,
 ) -> tuple[np.float32, np.float32]:
     """Calculates flow area and top width directly from storage volume for CFL evaluation.
 
@@ -650,12 +726,18 @@ def compute_cfl_area_and_top_width(
         floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
         floodplain_areas: Cumulative cross-sectional areas at the 10 depth levels (m²).
         floodplain_widths: Top widths at the 10 depth levels (meters).
+        levee_depth_m: Depth from channel bed to levee crest (meters); equals bankfull_depth_m without levees.
 
     Returns:
         A tuple containing:
             - area: Cross-sectional flow area (m²).
             - top_width: Free surface top width (meters).
     """
+    delta_h_levee: np.float32 = levee_depth_m - bankfull_depth_m
+    levee_volume_m3: np.float32 = bankfull_volume_m3 + (
+        delta_h_levee * bankfull_width_m
+    ) / max(inverse_reach_length, np.float32(1e-12))
+
     if volume_m3 <= bankfull_volume_m3 or bankfull_depth_m <= np.float32(0.0):
         # Dry channel: return a tiny width so celerity c = sqrt(g * A / W) doesn't divide by zero.
         if volume_m3 <= np.float32(0.0):
@@ -684,17 +766,40 @@ def compute_cfl_area_and_top_width(
             )
         return area, top_width
 
-    # Water spills onto the composite floodplain
-    overbank_volume: np.float32 = volume_m3 - bankfull_volume_m3
-    overbank_area: np.float32 = overbank_volume * inverse_reach_length
-    floodplain_depth, top_width = compute_overbank_depth_and_top_width(
+    elif volume_m3 <= levee_volume_m3:
+        # Water is confined within the embanked channel between levees
+        area = volume_m3 * inverse_reach_length
+        top_width = bankfull_width_m
+        return area, top_width
+
+    # Water overtops the levee crest. The protected floodplain behind the levees lies at
+    # natural ground (bankfull level), so it first fills up to crest level while the stage
+    # stays at the crest; afterwards river and floodplain rise together.
+    area = volume_m3 * inverse_reach_length
+    overbank_area: np.float32 = area - bankfull_area_m2
+    crest_fill_area: np.float32 = compute_overbank_area_from_depth(
+        overbank_depth_m=delta_h_levee,
+        bankfull_width_m=bankfull_width_m,
+        floodplain_areas=floodplain_areas,
+        floodplain_widths=floodplain_widths,
+        side_slope_z=floodplain_side_slope_m_per_m,
+    )
+    if overbank_area <= crest_fill_area:
+        top_width = compute_top_width_from_overbank_depth(
+            overbank_depth_m=delta_h_levee,
+            bankfull_width_m=bankfull_width_m,
+            floodplain_widths=floodplain_widths,
+            side_slope_z=floodplain_side_slope_m_per_m,
+        )
+        return area, top_width
+
+    _, top_width = compute_overbank_depth_and_top_width(
         overbank_area=overbank_area,
         bankfull_width_m=bankfull_width_m,
         floodplain_areas=floodplain_areas,
         floodplain_widths=floodplain_widths,
         floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
     )
-    area: np.float32 = bankfull_area_m2 + overbank_area
     return area, top_width
 
 

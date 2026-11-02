@@ -131,9 +131,7 @@ def evaluate_discharge(
         start_year=start_year,
         end_year=end_year,
     )
-    run_output_folder: Path = (
-        Path(self.model.config["general"]["output_folder"]) / run_name
-    )
+    run_output_folder: Path = Path(self.model.config["output_folder"]) / run_name
     completion_timestamp: str | None = read_run_completion_timestamp_for_filename(
         run_output_folder
     )
@@ -150,9 +148,9 @@ def evaluate_discharge(
     )
 
     if minimum_upstream_area_km2 is None:
-        minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
-            "discharge"
-        ]["minimum_upstream_area_km2"]
+        minimum_upstream_area_km2 = self.model.config["evaluation"]["discharge"][
+            "minimum_upstream_area_km2"
+        ]
     self.model.logger.info(
         "Using %.1f km2 as the minimum upstream area threshold for discharge evaluation.",
         minimum_upstream_area_km2,
@@ -167,9 +165,9 @@ def evaluate_discharge(
                 "start_year and end_year both provided; disabling timeseries-length filter."
             )
         else:
-            minimum_timeseries_length_years = self.model.config["hydrology"][
-                "evaluation"
-            ]["discharge"]["minimum_timeseries_length_years"]
+            minimum_timeseries_length_years = self.model.config["evaluation"][
+                "discharge"
+            ]["minimum_timeseries_length_years"]
             self.model.logger.info(
                 "Using %.2f years as the minimum paired timeseries length for discharge evaluation.",
                 minimum_timeseries_length_years,
@@ -481,10 +479,17 @@ def evaluate_discharge(
         dashboard_geometries_pre: DischargeDashboardGeometries = (
             load_discharge_dashboard_geometries(self.model.files["geom"])
         )
+        # Enrich rivers with flood protection standards so popups can draw levees
         add_river_charts_to_bundle_writer(
             chart_writer=chart_writer,
             run_output_folder=run_output_folder,
-            rivers=dashboard_geometries_pre.rivers,
+            rivers=attach_end_of_run_river_dimensions(
+                rivers=dashboard_geometries_pre.rivers,
+                run_output_folder=run_output_folder,
+                flood_protection_standards_file=self.model.files["table"][
+                    "flood_protection_standards/flood_protection_standards"
+                ],
+            ),
         )
 
     station_bundle_indices: dict[str, int] = (
@@ -598,6 +603,9 @@ def evaluate_discharge(
         enriched_rivers: gpd.GeoDataFrame = attach_end_of_run_river_dimensions(
             rivers=dashboard_geometries.rivers,
             run_output_folder=run_output_folder,
+            flood_protection_standards_file=self.model.files["table"][
+                "flood_protection_standards/flood_protection_standards"
+            ],
         )
         use_native_discharge_scores(dashboard_station_scores)
         dashboard_characteristics: pd.DataFrame | None = (
