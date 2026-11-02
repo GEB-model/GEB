@@ -13,7 +13,6 @@ from geb.hydrology.landsurface.constants import (
 )
 from geb.hydrology.landsurface.landsurface_model import (
     LandSurfaceInputs,
-    _pad_hru_arrays,
     land_surface_model,
 )
 from geb.workflows import balance_check
@@ -127,20 +126,8 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
     pre_interception_storage_m: np.ndarray = inputs["interception_storage_m"].copy()
     pre_soil_enthalpy: np.ndarray = inputs["soil_enthalpy_J_per_m2"].copy()
 
-    # The land surface kernel processes in SIMD blocks of 16 cells; pad inputs
-    # to the next multiple of 16 cells, and slice outputs back to original cell count.
-    num_original_cells: int = inputs["slope_m_per_m"].shape[0]
-    padded_inputs: LandSurfaceInputs = _pad_hru_arrays(LandSurfaceInputs(**inputs))
-    raw_results = land_surface_model(**padded_inputs._asdict())
-
-    trimmed_results = tuple(
-        r[:num_original_cells]
-        if isinstance(r, np.ndarray) and r.ndim == 1
-        else r[:num_original_cells, :]
-        if isinstance(r, np.ndarray) and r.ndim == 2
-        else r
-        for r in raw_results
-    )
+    raw_results = land_surface_model(**inputs)
+    trimmed_results = raw_results
 
     (
         out_rain_m,

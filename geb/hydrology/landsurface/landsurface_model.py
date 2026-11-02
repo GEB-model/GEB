@@ -86,11 +86,6 @@ SOIL_ALBEDO: np.float32 = np.float32(0.23)
 SOIL_EMISSIVITY: np.float32 = np.float32(0.95)
 
 
-# Lane width for SIMD vectorisation (AVX2 = 8 × float32; AVX-512 = 16 × float32).
-# Padding the HRU dimension to this multiple allows Numba/LLVM to emit full
-# width vector loads and stores with no scalar remainder loop.
-BLOCK_SIZE: int = 16
-
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
@@ -1027,52 +1022,6 @@ class LandSurfaceInputs(NamedTuple):
     rainfall_lookup_table: TwoDArrayFloat32
     daily_reference_evapotranspiration_grass_m: ArrayFloat32
     max_capillary_rise_m: ArrayFloat32
-
-
-def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
-    """Pad every HRU-dimensioned array to the next multiple of BLOCK_SIZE.
-
-    Padding cells are filled with the values from cell 0 so they represent a
-    physically valid (but silent) extra cell.  Because those indices are never
-    written back to the model state, any in-place mutations to the padding
-    region are discarded after the kernel returns.
-
-    Notes:
-        Arrays whose first axis does not equal ``num_cells`` (scalars) are left
-        unchanged.
-
-    Args:
-        inputs: Land surface inputs to pad.
-
-    Returns:
-        Land surface inputs with every HRU-sized array padded to the next
-        multiple of BLOCK_SIZE along the cell axis (axis 0).  Returns
-        ``inputs`` unchanged when ``num_cells`` is already a multiple of
-        BLOCK_SIZE.
-    """
-    num_cells: int = inputs.slope_m_per_m.shape[0]
-    pad_size: int = (-num_cells) % BLOCK_SIZE
-    if pad_size == 0:
-        return inputs
-
-    padded_fields: dict = {}
-    for field in inputs._fields:
-        val = getattr(inputs, field)
-        if isinstance(val, np.ndarray) and val.ndim > 0 and val.shape[0] == num_cells:
-            if val.ndim == 1:
-                padded: np.ndarray = np.empty(num_cells + pad_size, dtype=val.dtype)
-                padded[:num_cells] = val
-                padded[num_cells:] = val[0]
-            else:
-                # 2-D arrays are cell-major (num_cells, N_LAYERS or N_HOURS).
-                padded = np.empty((num_cells + pad_size, val.shape[1]), dtype=val.dtype)
-                padded[:num_cells, :] = val
-                padded[num_cells:, :] = val[0, :]
-            padded_fields[field] = np.ascontiguousarray(padded)
-        else:
-            padded_fields[field] = val
-
-    return LandSurfaceInputs(**padded_fields)
 
 
 class LandSurfaceVariables(Bucket):
