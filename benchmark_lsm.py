@@ -186,12 +186,16 @@ def run_benchmark(num_runs: int = 5) -> None:
     print("\nExecuting warm-up run (including JIT compilation)...")
     warmup_inputs = copy_mutable_inputs(inputs)
     t0 = time.perf_counter()
-    warmup_outputs = land_surface_model(**warmup_inputs)
+    _ = land_surface_model(**warmup_inputs)
     t_warmup = time.perf_counter() - t0
     print(f"Warm-up finished in {t_warmup:.3f} s")
 
-    # Correctness verification
-    verify_correctness(warmup_outputs, expected)
+    # Correctness verification on clean compiled kernel
+    verify_inputs = copy_mutable_inputs(inputs)
+    verify_outputs = land_surface_model(**verify_inputs)
+    verify_correctness(verify_outputs, expected)
+    del verify_inputs, verify_outputs, warmup_inputs
+    gc.collect()
 
     # Benchmark runs
     print(f"\nRunning {num_runs} benchmark iterations...")

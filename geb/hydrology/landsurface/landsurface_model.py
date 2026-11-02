@@ -325,55 +325,55 @@ def land_surface_model(
     ) / np.float32(24.0 * 3600.0)
 
     num_cells: int = slope_m_per_m.size
-    capillar_rise_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    runoff_m: TwoDArrayFloat32 = np.zeros((num_cells, 24), dtype=np.float32)
-    interflow_m: TwoDArrayFloat32 = np.zeros((num_cells, 24), dtype=np.float32)
-    reference_evapotranspiration_water_m: TwoDArrayFloat32 = np.zeros(
+    capillar_rise_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    runoff_m: TwoDArrayFloat32 = np.empty((num_cells, 24), dtype=np.float32)
+    interflow_m: TwoDArrayFloat32 = np.empty((num_cells, 24), dtype=np.float32)
+    reference_evapotranspiration_water_m: TwoDArrayFloat32 = np.empty(
         (num_cells, 24), dtype=np.float32
     )
-    evapotranspiration_m: TwoDArrayFloat32 = np.zeros((num_cells, 24), dtype=np.float32)
+    evapotranspiration_m: TwoDArrayFloat32 = np.empty((num_cells, 24), dtype=np.float32)
 
     # total per day variables for water balance
-    reference_evapotranspiration_grass_m: ArrayFloat32 = np.zeros(
+    reference_evapotranspiration_grass_m: ArrayFloat32 = np.empty(
         num_cells, dtype=np.float32
     )
-    rain_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    snow_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    sublimation_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    interception_evaporation_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    open_water_evaporation_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    bare_soil_evaporation: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    potential_transpiration_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    potential_evapotranspiration_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    transpiration_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    groundwater_recharge_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    top_soil_infiltration_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    top_soil_rise_from_layer_2_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
-    top_soil_percolation_to_layer_2_m: ArrayFloat32 = np.zeros(
+    rain_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    snow_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    sublimation_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    interception_evaporation_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    open_water_evaporation_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    bare_soil_evaporation: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    potential_transpiration_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    potential_evapotranspiration_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    transpiration_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    groundwater_recharge_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    top_soil_infiltration_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    top_soil_rise_from_layer_2_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
+    top_soil_percolation_to_layer_2_m: ArrayFloat32 = np.empty(
         num_cells, dtype=np.float32
     )
-    top_soil_transpiration_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
+    top_soil_transpiration_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
 
     # Daily integrated enthalpy flux diagnostics [J/m2].
     # Positive values indicate energy entering the soil enthalpy reservoir.
-    soil_boundary_enthalpy_flux_J_per_m2: ArrayFloat32 = np.zeros(
+    soil_boundary_enthalpy_flux_J_per_m2: ArrayFloat32 = np.empty(
         num_cells, dtype=np.float32
     )
-    rain_advection_enthalpy_flux_J_per_m2: ArrayFloat32 = np.zeros(
+    rain_advection_enthalpy_flux_J_per_m2: ArrayFloat32 = np.empty(
         num_cells, dtype=np.float32
     )
 
     # Positive values indicate energy leaving the soil enthalpy reservoir.
-    evaporative_cooling_enthalpy_loss_J_per_m2: ArrayFloat32 = np.zeros(
+    evaporative_cooling_enthalpy_loss_J_per_m2: ArrayFloat32 = np.empty(
         num_cells, dtype=np.float32
     )
-    interflow_enthalpy_loss_J_per_m2: ArrayFloat32 = np.zeros(
+    interflow_enthalpy_loss_J_per_m2: ArrayFloat32 = np.empty(
         num_cells, dtype=np.float32
     )
-    groundwater_recharge_enthalpy_loss_J_per_m2: ArrayFloat32 = np.zeros(
+    groundwater_recharge_enthalpy_loss_J_per_m2: ArrayFloat32 = np.empty(
         num_cells, dtype=np.float32
     )
-    transpiration_enthalpy_loss_J_per_m2: ArrayFloat32 = np.zeros(
+    transpiration_enthalpy_loss_J_per_m2: ArrayFloat32 = np.empty(
         num_cells, dtype=np.float32
     )
 
@@ -437,7 +437,34 @@ def land_surface_model(
         topwater_m_cell: np.float32 = topwater_m[i]
         interception_storage_m_cell: np.float32 = interception_storage_m[i]
 
+        # Initialize daily outputs inside prange for NUMA first-touch placement
+        capillar_rise_m[i] = np.float32(0.0)
+        reference_evapotranspiration_grass_m[i] = np.float32(0.0)
+        rain_m[i] = np.float32(0.0)
+        snow_m[i] = np.float32(0.0)
+        sublimation_m[i] = np.float32(0.0)
+        interception_evaporation_m[i] = np.float32(0.0)
+        open_water_evaporation_m[i] = np.float32(0.0)
+        bare_soil_evaporation[i] = np.float32(0.0)
+        potential_transpiration_m[i] = np.float32(0.0)
+        potential_evapotranspiration_m[i] = np.float32(0.0)
+        transpiration_m[i] = np.float32(0.0)
+        groundwater_recharge_m[i] = np.float32(0.0)
+        top_soil_infiltration_m[i] = np.float32(0.0)
+        top_soil_rise_from_layer_2_m[i] = np.float32(0.0)
+        top_soil_percolation_to_layer_2_m[i] = np.float32(0.0)
+        top_soil_transpiration_m[i] = np.float32(0.0)
+        soil_boundary_enthalpy_flux_J_per_m2[i] = np.float32(0.0)
+        rain_advection_enthalpy_flux_J_per_m2[i] = np.float32(0.0)
+        evaporative_cooling_enthalpy_loss_J_per_m2[i] = np.float32(0.0)
+        interflow_enthalpy_loss_J_per_m2[i] = np.float32(0.0)
+        groundwater_recharge_enthalpy_loss_J_per_m2[i] = np.float32(0.0)
+        transpiration_enthalpy_loss_J_per_m2[i] = np.float32(0.0)
+
         for hour in range(24):
+            runoff_m[i, hour] = np.float32(0.0)
+            interflow_m[i, hour] = np.float32(0.0)
+            reference_evapotranspiration_water_m[i, hour] = np.float32(0.0)
             # Climate values for current hour (contigous access [i, hour])
             tas_2m_K_val = tas_2m_K[i, hour]
             ps_pascal_val = ps_pascal[i, hour]
