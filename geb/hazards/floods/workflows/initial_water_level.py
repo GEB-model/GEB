@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 import rasterio
+import rasterio.windows
 import xarray as xr
 from hydromt_sfincs.workflows import merge_multi_dataarrays
 
@@ -68,11 +69,9 @@ def river_initial_water_level(
             if not active_cells.any():
                 continue
 
-            window: rasterio.windows.Window = rasterio.windows.Window(
-                0,
-                pixels_per_cell * row_start,
-                burned_dem_file.width,
-                pixels_per_cell * (row_end - row_start),
+            window: rasterio.windows.Window = rasterio.windows.Window.from_slices(
+                rows=(pixels_per_cell * row_start, pixels_per_cell * row_end),
+                cols=(0, burned_dem_file.width),
             )
             burned_dem: np.ndarray = burned_dem_file.read(1, window=window).astype(
                 np.float32

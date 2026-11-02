@@ -984,12 +984,9 @@ def _format_timeseries_axis(
         year: Calendar year for monthly ticks and full-year limits.
         draw_zero_line: Whether to draw a dashed zero reference.
 
-    Returns:
-        None. Updates the axis in place.
-
     Raises:
         ValueError: If neither a year nor a time index is provided.
-    """  # noqa: DOC202
+    """
     if year is None and time_index is None:
         raise ValueError("Provide a year or a time index for the axis.")
     if draw_zero_line:

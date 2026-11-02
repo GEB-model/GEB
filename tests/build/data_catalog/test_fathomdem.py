@@ -299,3 +299,39 @@ def test_fathomdem_read_multi_tile_lazy_chunks(
     valid_values = merged_da.values[~np.isnan(merged_da.values)]
     assert np.allclose(valid_values, 50.0)
     assert merged_da.dtype == np.float32
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_fathomdem_cached_archive_needs_no_token(tmp_path: Path, cached: bool) -> None:
+    """Read unpacked archives without requiring download credentials.
+
+    Args:
+        tmp_path: Temporary data catalog root.
+        cached: Whether the archive already has its unpacked marker.
+    """
+    adapter: FathomDem = FathomDem(
+        folder=str(tmp_path), local_version=1, filename="unused.txt", cache="global"
+    )
+    adapter.root.mkdir(parents=True, exist_ok=True)
+    archive: str = "n00e120-n30e150_FathomDEM_v1-0.zip"
+    if cached:
+        (adapter.root / f".{archive}.unpacked").touch()
+    with (
+        patch.object(
+            adapter,
+            "_get_intersecting_zips",
+            return_value=[
+                {"key": archive, "download_url": "https://example.com/archive.zip"}
+            ],
+        ),
+        patch.object(
+            adapter, "_get_access_token", side_effect=ValueError("Token unavailable")
+        ) as token,
+    ):
+        if cached:
+            assert adapter.fetch(mask=box(120, 0, 121, 1)) is adapter
+            token.assert_not_called()
+        else:
+            with pytest.raises(ValueError, match="Token unavailable"):
+                adapter.fetch(mask=box(120, 0, 121, 1))
+            token.assert_called_once()

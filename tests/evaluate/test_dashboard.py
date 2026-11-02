@@ -19,6 +19,7 @@ import shapely.geometry as sg
 
 from geb.evaluate.workflows.dashboard import (
     StationChartBundleWriter,
+    _add_waterbody_layers,
     _build_station_marker_payload,
     _build_timeseries_data,
     _calculate_distribution_summary,
@@ -1189,3 +1190,44 @@ def test_create_discharge_dashboard_filename_with_date(tmp_path: Path) -> None:
     assert re.search(
         r"discharge_evaluation_map_\d{8}_\d{6}\.html$", dashboard_created_path.name
     )
+
+
+@pytest.mark.parametrize("reservoir_period", [None, (1990, 2000, 2010)])
+def test_waterbody_construction_period_layers(
+    reservoir_period: tuple[int, int, int] | None,
+) -> None:
+    """Keep reservoir dates and period boundaries visible after the routing merge.
+
+    Args:
+        reservoir_period: Spinup start, simulation start, and simulation end years,
+            or None to group all reservoirs together.
+    """
+    construction_years: list[float] = [0, 1989, 1990, 1999, 2000, 2010, 2011, np.nan]
+    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "waterbody_type": [1] + [2] * 7,
+            "waterbody_id": list(range(8)),
+            "gdw_construction_year": construction_years,
+        },
+        geometry=[sg.Point(8.0, 50.0)] * 8,
+        crs=4326,
+    )
+    discharge_map: folium.Map = folium.Map(location=[50.0, 8.0])
+    layers: list[folium.FeatureGroup] = _add_waterbody_layers(
+        discharge_map, waterbodies, reservoir_period=reservoir_period
+    )
+    expected_names: set[str] = {"Lakes", "Reservoirs"}
+    if reservoir_period is not None:
+        expected_names = {
+            "Lakes",
+            "Reservoirs · existing before spinup",
+            "Reservoirs · constructed during spinup",
+            "Reservoirs · constructed during simulation",
+            "Reservoirs · constructed after simulation",
+            "Reservoirs · construction year unknown",
+        }
+    assert {layer.layer_name for layer in layers} == expected_names
+    assert sum(len(layer._children) for layer in layers) == len(waterbodies)
+    html: str = discharge_map.get_root().render()
+    assert "Construction year: 2000" in html
+    assert "Construction year: unknown" in html

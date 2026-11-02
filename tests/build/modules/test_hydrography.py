@@ -13,6 +13,7 @@ from affine import Affine
 
 from geb.build.modules.hydrography import (
     Hydrography,
+    _count_flooded_subpixels_per_reach,
     _extract_1sec_subgrid,
     calculate_dem_floodplain_geometry,
     calculate_stream_length,
@@ -612,3 +613,83 @@ def test_setup_sea_level_projections_ar6_handles_transposed_variable(
     )
 
     pd.testing.assert_frame_equal(table_regular, table_transposed)
+
+
+@pytest.mark.parametrize("rows", [2, 257])
+def test_floodplain_row_blocks_match_full_arrays(rows: int) -> None:
+    """Match the original full-array calculation across block edges and missing data.
+
+    Args:
+        rows: Drainage-grid height, including a case crossing the 256-row block edge.
+    """
+    from geb.build.modules.hydrography import FLOODPLAIN_PROFILE_DEPTHS
+
+    drainage: np.ndarray = np.full((rows, 4), 10.0, dtype=np.float32)
+    reach_ids: np.ndarray = (np.arange(rows * 4).reshape(rows, 4) % 4).astype(np.uint32)
+    elevation: np.ndarray = (
+        np.random.default_rng(42)
+        .uniform(9.0, 16.0, size=(3 * rows, 12))
+        .astype(np.float32)
+    )
+    elevation[0, 0] = np.nan
+    elevation[0, 3] = np.nan
+    original: np.ndarray = elevation.copy()
+    height: np.ndarray = np.maximum(
+        elevation - np.repeat(np.repeat(drainage, 3, axis=0), 3, axis=1), 0.0
+    )
+    expanded_ids: np.ndarray = np.repeat(np.repeat(reach_ids, 3, axis=0), 3, axis=1)
+    expected: np.ndarray = np.array(
+        [
+            np.bincount(
+                expanded_ids[(expanded_ids > 0) & (height <= depth)], minlength=4
+            )[1:]
+            for depth in FLOODPLAIN_PROFILE_DEPTHS
+        ]
+    )
+    actual: np.ndarray = _count_flooded_subpixels_per_reach(
+        elevation, drainage, reach_ids, 3
+    )
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(elevation, original)
+
+
+def test_floodplain_row_blocks_reject_misaligned_grids() -> None:
+    """Reject elevation arrays without the required 3:1 refinement."""
+    with pytest.raises(ValueError, match="3:1 refinement"):
+        _count_flooded_subpixels_per_reach(
+            np.zeros((5, 6), dtype=np.float32),
+            np.zeros((2, 2), dtype=np.float32),
+            np.ones((2, 2), dtype=np.uint32),
+            1,
+        )
+
+
+def test_extract_dem_subgrid_loads_only_selected_chunks() -> None:
+    """Leave DEM chunks outside the selected region unread."""
+    import dask.array as da
+    from dask import delayed
+
+    def unavailable_block() -> np.ndarray:
+        """Represent an out-of-region DEM chunk that must not be read.
+
+        Raises:
+            RuntimeError: If the calculation reads outside the selected window.
+        """
+        raise RuntimeError("Out-of-region DEM chunk was read")
+
+    available: da.Array = da.ones((10, 10), chunks=(10, 10), dtype=np.float32)
+    unavailable: da.Array = da.from_delayed(
+        delayed(unavailable_block)(), shape=(10, 10), dtype=np.float32
+    )
+    source: xr.DataArray = xr.DataArray(
+        da.block([[available, unavailable], [unavailable, unavailable]]),
+        dims=("y", "x"),
+        coords={"y": -np.arange(20), "x": np.arange(20)},
+    )
+    target: xr.DataArray = xr.DataArray(
+        np.zeros((2, 2), dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": [-1, -4], "x": [1, 4]},
+    )
+    result: np.ndarray = _extract_1sec_subgrid(source, target)
+    np.testing.assert_array_equal(result, np.ones((6, 6), dtype=np.float32))

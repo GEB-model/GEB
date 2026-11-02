@@ -616,6 +616,11 @@ def evaluate_discharge(
             chart_bundles=chart_bundles,
             station_bundle_indices=station_bundle_indices,
             waterbodies=dashboard_geometries.waterbodies,
+            reservoir_period=(
+                self.model.config["general"]["spinup_time"].year,
+                self.model.config["general"]["start_time"].year,
+                self.model.config["general"]["end_time"].year,
+            ),
             station_characteristics=dashboard_characteristics,
             excluded_stations=excluded_stations,
             chart_timeline=chart_timelines,

@@ -1590,7 +1590,8 @@ def fetch_and_save(
         True if the file was successfully downloaded, False otherwise.
 
     Raises:
-        RuntimeError: If the download fails after all retries.
+        RuntimeError: If access is denied (HTTP 401 or 403), or the download
+            fails after all retries.
         ValueError: If an unsupported decompression type is specified.
     """
     if file_path.exists() and not overwrite:
@@ -1664,6 +1665,13 @@ def fetch_and_save(
                     print(f"Downloading {url} to {file_path}")
                 # Attempt to make the request
                 response = session.get(url, stream=True, params=params, timeout=timeout)
+                if response.status_code in (401, 403):
+                    # Retrying the same rejected credentials cannot restore access.
+                    response.close()
+                    raise RuntimeError(
+                        f"Download access denied (HTTP {response.status_code}) for '{url}'. "
+                        "Check the download credentials and dataset permissions before retrying."
+                    )
                 response.raise_for_status()  # Raises HTTPError for bad status codes
 
                 # Create a temporary file

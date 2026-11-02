@@ -129,7 +129,6 @@ def get_discharge_per_river(
     discharge: pd.DataFrame = hydrology_routing.get_discharge_per_river(
         folder=discharge_folder,
         rivers=rivers_of_interest,
-        all_rivers=all_rivers,
     )
     return rivers_of_interest, discharge
 

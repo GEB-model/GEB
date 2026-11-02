@@ -12,80 +12,82 @@ from geb.version import __version__
 if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
+# Temporarily restrict automatic migrations to group B for the large_scale_V1 retry.
+# Forcing is intentionally skipped despite the incomplete October 30 downloads.
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b38": [
-        "[update-method;setup_hydrography]",
-        "[update-method;setup_floodplains]",
+        # "[update-method;setup_hydrography]",
+        # "[update-method;setup_floodplains]",
     ],
     "1.0.0b37": [
-        "[update-method;setup_hydrography]",
-        "[update-method;setup_coastal_water_levels]",
+        # "[update-method;setup_hydrography]",
+        # "[update-method;setup_coastal_water_levels]",
     ],
     "1.0.0b36": [
-        "[update-method;setup_karst]",
+        # "[update-method;setup_karst]",
         "[manual] Karst is included in every hydrology run. Add setup_karst to custom build.yml files unless inherited from reasonable_default_build.yml, then rerun spinup and simulation.",
     ],
     "1.0.0b35": [
-        "[update-method;setup_elevation]",
-        "[update-method;setup_coastal_sfincs_model_regions]",
+        # "[update-method;setup_elevation]",
+        # "[update-method;setup_coastal_sfincs_model_regions]",
     ],
     "1.0.0b34": [
-        "[update-method;setup_waterbodies]",
+        # "[update-method;setup_waterbodies]",
     ],
     "1.0.0b33": [
-        "[update-method;setup_groundwater]",
+        # "[update-method;setup_groundwater]",
     ],
     "1.0.0b32": [
-        "[update-method;setup_waterbodies]",
+        # "[update-method;setup_waterbodies]",
     ],
     "1.0.0b31": [
-        "[update-method;set_time_range]",
-        "[update-method;setup_retention_basins]",
-        "[update-method;setup_hydrography]",
+        # "[update-method;set_time_range]",
+        # "[update-method;setup_retention_basins]",
+        # "[update-method;setup_hydrography]",
         "[update-method;setup_forcing]",
         "[update-method;setup_SPEI]",
-        "[update-method;setup_geomorphology]",
-        "[update-method;setup_waterbodies]",
+        # "[update-method;setup_geomorphology]",
+        # "[update-method;setup_waterbodies]",
         "[update-method;setup_discharge_observations]",
         "[manual] Rerun the simulation to report discharge at the rebuilt station locations, then rerun evaluation.",
     ],
     "1.0.0b30": [
-        "[update-method;setup_retention_basins]",
-        "[update-method;setup_elevation]",
-        "[update-method;setup_hydrography]",
+        # "[update-method;setup_retention_basins]",
+        # "[update-method;setup_elevation]",
+        # "[update-method;setup_hydrography]",
         "[update-method;setup_flood_protection_standards]",
     ],
     "1.0.0b29": [
         "[update-method;setup_flood_observations]",
-        "[update-method;setup_farmer_crop_calendar]",
+        # "[update-method;setup_farmer_crop_calendar]",
     ],
     "1.0.0b28": [
         "[update-method;setup_flood_observations]",
     ],
     "1.0.0b27": [
-        "[update-method;setup_hydrography]",
+        # "[update-method;setup_hydrography]",
     ],
     "1.0.0b26": [
-        "[update-method;setup_farmer_crop_calendar]",
-        "[update-method;setup_retention_basins]",
+        # "[update-method;setup_farmer_crop_calendar]",
+        # "[update-method;setup_retention_basins]",
     ],
     "1.0.0b25": [
-        "[update-method;setup_elevation]",
-        "[update-method;setup_geomorphology]",
+        # "[update-method;setup_elevation]",
+        # "[update-method;setup_geomorphology]",
     ],
     "1.0.0b24": [
-        "[update-method;setup_hydrography]",
-        "[update-method;setup_geomorphology]",
+        # "[update-method;setup_hydrography]",
+        # "[update-method;setup_geomorphology]",
         "[update-method;setup_discharge_observations]",
-        "[update-method;setup_meteorological_stations_observations]",
-        "[update-method;setup_groundwater_well_observations]",
+        # "[update-method;setup_meteorological_stations_observations]",
+        # "[update-method;setup_groundwater_well_observations]",
     ],
     "1.0.0b21": [
         "[manual] Remove `setup_irrigation_sources` from your `build.yml`. Only required if you don't use the new build.yml format that inherits (see changelog.md)",
-        "[update-method;setup_farmer_crop_calendar] Run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.",
+        # "[update-method;setup_farmer_crop_calendar] Run `setup_farmer_crop_calendar`: `geb update -b build.yml::setup_farmer_crop_calendar`.",
         "[update-method;setup_SPEI] Run `setup_SPEI`: `geb update -b build.yml::setup_SPEI`.",
-        "[update-method;setup_pr_GEV] Run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.",
-        "[update-method;setup_gtsm_station_data]",
+        # "[update-method;setup_pr_GEV] Run `setup_pr_GEV`: `geb update -b build.yml::setup_pr_GEV`.",
+        # "[update-method;setup_gtsm_station_data]",
     ],
     "1.0.0b20": [
         "[update-python;3.14.4]",
@@ -96,13 +98,13 @@ VERSION_UPDATES: dict[str, list[str]] = {
     ],
     "1.0.0b19": [
         "[create-file;build_complete.txt]",
-        "[update-method;setup_hydrography]",
+        # "[update-method;setup_hydrography]",
     ],
     "1.0.0b18": [
-        "[update-method;setup_forcing]",
+        # "[update-method;setup_forcing]",
         "[update-method;setup_SPEI]",
-        "[update-method;setup_pr_GEV]",
-        "[update-method;setup_buildings]",
+        # "[update-method;setup_pr_GEV]",
+        # "[update-method;setup_buildings]",
     ],
     "1.0.0b12": [
         "[manual] Re-run `setup_hydrography`: `geb update -b build.yml::setup_hydrography`.",
@@ -139,26 +141,37 @@ def get_and_maybe_do_version_updates(
     Args:
         version_info: The version string stored in the version file, e.g. "1.2.3".
         logger: The logger instance for logging messages.
-        build_model: The GEB model instance for building. If not provided, the function will only return the updates that need to be made, but will not perform the auto-update. If provided and perform_auto_update is True, the function will perform the auto-update by updating the version file after each successful update and using the provided build model to perform the updates that can be performed automatically.
-        methods: A dictionary of loaded methods from the build configuration. Must be provided if perform_auto_update is True.
+        build_model: Builder used to apply automatic updates. If None, only
+            describe the required changes. Run each pending method once in
+            build-recipe order, then record the current version only after
+            all automatic updates succeed. A failed batch leaves the input
+            version unchanged and can be retried.
+        methods: Arguments for each method from the build configuration.
+            Required when build_model is provided.
 
     Returns:
         A list of strings describing the updates that need to be made to update to the current version.
 
     Raises:
-        ValueError: If the version update text is not in the expected format.
-        RuntimeError: If an error occurs during auto-update.
+        ValueError: If inputs are newer than the running code or a migration
+            instruction has an invalid format.
+        RuntimeError: If an automatic update fails or manual actions remain.
     """
     current_v = Version(__version__)
     stored_v = Version(version_info)
+    if stored_v > current_v:
+        raise ValueError(
+            f"Input version {stored_v} is newer than GEB {current_v}. "
+            "Refusing to downgrade the version marker without rebuilding inputs. "
+            "Use matching code or explicitly rebuild the inputs before changing their version."
+        )
 
     versions: list[str] = sorted(
         VERSION_UPDATES.keys(), key=Version
     )  # iterate from oldest to newest version
     updates_to_print: list[str] = []
-    error_occurred: bool = False
-
-    succesfull_version_updates: list[str] = []
+    update_error: Exception | None = None
+    methods_to_update: set[str] = set()
 
     try:
         for update_version in versions:
@@ -195,16 +208,12 @@ def get_and_maybe_do_version_updates(
                             )
                         method_name: str = update_type_arguments[0]
 
-                        if build_model is not None:
-                            assert methods is not None
-                            logger.info(
-                                msg=f"Performing auto-update for method {method_name}..."
-                            )
-                            build_model.update({method_name: methods[method_name]})
-                        else:
-                            updates_to_print.append(
-                                f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."
-                            )
+                        if method_name not in methods_to_update:
+                            methods_to_update.add(method_name)
+                            if build_model is None:
+                                updates_to_print.append(
+                                    f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."
+                                )
 
                     elif update_type == "create-file":
                         if len(update_type_arguments) != 1:
@@ -237,25 +246,31 @@ def get_and_maybe_do_version_updates(
                     else:
                         raise ValueError(f"Unknown update type: {update_type}")
 
-                if build_model is not None:
-                    succesfull_version_updates.append(update_version)
-                    build_model.set_version(update_version)
+        if build_model is not None and methods_to_update:
+            if methods is None:
+                raise ValueError("Build methods are required to apply version updates.")
+            missing_methods: list[str] = sorted(methods_to_update.difference(methods))
+            if missing_methods:
+                raise ValueError(
+                    f"Required update methods missing from build configuration: {', '.join(missing_methods)}"
+                )
+            # A method may appear in several historical migrations. Use its current
+            # arguments once, in recipe order, so dependencies are rebuilt first.
+            for method_name in methods:
+                if method_name in methods_to_update:
+                    logger.info(f"Performing auto-update for method {method_name}...")
+                    build_model.update({method_name: methods[method_name]})
 
-    except Exception:
-        error_occurred = True
+    except Exception as error:
+        update_error = error
         if build_model is not None:
             logger.exception("An error occurred while performing version updates.")
-            if succesfull_version_updates:
-                logger.error(
-                    f"Version updates for versions {', '.join(succesfull_version_updates)} were performed successfully, but the update for version {update_version} failed. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
-                )
         else:
             raise
     else:
         if build_model is not None:
-            # In some cases, when the current version has no updates, the version file might not be updated to the most
-            # current version. To ensure the version file is always updated when all updates are performed successfully,
-            # we set the version to the current version at the end.
+            # The recipe order spans several historical versions, so only the
+            # completed batch can safely advance the input version marker.
             build_model.set_current_version()
 
     if updates_to_print:
@@ -263,18 +278,18 @@ def get_and_maybe_do_version_updates(
             updates_msg = "\n- ".join(updates_to_print)
             error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
             logger.error(error)
-            if error_occurred:
+            if update_error is not None:
                 error += "\n\nIn addition, an error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
-            raise RuntimeError(error)
+            raise RuntimeError(error) from update_error
         else:
             logger.info(
                 "Updates are required to update to the current version. Run geb update-version to perform them."
             )
-    elif not error_occurred:
+    elif update_error is None:
         logger.info("Successfully auto-updated.")
-    else:  # error occurred but no updates to print
-        logger.error(
-            "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
-        )
+    else:  # A first-method failure may not have collected any manual notices.
+        error_message: str = "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
+        logger.error(error_message)
+        raise RuntimeError(error_message) from update_error
 
     return updates_to_print
