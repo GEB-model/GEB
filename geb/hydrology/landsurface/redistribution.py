@@ -182,7 +182,6 @@ def distribute_soil_water_ross(
     soil_layer_height: np.ndarray,
     bubbling_pressure_m_positive: np.ndarray,
     lambda_: np.ndarray,
-    pore_size_index: np.ndarray,
     slope_m_per_m: np.float32,
     hillslope_length_m: np.float32,
     interflow_multiplier: np.float32,
@@ -216,7 +215,6 @@ def distribute_soil_water_ross(
         soil_layer_height: Height of each soil layer (m).
         bubbling_pressure_m_positive: Bubbling pressure in each layer (m). Must be positive.
         lambda_: van Genuchten n parameter minus one (lambda) (-).
-        pore_size_index: Pore size index (3 + 2/lambda) (-).
         slope_m_per_m: Hillslope slope (m/m).
         hillslope_length_m: Hillslope length (m).
         interflow_multiplier: Calibration multiplier for interflow (-).
@@ -290,10 +288,12 @@ def distribute_soil_water_ross(
         if green_ampt_active_layer_idx >= 0 and i < green_ampt_active_layer_idx:
             sat_cond_s = np.float32(1e-25)
 
+        pore_size_index_i: np.float32 = np.float32(3.0) + (np.float32(2.0) / lambda_[i])
+
         # Campbell conductivity function
         # Campbell, G. S. (1974). A simple method for determining unsaturated conductivity
         # from moisture retention data. Soil science, 117(6), 311-314.
-        s_eff_pow_pore_size = s_eff ** pore_size_index[i]
+        s_eff_pow_pore_size = s_eff**pore_size_index_i
         K[i] = sat_cond_s * s_eff_pow_pore_size
 
         # Ross (2003) rewrites the Richards equation using the matric flux
@@ -309,14 +309,14 @@ def distribute_soil_water_ross(
             saturated_hydraulic_conductivity_m_per_s=sat_cond_s,
             bubbling_pressure_m_positive=bubbling_pressure_m_positive[i],
             lambda_=lambda_[i],
-            pore_size_index=pore_size_index[i],
+            pore_size_index=pore_size_index_i,
         )
         # Then equation 2 gives:
-        phi_exponent_i = pore_size_index[i] - (np.float32(1.0) / lambda_[i])
+        phi_exponent_i = pore_size_index_i - (np.float32(1.0) / lambda_[i])
         phi[i] = phi_e_val * (s_eff**phi_exponent_i)
 
         # Derivatives of K and phi with respect to saturation, needed for the implicit solver.
-        dK_dS[i] = pore_size_index[i] * (K[i] / s_eff)
+        dK_dS[i] = pore_size_index_i * (K[i] / s_eff)
         dphi_dS[i] = phi_exponent_i * (phi[i] / s_eff)
 
         # Check whether this layer has an active wetting front.
@@ -381,7 +381,7 @@ def distribute_soil_water_ross(
                 interflow_drainage_rate_s * free_water_m * liquid_fractions[i]
             )
 
-            d_lateral_K_matrix_dS = pore_size_index[i] * (lateral_K_matrix_s / s_eff)
+            d_lateral_K_matrix_dS = pore_size_index_i * (lateral_K_matrix_s / s_eff)
             d_lateral_K_dS = d_lateral_K_matrix_dS * np.float32(10.0)
             d_interflow_drainage_rate_dS = (
                 (d_lateral_K_dS * slope_m_per_m)
@@ -442,25 +442,26 @@ def distribute_soil_water_ross(
             np.float32(100.0),
         )
 
+        pore_size_index_i = np.float32(3.0) + (np.float32(2.0) / lambda_[i])
+
         # Ross rational approximation for the conductivity blend weight.
         # See equation 18 in Ross (2003). This equation aims to avoid expensive
         # power functions.
         weight_numerator = (
             np.float32(60.0)
-            + np.float32(10.0) * (np.float32(7.0) + lambda_[i] * pore_size_index[i]) * v
+            + np.float32(10.0) * (np.float32(7.0) + lambda_[i] * pore_size_index_i) * v
             + (
                 np.float32(16.0)
                 + lambda_[i]
-                * pore_size_index[i]
-                * (np.float32(5.0) + lambda_[i] * pore_size_index[i])
+                * pore_size_index_i
+                * (np.float32(5.0) + lambda_[i] * pore_size_index_i)
             )
             * (v**2)
         )
         weight_denominator = np.float32(2.0) * (
             np.float32(60.0)
             + np.float32(60.0) * v
-            + (np.float32(11.0) + (lambda_[i] ** 2) * (pore_size_index[i] ** 2))
-            * (v**2)
+            + (np.float32(11.0) + (lambda_[i] ** 2) * (pore_size_index_i**2)) * (v**2)
         )
         conductivity_blend_weight = max(
             np.float32(0.0), min(np.float32(1.0), weight_numerator / weight_denominator)
@@ -507,6 +508,9 @@ def distribute_soil_water_ross(
         total_soil_depth_m += soil_layer_height[k]
 
     bottom_layer_index: int = N_SOIL_LAYERS - 1
+    pore_size_index_bottom: np.float32 = np.float32(3.0) + (
+        np.float32(2.0) / lambda_[bottom_layer_index]
+    )
 
     (
         q[N_SOIL_LAYERS],
@@ -517,7 +521,7 @@ def distribute_soil_water_ross(
         bottom_layer_thickness_m=soil_layer_height[bottom_layer_index],
         bubbling_pressure_m_positive=bubbling_pressure_m_positive[bottom_layer_index],
         lambda_=lambda_[bottom_layer_index],
-        pore_size_index=pore_size_index[bottom_layer_index],
+        pore_size_index=pore_size_index_bottom,
         saturated_hydraulic_conductivity_m_per_s=vertical_saturated_hydraulic_conductivity_m_per_s[
             bottom_layer_index
         ],

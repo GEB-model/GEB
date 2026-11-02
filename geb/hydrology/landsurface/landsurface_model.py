@@ -420,12 +420,6 @@ def land_surface_model(
             i, SOIL_PROP_VERTICAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S
         ]
 
-        pore_size_index_cell = stack_empty(N_SOIL_LAYERS, np.float32)
-        for _layer in range(N_SOIL_LAYERS):
-            pore_size_index_cell[_layer] = np.float32(3.0) + (
-                np.float32(2.0) / lambda_pore[_layer]
-            )
-
         snow_water_equivalent_top_m_cell = snow_water_equivalent_m[i, 0]
         snow_water_equivalent_bottom_m_cell = snow_water_equivalent_m[i, 1]
         liquid_water_top_m_cell = liquid_water_in_snow_m[i, 0]
@@ -769,7 +763,6 @@ def land_surface_model(
                 soil_layer_height=soil_layer_h,
                 bubbling_pressure_m_positive=bubbling_press,
                 lambda_=lambda_pore,
-                pore_size_index=pore_size_index_cell,
                 slope_m_per_m=slope_m_per_m[i],
                 hillslope_length_m=hillslope_length_m[i],
                 interflow_multiplier=interflow_multiplier,
