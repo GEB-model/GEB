@@ -15,6 +15,7 @@
   }
 
   function setStationVisible(station, visible) {
+    station._searchVisible = visible;
     resolveMarkers(station).forEach(function(marker) {
       marker.setStyle({
         opacity: visible ? 1 : 0,

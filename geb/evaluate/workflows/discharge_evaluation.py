@@ -22,6 +22,8 @@ from geb.evaluate.workflows.dashboard import (
     build_station_chart_data,
     determine_main_time_index,
     load_discharge_dashboard_geometries,
+    read_run_completion_time,
+    read_run_completion_timestamp_for_filename,
     serialize_main_timeline,
     write_discharge_dashboard,
 )
@@ -36,7 +38,7 @@ from geb.evaluate.workflows.discharge_metrics import (
     DischargeMetrics,
     calculate_discharge_metrics,
     calculate_seasonal_discharge_metrics,
-    use_daily_discharge_scores,
+    use_native_discharge_scores,
 )
 from geb.evaluate.workflows.discharge_station_checks import (
     find_dashboard_excluded_stations,
@@ -114,7 +116,8 @@ def evaluate_discharge(
 
     Returns:
         Dictionary containing median frequency-specific discharge skill
-        scores (e.g., KGE_hourly, KGE_daily) and median seasonal daily KGE.
+        scores (e.g., KGE_hourly, KGE_daily) and median seasonal daily KGE,
+        rounded to 4 decimal places.
         Stations with hourly data are also evaluated on the daily resampled data, and those metrics are included in
         the returned dictionary. Stations with only daily data are not evaluated on the hourly data.
 
@@ -128,9 +131,18 @@ def evaluate_discharge(
         start_year=start_year,
         end_year=end_year,
     )
+    run_output_folder: Path = (
+        Path(self.model.config["general"]["output_folder"]) / run_name
+    )
+    completion_timestamp: str | None = read_run_completion_timestamp_for_filename(
+        run_output_folder
+    )
+    completion_timestamp_suffix: str = (
+        f"_{completion_timestamp}" if completion_timestamp else ""
+    )
     dashboard_path: Path = (
         evaluation_paths.plot_folder
-        / f"discharge_evaluation_map{evaluation_paths.suffix}.html"
+        / f"discharge_evaluation_map{evaluation_paths.suffix}{completion_timestamp_suffix}.html"
     )
     self.model.logger.info(
         "Evaluating discharge skill scores for %s.",
@@ -196,9 +208,6 @@ def evaluate_discharge(
         "timezone_utc_offset"
     ].fillna(0.0)
 
-    run_output_folder: Path = (
-        Path(self.model.config["general"]["output_folder"]) / run_name
-    )
     report_folder: Path = run_output_folder / "report"
     if not report_folder.exists():
         raise FileNotFoundError(
@@ -409,6 +418,7 @@ def evaluate_discharge(
                 "discharge_observations_country_code": station_metadata.get(
                     "discharge_observations_country_code", ""
                 ),
+                "observation_frequency": frequency_label,
                 **{
                     f"{metric_name}_{frequency_label}": metric_value
                     for metric_name, metric_value in station_metrics.items()
@@ -502,12 +512,18 @@ def evaluate_discharge(
                 "snapping_method",
                 "timezone_utc_offset",
                 "discharge_observations_country_code",
+                "observation_frequency",
                 *DISCHARGE_SCORE_COLUMNS,
             ],
             index=pd.Index([], name="station_ID"),
         )
     else:
         station_scores = pd.DataFrame(station_score_records).set_index("station_ID")
+
+    # Round skill score columns to 4 decimal places for consistent reporting and storage.
+    for score_column in DISCHARGE_SCORE_COLUMNS:
+        if score_column in station_scores.columns:
+            station_scores[score_column] = station_scores[score_column].round(4)
 
     excluded_station_scores: pd.DataFrame = station_scores.loc[
         station_scores.index.isin(excluded_stations.index)
@@ -583,7 +599,7 @@ def evaluate_discharge(
             rivers=dashboard_geometries.rivers,
             run_output_folder=run_output_folder,
         )
-        use_daily_discharge_scores(dashboard_station_scores)
+        use_native_discharge_scores(dashboard_station_scores)
         dashboard_characteristics: pd.DataFrame | None = (
             discharge_characteristics.load_dashboard_catchment_characteristics(
                 mapped_station_scores=dashboard_station_scores,
@@ -603,6 +619,9 @@ def evaluate_discharge(
             station_characteristics=dashboard_characteristics,
             excluded_stations=excluded_stations,
             chart_timeline=chart_timelines,
+            run_output_folder=run_output_folder,
+            run_name=run_name,
+            completion_date=read_run_completion_time(run_output_folder),
         )
         self.model.logger.info("Discharge dashboard created: %s", dashboard_path)
 
@@ -617,8 +636,8 @@ def evaluate_discharge(
 
         for metric_column in median_skill_scores:
             if metric_column in station_scores.columns:
-                median_skill_scores[metric_column] = float(
-                    station_scores[metric_column].median()
+                median_skill_scores[metric_column] = round(
+                    float(station_scores[metric_column].median()), 4
                 )
     else:
         self.model.logger.warning(

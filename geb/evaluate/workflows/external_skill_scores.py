@@ -453,11 +453,9 @@ def match_external_skill_scores(
             and "KGE" in matched_external_scores.columns
         ):
             matched_geb_scores["KGE_difference"] = (
-                pd.to_numeric(matched_geb_scores["KGE"], errors="coerce").to_numpy()
-                - pd.to_numeric(
-                    matched_external_scores["KGE"], errors="coerce"
-                ).to_numpy()
-            )
+                pd.to_numeric(matched_geb_scores["KGE"], errors="coerce")
+                - pd.to_numeric(matched_external_scores["KGE"], errors="coerce")
+            ).round(4)
 
         matched_external_scores.to_excel(
             output_folder / f"external_evaluation_filtered_{model_name}.xlsx"

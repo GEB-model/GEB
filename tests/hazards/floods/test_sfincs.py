@@ -25,11 +25,11 @@ from geb.model import GEBModel
 from geb.runner import parse_config, run_model_with_method
 from geb.workflows.io import WorkingDirectory, read_geom, read_zarr
 
-from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
+from ...testconfig import IN_GITHUB_ACTIONS, output_folder, tmp_folder
 
 working_directory: Path = tmp_folder / "model"
 TEST_MODEL_NAME: str = "test_model"
-SFINCS_PLOT_FOLDER = tmp_folder / "SFINCS_plots"
+SFINCS_PLOT_FOLDER: Path = output_folder / "sfincs"
 SFINCS_PLOT_FOLDER.mkdir(exist_ok=True, parents=True)
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,6 @@ def build_sfincs(
             mannings=geb_model.hazard_driver.floods.mannings,
             grid_size_multiplier=10,
             subgrid=subgrid,
-            setup_river_outflow_boundary=False,
             custom_rivers_to_burn=read_geom(
                 geb_model.files["geom"]["routing/custom_rivers"]
             )
@@ -147,6 +146,7 @@ def build_sfincs(
         )
         geb_model.close()
 
+        assert (sfincs_model.path / "sfincs.crs").exists()
         if subgrid:
             assert (sfincs_model.path / "sfincs_subgrid.nc").exists()
         else:
@@ -194,18 +194,41 @@ def create_sfincs_models(
             outflow_basins = group_with_downstream_basins - set(group)
             subbasins_group = subbasins[
                 subbasins.index.isin(group_with_downstream_basins)
-            ]
+            ].copy()
+            subbasins_group["is_downstream_outflow"] = False
             subbasins_group.loc[
                 subbasins_group.index.isin(outflow_basins),
                 "is_downstream_outflow",
             ] = True
+
+            rivers_group = rivers.copy()
+            rivers_group["is_downstream_outflow"] = False
+            rivers_group["is_further_downstream_outflow"] = False
+            for outflow_basin_id in outflow_basins:
+                if outflow_basin_id in rivers_group.index:
+                    rivers_group.loc[outflow_basin_id, "is_downstream_outflow"] = True
+                    further_downstream_river = rivers_group.loc[
+                        outflow_basin_id, "downstream_ID"
+                    ]
+                    while further_downstream_river != -1:
+                        rivers_group.loc[
+                            further_downstream_river, "is_further_downstream_outflow"
+                        ] = True
+                        further_downstream_river = rivers_group.loc[
+                            further_downstream_river, "downstream_ID"
+                        ]
+            rivers_group.loc[
+                rivers_group["is_downstream_outflow"]
+                & rivers_group["is_further_downstream_outflow"],
+                "is_further_downstream_outflow",
+            ] = False
 
             sfincs_model: SFINCSRootModel = build_sfincs(
                 geb_model,
                 subgrid=subgrid,
                 subbasins=subbasins_group,
                 name=f"test_group_{group_id}",
-                rivers=rivers,
+                rivers=rivers_group,
             )
             sfincs_models.append(sfincs_model)
 
@@ -316,6 +339,7 @@ def test_accumulated_runoff(
         )
 
         total_flood_volume_across_models: float = 0.0
+        total_outflow_volume_across_models: float = 0.0
         total_discharge_volume_across_models: float = 0.0
         for sfincs_model in sfincs_models:
             event = Event(
@@ -329,7 +353,6 @@ def test_accumulated_runoff(
                 event=event,
                 spinup_seconds=0,
                 write_figures=True,
-                setup_river_outflow=False,
             ) as simulation:
                 simulation.set_accumulated_runoff_forcing(
                     runoff_m=runoff_m,
@@ -375,19 +398,24 @@ def test_accumulated_runoff(
             assert (simulation.path / "sfincs.dis").exists()
             assert (simulation.path / "sfincs.src").exists()
 
-            assert not simulation.has_outflow_boundary()
+            assert simulation.has_outflow_boundary()
 
             simulation.run(gpu=False)
             flood_depth = simulation.read_final_flood_depth(
                 minimum_flood_depth=0.00, area_of_interest="all"
             )
             total_flood_volume = simulation.get_flood_volume(flood_depth)
+            total_outflow_volume: float = simulation.get_outflow_volume()
+            assert total_outflow_volume > 0.0
 
             basin_id_grid = geb_model.hydrology.grid.load2d(
                 geb_model.files["grid"]["routing/basin_ids"], compress=False
             )
 
-            valid_cells = np.isin(basin_id_grid, sfincs_model.active_rivers.index)
+            active_rivers = sfincs_model.active_rivers[
+                ~sfincs_model.active_rivers["is_downstream_outflow"]
+            ]
+            valid_cells = np.isin(basin_id_grid, active_rivers.index)
 
             total_runoff_volume: float = (
                 runoff_rate_m_per_hr
@@ -400,20 +428,21 @@ def test_accumulated_runoff(
 
             # compare to total discharge volume
             assert math.isclose(
-                total_flood_volume,
+                total_flood_volume + total_outflow_volume,
                 total_discharge_volume_m3,
                 abs_tol=0,
                 rel_tol=0.01,
             )
 
             assert math.isclose(
-                total_flood_volume,
+                total_flood_volume + total_outflow_volume,
                 total_runoff_volume + discharge_m3,
                 abs_tol=0,
                 rel_tol=0.02,
             )
 
             total_flood_volume_across_models += total_flood_volume
+            total_outflow_volume_across_models += total_outflow_volume
             total_discharge_volume_across_models += discharge_m3
 
             simulation.cleanup()
@@ -427,7 +456,7 @@ def test_accumulated_runoff(
             )
 
             assert math.isclose(
-                total_flood_volume_across_models,
+                total_flood_volume_across_models + total_outflow_volume_across_models,
                 total_runoff_volume + total_discharge_volume_across_models,
                 abs_tol=0,
                 rel_tol=0.05,
@@ -468,7 +497,6 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         )
         simulation = sfincs_model.create_simulation(
             event=event,
-            setup_river_outflow=False,
         )
 
         nodes, timeseries = create_discharge_timeseries(
@@ -483,17 +511,19 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         assert (simulation.path / "sfincs.dis").exists()
         assert (simulation.path / "sfincs.src").exists()
 
-        assert not simulation.has_outflow_boundary()
+        assert simulation.has_outflow_boundary()
 
         simulation.run(gpu=use_gpu)
         flood_depth = simulation.read_final_flood_depth(
             minimum_flood_depth=0.00, area_of_interest="all"
         )
         total_flood_volume = simulation.get_flood_volume(flood_depth)
+        total_outflow_volume: float = simulation.get_outflow_volume()
+        assert total_outflow_volume > 0.0
 
         # compare to total discharge volume
         assert math.isclose(
-            total_flood_volume,
+            total_flood_volume + total_outflow_volume,
             simulation.total_discharge_volume_m3,
             abs_tol=0,
             rel_tol=0.01,
@@ -553,7 +583,6 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         )
         simulation_without_dam = sfincs_model.create_simulation(
             event=event_no_dam,
-            setup_river_outflow=False,
         )
 
         simulation_without_dam.set_discharge_forcing_from_nodes(
@@ -580,7 +609,6 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         )
         simulation_with_dam = sfincs_model.create_simulation(
             event=event_dam,
-            setup_river_outflow=False,
         )
         simulation_with_dam.setup_thin_dams(vertical_dam)
 
@@ -608,7 +636,6 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         )
         simulation_with_multiple_dams = sfincs_model.create_simulation(
             event=event_multiple_dams,
-            setup_river_outflow=False,
         )
 
         simulation_with_multiple_dams.setup_thin_dams(multiple_dams)
@@ -676,6 +703,9 @@ def test_read(geb_model: GEBModel) -> None:
             assert sfincs_model_build.rivers[col].equals(sfincs_model_read.rivers[col])
         assert sfincs_model_build.rivers.equals(sfincs_model_read.rivers)
         assert sfincs_model_build.subbasins.equals(sfincs_model_read.subbasins)
+        assert sfincs_model_build.sfincs_model.cross_sections.data.geom_equals_exact(
+            sfincs_model_read.sfincs_model.cross_sections.data, tolerance=1e-5
+        ).all()
 
         for key, value in sfincs_model_build.sfincs_model.config.data:
             assert getattr(sfincs_model_build.sfincs_model.config.data, key) == value
@@ -724,7 +754,6 @@ def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
         )
         simulation = sfincs_model.create_simulation(
             event=event,
-            setup_river_outflow=False,
         )
 
         rivers = sfincs_model.rivers.copy().reset_index()
@@ -762,11 +791,21 @@ def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
 
         simulation.run(gpu=False)
         flood_depth = simulation.read_final_flood_depth(
-            minimum_flood_depth=0.01, area_of_interest="all"
+            minimum_flood_depth=0.00, area_of_interest="all"
         )
 
         total_flood_volume = simulation.get_flood_volume(flood_depth)
+        total_outflow_volume: float = simulation.get_outflow_volume()
         assert total_flood_volume > 0, "No flooding occurred"
+        assert total_outflow_volume < 0, (
+            "Expected net coastal inflow (negative outflow)"
+        )
+        assert math.isclose(
+            total_flood_volume,
+            -total_outflow_volume,
+            abs_tol=0,
+            rel_tol=0.02,
+        )
 
         plot_flood_map(flood_depth, "flood_depth_coastal_test")
 

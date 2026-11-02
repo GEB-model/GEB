@@ -193,24 +193,31 @@ def snap_point_to_river_network(
     rivers: gpd.GeoDataFrame,
     upstream_area_grid: xr.DataArray,
     upstream_area_subgrid: xr.DataArray,
+    waterbody_id_grid: xr.DataArray,
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
     max_spatial_difference_degrees: float = 0.1,
+    dominant_river_buffer_m: float | None = 2000.0,
 ) -> SnappingResults | None:
     """Snap a point to the river network grid.
 
-    This function finds the closest river segment (optionally matching upstream area),
-    snaps the point to that segment, and then finds the corresponding cell in the
-    low-resolution grid that is part of the river network.
+    This function finds the closest river segment (optionally matching upstream area
+    or prioritizing the dominant river within a spatial proximity threshold), snaps
+    the point to that segment, and then finds the corresponding cell in the
+    low-resolution grid that is part of the river network (excluding waterbodies).
 
     Args:
         point: The location to snap (shapely Point).
         rivers: GeoDataFrame of river segments. Must contain 'uparea_m2' and 'hydrography_xy'.
         upstream_area_grid: Low-resolution upstream area grid.
         upstream_area_subgrid: High-resolution upstream area subgrid.
+        waterbody_id_grid: Grid of waterbody IDs used to avoid snapping to cells
+            inside lakes or reservoirs.
         upstream_area_m2: Optional target upstream area for matching (m2).
         max_uparea_difference_ratio: Max allowed difference ratio for upstream area.
         max_spatial_difference_degrees: Max allowed spatial distance in degrees.
+        dominant_river_buffer_m: Proximity buffer in meters to consider candidate rivers for
+            dominant (largest upstream area) river selection. Defaults to 2000.0 m (2 km).
 
     Returns:
         SnappingResults or None if no segment found.
@@ -233,6 +240,8 @@ def snap_point_to_river_network(
         max_spatial_difference_degrees=max_spatial_difference_degrees,
         upstream_area_m2=upstream_area_m2,
         max_uparea_difference_ratio=max_uparea_difference_ratio,
+        dominant_river_buffer_m=dominant_river_buffer_m,
+        point=point,
     )
 
     if best_river_segment is None:
@@ -254,8 +263,12 @@ def snap_point_to_river_network(
     # river point, and that is part of the same river segment.
     # hydrography_xy contains the list of (x,y) coordinates in the low-res grid that belong to the river segment.
     hydrography_xy = best_river_segment.hydrography_xy
+    wb_values: np.ndarray = waterbody_id_grid.values
     river_points_and_xy = []
     for xy in hydrography_xy:
+        wb_val = wb_values[xy[1], xy[0]]
+        if wb_val != -1 and not np.isnan(wb_val):
+            continue
         river_points_and_xy.append(
             (
                 shapely.geometry.Point(
@@ -265,6 +278,10 @@ def snap_point_to_river_network(
                 xy,
             )
         )
+
+    if not river_points_and_xy:
+        return None
+
     closest_river_point_and_xy = min(
         river_points_and_xy,
         key=lambda x: shapely.distance(x[0], closest_point_on_riverline),
@@ -300,20 +317,56 @@ def select_river_segment(
     max_spatial_difference_degrees: float,
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
+    dominant_river_buffer_m: float | None = 2000.0,
+    point: shapely.geometry.Point | None = None,
 ) -> RiverSegment | None:
-    """Select the closest river segment that matches optional upstream area criteria.
+    """Select the closest river segment.
+
+    Matches optional upstream area criteria or selects the dominant river segment within
+    a spatial search buffer.
 
     Args:
         rivers_sorted: GeoDataFrame of river segments sorted by spatial distance. Must contain 'station_distance' and 'uparea_m2'.
         max_spatial_difference_degrees: The maximum allowed spatial difference in degrees.
         upstream_area_m2: Optional target upstream area (m2). If provided (and not NaN), matching is performed.
         max_uparea_difference_ratio: The maximum allowed difference ratio for upstream area matching.
+        dominant_river_buffer_m: Radius in meters within which to search for the dominant river (highest upstream area).
+        point: Optional location of the point being snapped (used for accurate metric-to-degree distance conversion).
 
     Returns:
         The selected river segment or None if no segment meets the criteria.
     """
+    if rivers_sorted.empty:
+        return None
+
     if upstream_area_m2 is None or np.isnan(upstream_area_m2):
-        closest_river_segment = rivers_sorted.head(1)
+        if dominant_river_buffer_m is not None and dominant_river_buffer_m > 0:
+            if (
+                point is not None
+                and hasattr(rivers_sorted, "crs")
+                and rivers_sorted.crs
+                and rivers_sorted.crs.is_geographic
+            ):
+                lat = point.y
+                m_per_deg_lat = 111139.0
+                m_per_deg_lon = 111320.0 * np.cos(np.radians(lat))
+                effective_m_per_deg = np.sqrt(
+                    (m_per_deg_lat**2 + m_per_deg_lon**2) / 2.0
+                )
+                buffer_deg = dominant_river_buffer_m / effective_m_per_deg
+            else:
+                buffer_deg = dominant_river_buffer_m / 111139.0
+
+            candidates = rivers_sorted[rivers_sorted["station_distance"] <= buffer_deg]
+            if candidates.empty:
+                closest_river_segment = rivers_sorted.head(1)
+            else:
+                closest_river_segment = candidates.sort_values(
+                    by=["uparea_m2", "shreve_stream_order", "station_distance"],
+                    ascending=[False, False, True],
+                ).head(1)
+        else:
+            closest_river_segment = rivers_sorted.head(1)
     else:
         # add upstream area criteria
         upstream_area_diff = max_uparea_difference_ratio * upstream_area_m2
