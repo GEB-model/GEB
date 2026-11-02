@@ -256,9 +256,7 @@ def distribute_soil_water_ross(
     dq_dS_iplus1 = stack_empty(_N_SOIL_LAYERS_PLUS_ONE, np.float32)
     dq_interflow_dS = stack_empty(N_SOIL_LAYERS, np.float32)
 
-    a = stack_empty(N_SOIL_LAYERS, np.float32)
     b = stack_empty(N_SOIL_LAYERS, np.float32)
-    c = stack_empty(N_SOIL_LAYERS, np.float32)
     d = stack_empty(N_SOIL_LAYERS, np.float32)
     inv_timestep_s: np.float32 = np.float32(1.0) / timestep_length_s
 
@@ -555,8 +553,6 @@ def distribute_soil_water_ross(
 
         # Matrix coefficients for the implicit Backward Euler step.
         # Include dq_interflow_dS in the diagonal element b[i]
-        a[i] = -dq_dS_i[i]  # Jacobian of flux from layer above (naturally 0 at top)
-        c[i] = dq_dS_iplus1[i + 1]  # Jacobian of flux to layer below
         b[i] = -dq_dS_iplus1[i] + dq_dS_i[i + 1] + dq_interflow_dS[i] + storage_term
 
         # The imbalance term accounts for the difference between the linear approximation
@@ -564,18 +560,17 @@ def distribute_soil_water_ross(
         # Include q_interflow[i] in the imbalance (it's an outflow)
         d[i] = q[i] - q[i + 1] - q_interflow[i]
 
-    # Thomas algorithm to solve the tridiagonal system Ax=d for dS
-
+    # Thomas algorithm to solve the tridiagonal system Ax=d for d (overwriting d in-place).
     # Forward pass:
     for i in range(1, N_SOIL_LAYERS):
-        m = a[i] / b[i - 1]
-        b[i] = b[i] - m * c[i - 1]
+        m = -dq_dS_i[i] / b[i - 1]
+        b[i] = b[i] - m * dq_dS_iplus1[i]
         d[i] = d[i] - m * d[i - 1]
 
     # Backward substitution writing directly into d:
     d[N_SOIL_LAYERS - 1] = d[N_SOIL_LAYERS - 1] / b[N_SOIL_LAYERS - 1]
     for i in range(N_SOIL_LAYERS - 2, -1, -1):
-        d[i] = (d[i] - c[i] * d[i + 1]) / b[i]
+        d[i] = (d[i] - dq_dS_iplus1[i + 1] * d[i + 1]) / b[i]
 
     # Total interflow tracking
     total_lateral_outflow_m = np.float32(0.0)
