@@ -874,7 +874,6 @@ def solve_soil_enthalpy_column(
             - Soil heat flux (W/m2).
             - Top-layer frozen fraction (0-1).
     """
-    lower_diagonal_a = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
     main_diagonal_b = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
     upper_diagonal_c = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
     rhs_vector_d = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
@@ -885,9 +884,6 @@ def solve_soil_enthalpy_column(
     beta_linearized = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
     conductivities_W_per_m_K = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
     half_layer_thicknesses_m = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
-    enthalpies_at_start_of_timestep = stack_empty(
-        _N_COUPLED_SURFACE_LAYERS, dtype=np.float32
-    )
 
     n_active_snow_layers = 0
     if snow_water_equivalent_m[0] > MIN_ACTIVE_SNOW_SWE_M and snow_density_kg_per_m3[
@@ -915,7 +911,6 @@ def solve_soil_enthalpy_column(
             * RHO_WATER_KG_PER_M3
             * SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K
         )
-        enthalpies_at_start_of_timestep[snow_layer_idx] = enthalpy_J_per_m2
         alpha_snow: np.float32 = np.float32(1.0) / max(
             heat_capacity_J_per_m2_K, np.float32(1.0)
         )
@@ -963,7 +958,6 @@ def solve_soil_enthalpy_column(
             heat_capacity_liquid_J_per_m2_K=heat_capacity_liquid_J_per_m2_K,
             heat_capacity_frozen_J_per_m2_K=heat_capacity_frozen_J_per_m2_K,
         )
-        enthalpies_at_start_of_timestep[combined_layer_idx] = enthalpy_J_per_m2
         dT_dH_linearized[combined_layer_idx] = dT_dH
         beta_linearized[combined_layer_idx] = beta
 
@@ -1089,7 +1083,11 @@ def solve_soil_enthalpy_column(
     alpha_1 = dT_dH_linearized[1]
     beta_1 = beta_linearized[1]
 
-    lower_diagonal_a[0] = np.float32(0.0)
+    init_enthalpy_0 = (
+        snow_enthalpy_J_per_m2[0]
+        if n_active_snow_layers > 0
+        else soil_enthalpies_J_per_m2[0]
+    )
     main_diagonal_b[0] = (
         inv_dt
         + (surface_thermal_conductance_W_per_m2_K + conductance_to_layer_below)
@@ -1097,7 +1095,7 @@ def solve_soil_enthalpy_column(
     )
     upper_diagonal_c[0] = -conductance_to_layer_below * alpha_1
     rhs_vector_d[0] = (
-        inv_dt * enthalpies_at_start_of_timestep[0]
+        inv_dt * init_enthalpy_0
         + flux_star_W_per_m2
         - (surface_thermal_conductance_W_per_m2_K + conductance_to_layer_below) * beta_0
         + conductance_to_layer_below * beta_1
@@ -1119,13 +1117,17 @@ def solve_soil_enthalpy_column(
         alpha_ip1 = dT_dH_linearized[layer_idx + 1]
         beta_ip1 = beta_linearized[layer_idx + 1]
 
-        lower_diagonal_a[layer_idx] = -conductance_to_layer_above * alpha_im1
+        init_enthalpy_i = (
+            snow_enthalpy_J_per_m2[layer_idx]
+            if layer_idx < n_active_snow_layers
+            else soil_enthalpies_J_per_m2[layer_idx - n_active_snow_layers]
+        )
         main_diagonal_b[layer_idx] = (
             inv_dt + (conductance_to_layer_above + conductance_to_layer_below) * alpha_i
         )
         upper_diagonal_c[layer_idx] = -conductance_to_layer_below * alpha_ip1
         rhs_vector_d[layer_idx] = (
-            inv_dt * enthalpies_at_start_of_timestep[layer_idx]
+            inv_dt * init_enthalpy_i
             - (conductance_to_layer_above + conductance_to_layer_below) * beta_i
             + conductance_to_layer_above * beta_im1
             + conductance_to_layer_below * beta_ip1
@@ -1145,7 +1147,7 @@ def solve_soil_enthalpy_column(
     alpha_above = dT_dH_linearized[last_idx - 1]
     beta_above = beta_linearized[last_idx - 1]
 
-    lower_diagonal_a[last_idx] = -conductance_to_layer_above * alpha_above
+    init_enthalpy_last = soil_enthalpies_J_per_m2[N_SOIL_LAYERS - 1]
     main_diagonal_b[last_idx] = (
         inv_dt
         + (conductance_to_layer_above + conductance_to_deep_soil_boundary_W_per_m2_K)
@@ -1153,7 +1155,7 @@ def solve_soil_enthalpy_column(
     )
     upper_diagonal_c[last_idx] = np.float32(0.0)
     rhs_vector_d[last_idx] = (
-        inv_dt * enthalpies_at_start_of_timestep[last_idx]
+        inv_dt * init_enthalpy_last
         + conductance_to_deep_soil_boundary_W_per_m2_K * deep_soil_temperature_C
         - (conductance_to_layer_above + conductance_to_deep_soil_boundary_W_per_m2_K)
         * beta_last
@@ -1171,15 +1173,17 @@ def solve_soil_enthalpy_column(
         rhs_vector_d[0] = rhs_vector_d[0] / main_diagonal_b[0]
 
     for layer_idx in range(1, n_total_layers):
+        lower_a = (
+            -thermal_conductances_between_layer_centers_W_per_m2_K[layer_idx - 1]
+            * dT_dH_linearized[layer_idx - 1]
+        )
         denominator = (
-            main_diagonal_b[layer_idx]
-            - lower_diagonal_a[layer_idx] * upper_diagonal_c[layer_idx - 1]
+            main_diagonal_b[layer_idx] - lower_a * upper_diagonal_c[layer_idx - 1]
         )
         if layer_idx < n_total_layers - 1:
             upper_diagonal_c[layer_idx] = upper_diagonal_c[layer_idx] / denominator
         rhs_vector_d[layer_idx] = (
-            rhs_vector_d[layer_idx]
-            - lower_diagonal_a[layer_idx] * rhs_vector_d[layer_idx - 1]
+            rhs_vector_d[layer_idx] - lower_a * rhs_vector_d[layer_idx - 1]
         ) / denominator
 
     for layer_idx in range(n_total_layers - 2, -1, -1):
