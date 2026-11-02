@@ -243,14 +243,14 @@ agent_settings:
     well_cost_factor: 1
     drought_threshold_factor: 1
 
-  climrisk:
-    project_income: false # if true turn on household income growth, calculating it with GDP per capita growth
-    project_costs: false # if true turn on adaptation, relocation and asset damages costs growth, calculating it with the growth of the sum of the GDP for all countries that include the modelled region.
-    ssp: '2' # Shared Socioeconomic Pathway, choose from: '1', '2', '3', '4', '5'.
-    rcp: '70' # Representative Concentration Pathway, choose from: '19', '26', '34', '45', '60', '70', '85'.
-    damage_function: 'K' # Macroeconomic climate damages function, choose from: 'K' (Kompas), 'KU' (Kompas + Urban Heat Island), 'KPU' (Kompas + U + persistent damages), 'RU' (RICE + U), 'RPU' (RICE + PU). Choose 'GDP' to project growth without damages.
-    warming_percentile: '90' # Global warming percentile, choose from: '10', '50', '90'.
-    country_wide: false # If true project GDP homogenously for all the country
+  # climrisk:
+  #   project_income: false # if true turn on household income growth, calculating it with GDP per capita growth
+  #   project_costs: false # if true turn on adaptation, relocation and asset damages costs growth, calculating it with the growth of the sum of the GDP for all countries that include the modelled region.
+  #   ssp: '2' # Shared Socioeconomic Pathway, choose from: '1', '2', '3', '4', '5'.
+  #   rcp: '70' # Representative Concentration Pathway, choose from: '19', '26', '34', '45', '60', '70', '85'.
+  #   damage_function: 'K' # Macroeconomic climate damages function, choose from: 'K' (Kompas), 'KU' (Kompas + Urban Heat Island), 'KPU' (Kompas + U + persistent damages), 'RU' (RICE + U), 'RPU' (RICE + PU). Choose 'GDP' to project growth without damages.
+  #   warming_percentile: '90' # Global warming percentile, choose from: '10', '50', '90'.
+  #   country_wide: false # If true project GDP homogenously for all the country
 
 logging:
   logfile: GEB.log  
