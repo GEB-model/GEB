@@ -19,8 +19,11 @@ from shapely.geometry import LineString
 from geb.cli import CONFIG_DEFAULT
 from geb.geb_types import TwoDArrayFloat64, TwoDArrayInt32
 from geb.hazards.event import Event
-from geb.hazards.floods import create_river_graph, group_subbasins
-from geb.hazards.floods import sfincs as sfincs_module
+from geb.hazards.floods import (
+    create_river_graph,
+    group_subbasins,
+    sfincs as sfincs_module,
+)
 from geb.hazards.floods.sfincs import SFINCSRootModel
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
@@ -826,11 +829,6 @@ def test_return_period_outputs_use_run_output_root(
         monkeypatch: Pytest fixture for replacing file and plotting operations.
         write_figures: Whether diagnostic figures should be generated.
 
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If outputs are written to the shared model directory.
     """
     shared_root: Path = tmp_path / "shared"
     run_output_root: Path = tmp_path / "run" / "SFINCS" / "inland"
@@ -840,9 +838,7 @@ def test_return_period_outputs_use_run_output_root(
         index=[1],
         crs="EPSG:4326",
     )
-    root_model: SFINCSRootModel = SFINCSRootModel(
-        shared_root, "inland", logger=logger
-    )
+    root_model: SFINCSRootModel = SFINCSRootModel(shared_root, "inland", logger=logger)
     root_model._rivers = rivers.copy()
     root_model._subbasins = gpd.GeoDataFrame(
         geometry=[LineString([(0, 0), (1, 1)])],
@@ -851,9 +847,7 @@ def test_return_period_outputs_use_run_output_root(
     )
     return_period_rivers: gpd.GeoDataFrame = rivers.copy()
     return_period_rivers["Q_2"] = 10.0
-    assign_return_periods_mock: MagicMock = MagicMock(
-        return_value=return_period_rivers
-    )
+    assign_return_periods_mock: MagicMock = MagicMock(return_value=return_period_rivers)
     hydrograph_mock: MagicMock = MagicMock(
         return_value=pd.DataFrame(
             {"discharge": [10.0]},
@@ -862,9 +856,7 @@ def test_return_period_outputs_use_run_output_root(
     )
     export_rivers_mock: MagicMock = MagicMock()
 
-    monkeypatch.setattr(
-        root_model, "assign_return_periods", assign_return_periods_mock
-    )
+    monkeypatch.setattr(root_model, "assign_return_periods", assign_return_periods_mock)
     monkeypatch.setattr(
         sfincs_module, "create_hydrograph_from_discharge_shape", hydrograph_mock
     )

@@ -1599,8 +1599,6 @@ class SFINCSRootModel:
             output_root: Run-specific directory for generated files. Defaults to the
                 SFINCS model directory.
 
-        Returns:
-            None.
 
         Raises:
             ValueError: If ``hydrograph_shape`` is not one of ``'triangular'``,
