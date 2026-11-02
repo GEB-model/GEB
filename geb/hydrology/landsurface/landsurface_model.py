@@ -462,9 +462,6 @@ def land_surface_model(
         transpiration_enthalpy_loss_J_per_m2[i] = np.float32(0.0)
 
         for hour in range(24):
-            runoff_m[i, hour] = np.float32(0.0)
-            interflow_m[i, hour] = np.float32(0.0)
-            reference_evapotranspiration_water_m[i, hour] = np.float32(0.0)
             # Climate values for current hour (contigous access [i, hour])
             tas_2m_K_val = tas_2m_K[i, hour]
             ps_pascal_val = ps_pascal[i, hour]
@@ -588,7 +585,7 @@ def land_surface_model(
             reference_evapotranspiration_grass_m[i] += (
                 reference_evapotranspiration_grass_m_hour_cell
             )
-            reference_evapotranspiration_water_m[i, hour] += (
+            reference_evapotranspiration_water_m[i, hour] = (
                 reference_evapotranspiration_water_m_hour_cell
             )
 
@@ -733,7 +730,7 @@ def land_surface_model(
                 slope_m_per_m=slope_m_per_m[i],
             )
 
-            runoff_m[i, hour] += direct_runoff_m
+            runoff_m[i, hour] = direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
             top_soil_infiltration_m[i] += infiltration_amount
 
@@ -790,7 +787,7 @@ def land_surface_model(
             remaining_capillary_rise_m = max(
                 np.float32(0.0), remaining_capillary_rise_m - capillary_rise_ross
             )
-            interflow_m[i, hour] += total_lateral_outflow_ross
+            interflow_m[i, hour] = total_lateral_outflow_ross
             groundwater_recharge_enthalpy_loss_J_per_m2[i] += (
                 percolation_to_groundwater_enthalpy_loss_ross
             )
@@ -2541,10 +2538,12 @@ class LandSurface(Module):
         self.HRU.var.daily_reference_evapotranspiration_grass_m = (
             reference_evapotranspiration_grass_m
         )
-        evapotranspiration_m = evapotranspiration_m.transpose()
-        evapotranspiration_m += irrigation_loss_to_evaporation_m / np.float32(
-            24.0
-        )  # add irrigation losses to evaporation
+        local_variables_to_report: list[str] = self.local_variables_to_report
+        if "evapotranspiration_m" in local_variables_to_report:
+            evapotranspiration_m = (
+                evapotranspiration_m
+                + (irrigation_loss_to_evaporation_m / np.float32(24.0))[:, np.newaxis]
+            ).transpose()
 
         timer.finish_split("Land surface model")
 
@@ -2658,7 +2657,7 @@ class LandSurface(Module):
         ] += potential_evapotranspiration_m[growing_crop_mask]
 
         reference_evapotranspiration_water_m = self.hydrology.to_grid(
-            HRU_data=reference_evapotranspiration_water_m.transpose(),
+            HRU_data=reference_evapotranspiration_water_m,
         )
         assert (reference_evapotranspiration_water_m >= 0).all()
 
@@ -2669,7 +2668,6 @@ class LandSurface(Module):
 
         timer.finish_split("Finalization")
 
-        local_variables_to_report = self.local_variables_to_report
         if "top_soil_frozen_fraction" in local_variables_to_report:
             top_soil_frozen_fraction: ArrayFloat32 = get_frozen_fraction_from_enthalpy(
                 enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[:, 0],
