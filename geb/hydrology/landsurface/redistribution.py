@@ -733,6 +733,7 @@ def distribute_soil_water_ross(
     # Since interflow is in the matrix, it's already accounted for in dS,
     # but we need to get it separately for to be able to return the total
     # interflow, and to apply the enthalpy loss from interflow advection.
+    interflow_temp_C: np.float32 = np.float32(0.0)
     for i in range(N_SOIL_LAYERS):
         corrected_q_interflow_m_per_s = q_interflow[i] + (dq_interflow_dS[i] * dS[i])
         in_active_wetting_front_apply: bool = bool(

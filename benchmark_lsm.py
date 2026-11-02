@@ -182,7 +182,7 @@ def run_benchmark(num_runs: int = 5) -> None:
         f"Benchmark problem size: {num_cells:,} HRU cells, 6 soil layers, 24 hourly steps"
     )
 
-    # Warm-up run (compiles Numba kernel)
+    # Warm-up run (compiles Numba kernel on first invocation)
     print("\nExecuting warm-up run (including JIT compilation)...")
     warmup_inputs = copy_mutable_inputs(inputs)
     t0 = time.perf_counter()

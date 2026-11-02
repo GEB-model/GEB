@@ -434,6 +434,9 @@ def land_surface_model(
         snow_density_top_kg_per_m3_cell = snow_density_kg_per_m3[i, 0]
         snow_density_bottom_kg_per_m3_cell = snow_density_kg_per_m3[i, 1]
 
+        topwater_m_cell: np.float32 = topwater_m[i]
+        interception_storage_m_cell: np.float32 = interception_storage_m[i]
+
         for hour in range(24):
             # Climate values for current hour (contigous access [i, hour])
             tas_2m_K_val = tas_2m_K[i, hour]
@@ -518,7 +521,7 @@ def land_surface_model(
                 snow_water_equivalent_m=snow_water_equivalent_layers_m,
                 snow_enthalpy_J_per_m2=snow_enthalpy_layers_J_per_m2,
                 snow_density_kg_per_m3=snow_density_layers_kg_per_m3,
-                topwater_m=topwater_m[i],
+                topwater_m=topwater_m_cell,
             )
             snow_enthalpy_top_J_per_m2_cell = snow_enthalpy_layers_J_per_m2[0]
             snow_enthalpy_bottom_J_per_m2_cell = snow_enthalpy_layers_J_per_m2[1]
@@ -582,14 +585,14 @@ def land_surface_model(
                 potential_evapotranspiration_m=potential_evapotranspiration_m_cell,
             )
             (
-                interception_storage_m[i],
+                interception_storage_m_cell,
                 throughfall_m,
                 interception_evaporation_m_cell_hour,
                 potential_transpiration_m_cell_hour,
                 potential_direct_evaporation_m,
             ) = interception(
                 rainfall_m=rain_m_cell,
-                storage_m=interception_storage_m[i],
+                storage_m=interception_storage_m_cell,
                 capacity_m=interception_capacity_m[i],
                 potential_interception_evaporation_m=potential_interception_evaporation_m,
                 potential_transpiration_m=potential_transpiration_m_cell_hour,
@@ -642,13 +645,13 @@ def land_surface_model(
                 potential_direct_evaporation_m = np.float32(0.0)
                 potential_transpiration_m_cell_hour = np.float32(0.0)
 
-            topwater_m[i], open_water_evaporation_m_cell_hour = (
+            topwater_m_cell, open_water_evaporation_m_cell_hour = (
                 add_water_to_topwater_and_evaporate_open_water(
                     natural_available_water_infiltration_m=natural_available_water_infiltration_m,
                     actual_irrigation_consumption_m=actual_irrigation_consumption_m[i],
                     land_use_type=land_use_type[i],
                     potential_direct_evaporation_m=potential_direct_evaporation_m,
-                    topwater_m=topwater_m[i],
+                    topwater_m=topwater_m_cell,
                 )
             )
             open_water_evaporation_m[i] += open_water_evaporation_m_cell_hour
@@ -667,7 +670,7 @@ def land_surface_model(
             )
 
             (
-                topwater_m[i],
+                topwater_m_cell,
                 direct_runoff_m,
                 groundwater_recharge_from_infiltraton_m,
                 infiltration_amount,
@@ -686,7 +689,7 @@ def land_surface_model(
                 ],
                 land_use_type=land_use_type[i],
                 w=water_content_m[i, :],
-                topwater_m=topwater_m[i],
+                topwater_m=topwater_m_cell,
                 wetting_front_depth_m=wetting_front_depth_m[i],
                 wetting_front_suction_head_m=wetting_front_suction_head_m[i],
                 wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
@@ -747,7 +750,7 @@ def land_surface_model(
                 hillslope_length_m=hillslope_length_m[i],
                 interflow_multiplier=interflow_multiplier,
                 green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
-                topwater_m=topwater_m[i],
+                topwater_m=topwater_m_cell,
                 gw_ksat_m_per_s=gw_ksat_m_per_s,
                 groundwater_depth_m=groundwater_depth_m[i],
                 deep_soil_temperature_C=deep_soil_temperature_C[i],
@@ -798,9 +801,9 @@ def land_surface_model(
             # In-place copy into the pre-allocated buffer (avoids a heap allocation
             # per hourly substep that .copy() would trigger).
             water_content_before_transpiration_m[:] = water_content_m[i, :]
-            topwater_before_transpiration_m: np.float32 = topwater_m[i]
+            topwater_before_transpiration_m: np.float32 = topwater_m_cell
 
-            transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
+            transpiration_m_cell_hour, topwater_m_cell = calculate_transpiration(
                 soil_is_frozen=soil_is_frozen,
                 wwp_m=wwp,
                 wfc_m=wfc,
@@ -814,7 +817,7 @@ def land_surface_model(
                     i
                 ],
                 w_m=water_content_m[i, :],
-                topwater_m=topwater_m[i],
+                topwater_m=topwater_m_cell,
                 minimum_effective_root_depth_m=minimum_effective_root_depth_m,
             )
 
@@ -851,7 +854,7 @@ def land_surface_model(
                     transpiration_enthalpy_loss_J_per_m2[i] += enthalpy_export_J_per_m2
 
             transpired_from_topwater_m: np.float32 = max(
-                np.float32(0.0), topwater_before_transpiration_m - topwater_m[i]
+                np.float32(0.0), topwater_before_transpiration_m - topwater_m_cell
             )
             if transpired_from_topwater_m > np.float32(0.0):
                 top_layer_temperature_C, _ = (
@@ -904,7 +907,7 @@ def land_surface_model(
                     enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, 0],
                     solid_heat_capacity_J_per_m2_K=solid_heat_capacity[0],
                     water_content_m=water_content_m[i, 0],
-                    topwater_m=topwater_m[i],
+                    topwater_m=topwater_m_cell,
                 )
             )
 
@@ -921,6 +924,9 @@ def land_surface_model(
                 soil_enthalpy_before_evaporative_cooling_J_per_m2
                 - soil_enthalpy_J_per_m2[i, 0]
             )
+
+        topwater_m[i] = topwater_m_cell
+        interception_storage_m[i] = interception_storage_m_cell
 
         snow_water_equivalent_m[i, 0] = snow_water_equivalent_top_m_cell
         snow_water_equivalent_m[i, 1] = snow_water_equivalent_bottom_m_cell
