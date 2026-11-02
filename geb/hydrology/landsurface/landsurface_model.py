@@ -766,7 +766,6 @@ def land_surface_model(
                 solid_heat_capacity_J_per_m2_K=solid_heat_capacity,
                 vertical_saturated_hydraulic_conductivity_m_per_s=ksat_v,
                 horizontal_saturated_hydraulic_conductivity_m_per_s=ksat_h,
-                interface_dist_m=delta_z[i, :],
                 soil_layer_height=soil_layer_h,
                 bubbling_pressure_m_positive=bubbling_press,
                 lambda_=lambda_pore,
@@ -1021,7 +1020,8 @@ def _update_deep_soil_temperature(
             s += tas_2m_K[i, h]
         mean_c: np.float32 = (s / np.float32(24.0)) - kelvin_offset
         deep_soil_temperature_C[i] = (
-            deep_soil_temperature_C[i] * one_minus_alpha + mean_c * averaging_weight_alpha
+            deep_soil_temperature_C[i] * one_minus_alpha
+            + mean_c * averaging_weight_alpha
         )
 
 

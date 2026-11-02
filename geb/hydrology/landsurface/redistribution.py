@@ -179,7 +179,6 @@ def distribute_soil_water_ross(
     solid_heat_capacity_J_per_m2_K: np.ndarray,
     vertical_saturated_hydraulic_conductivity_m_per_s: np.ndarray,
     horizontal_saturated_hydraulic_conductivity_m_per_s: np.ndarray,
-    interface_dist_m: np.ndarray,
     soil_layer_height: np.ndarray,
     bubbling_pressure_m_positive: np.ndarray,
     lambda_: np.ndarray,
@@ -214,7 +213,6 @@ def distribute_soil_water_ross(
         solid_heat_capacity_J_per_m2_K: Heat capacity of the solid fraction in each layer (J/m2/K).
         vertical_saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for vertical redistribution (m/s).
         horizontal_saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for horizontal interflow (m/s).
-        interface_dist_m: Distance between centers of soil layers (m).
         soil_layer_height: Height of each soil layer (m).
         bubbling_pressure_m_positive: Bubbling pressure in each layer (m). Must be positive.
         lambda_: van Genuchten n parameter minus one (lambda) (-).
@@ -434,8 +432,13 @@ def distribute_soil_water_ross(
         # Note that in equation 18 in Ross (2003), g is also included. However,
         # g is NOT the gravity but is the cosine of the slope angle, which we assume
         # to be 1.0.
+        # On-the-fly interface distance between layer centers:
+        interface_dist: np.float32 = (
+            soil_layer_height[i] + soil_layer_height[i + 1]
+        ) * np.float32(0.5)
+
         v: np.float32 = min(
-            interface_dist_m[i] / max(np.float32(1e-3), suction_head_magnitude_m),
+            interface_dist / max(np.float32(1e-3), suction_head_magnitude_m),
             np.float32(100.0),
         )
 
@@ -484,15 +487,15 @@ def distribute_soil_water_ross(
         # populate the tridiagonal matrix entries for the implicit solve.
         q[i + 1] = (
             matric_flux_potential_layer_i - matric_flux_potential_layer_iplus1
-        ) / interface_dist_m[i] + (
+        ) / interface_dist + (
             conductivity_blend_weight * conductivity_layer_i
             + (np.float32(1.0) - conductivity_blend_weight) * conductivity_layer_iplus1
         )
-        dq_dS_i[i + 1] = (dmatric_flux_potential_dS_layer_i / interface_dist_m[i]) + (
+        dq_dS_i[i + 1] = (dmatric_flux_potential_dS_layer_i / interface_dist) + (
             conductivity_blend_weight * dconductivity_dS_layer_i
         )
         dq_dS_iplus1[i + 1] = (
-            -dmatric_flux_potential_dS_layer_iplus1 / interface_dist_m[i]
+            -dmatric_flux_potential_dS_layer_iplus1 / interface_dist
         ) + (
             (np.float32(1.0) - conductivity_blend_weight)
             * dconductivity_dS_layer_iplus1
