@@ -11,6 +11,7 @@ from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
     ArrayFloat64,
+    ArrayInt8,
     ArrayInt32,
     ThreeDArrayFloat32,
     TwoDArrayBool,
@@ -997,6 +998,108 @@ def land_surface_model(
     )
 
 
+@njit(cache=True, parallel=True)
+def _update_deep_soil_temperature(
+    deep_soil_temperature_C: ArrayFloat32,
+    tas_2m_K: TwoDArrayFloat32,
+    averaging_weight_alpha: np.float32,
+    kelvin_offset: np.float32,
+) -> None:
+    """Update deep soil temperature boundary condition using an exponential moving average of 2m air temperature.
+
+    Args:
+        deep_soil_temperature_C: Deep soil temperature per HRU (Celsius). Modified in place.
+        tas_2m_K: Hourly air temperature at 2m height (Kelvin), shape (num_cells, 24).
+        averaging_weight_alpha: Weight factor for the exponential moving average (-).
+        kelvin_offset: Offset to convert Kelvin to Celsius (273.15).
+    """
+    n: int = deep_soil_temperature_C.size
+    one_minus_alpha: np.float32 = np.float32(1.0) - averaging_weight_alpha
+    for i in prange(n):
+        s: np.float32 = np.float32(0.0)
+        for h in range(24):
+            s += tas_2m_K[i, h]
+        mean_c: np.float32 = (s / np.float32(24.0)) - kelvin_offset
+        deep_soil_temperature_C[i] = (
+            deep_soil_temperature_C[i] * one_minus_alpha + mean_c * averaging_weight_alpha
+        )
+
+
+@njit(cache=True, parallel=True)
+def _resolve_crop_group_number(
+    crop_map: ArrayInt32,
+    land_use_type: ArrayInt32,
+    crop_group_number_forest: ArrayFloat32,
+    crop_group_number_grassland_like: ArrayFloat32,
+    crop_group_number_per_group: ArrayFloat32,
+    forest_land_use: int,
+    grassland_like_land_use: int,
+) -> ArrayFloat32:
+    """Resolve crop group number per HRU without intermediate array allocations.
+
+    Args:
+        crop_map: Crop type ID per HRU (-).
+        land_use_type: Land use type per HRU (-).
+        crop_group_number_forest: Crop group number for forest HRUs (-).
+        crop_group_number_grassland_like: Crop group number for grassland HRUs (-).
+        crop_group_number_per_group: Crop group numbers indexed by crop ID (-).
+        forest_land_use: Integer enum value for FOREST land use.
+        grassland_like_land_use: Integer enum value for GRASSLAND_LIKE land use.
+
+    Returns:
+        Crop group number per HRU (-).
+    """
+    n: int = crop_map.size
+    max_idx: int = len(crop_group_number_per_group) - 1
+    out: ArrayFloat32 = np.empty(n, dtype=np.float32)
+    for i in prange(n):
+        lut: int = land_use_type[i]
+        if lut == forest_land_use:
+            out[i] = crop_group_number_forest[i]
+        elif lut == grassland_like_land_use:
+            out[i] = crop_group_number_grassland_like[i]
+        else:
+            cm: int = crop_map[i]
+            idx: int = 0 if cm < 0 else (max_idx if cm > max_idx else cm)
+            out[i] = crop_group_number_per_group[idx]
+    return out
+
+
+@njit(cache=True, parallel=True)
+def _accumulate_crop_evapotranspiration(
+    crop_map: ArrayInt32,
+    crop_sub_stage: ArrayInt8 | ArrayInt32,
+    actual_evapotranspiration_m: ArrayFloat32,
+    potential_evapotranspiration_m: ArrayFloat32,
+    actual_evapotranspiration_crop_life: ArrayFloat32,
+    potential_evapotranspiration_crop_life: ArrayFloat32,
+    actual_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32,
+    potential_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32,
+) -> None:
+    """Accumulate daily actual and potential evapotranspiration into crop life totals in-place.
+
+    Args:
+        crop_map: Crop type ID per HRU (-1 for no active crop).
+        crop_sub_stage: Current crop development sub-stage per HRU.
+        actual_evapotranspiration_m: Actual daily evapotranspiration (meters).
+        potential_evapotranspiration_m: Potential daily evapotranspiration (meters).
+        actual_evapotranspiration_crop_life: Cumulative actual ET over crop lifecycle (meters). Modified in place.
+        potential_evapotranspiration_crop_life: Cumulative potential ET over crop lifecycle (meters). Modified in place.
+        actual_evapotranspiration_crop_life_per_crop_stage: Cumulative actual ET per stage (meters). Modified in place.
+        potential_evapotranspiration_crop_life_per_crop_stage: Cumulative potential ET per stage (meters). Modified in place.
+    """
+    n: int = crop_map.size
+    for i in prange(n):
+        if crop_map[i] != -1:
+            a: np.float32 = actual_evapotranspiration_m[i]
+            p: np.float32 = potential_evapotranspiration_m[i]
+            actual_evapotranspiration_crop_life[i] += a
+            potential_evapotranspiration_crop_life[i] += p
+            stage: int = crop_sub_stage[i]
+            actual_evapotranspiration_crop_life_per_crop_stage[stage, i] += a
+            potential_evapotranspiration_crop_life_per_crop_stage[stage, i] += p
+
+
 class LandSurfaceInputs(NamedTuple):
     """Container for `land_surface_model` inputs.
 
@@ -1169,20 +1272,16 @@ class LandSurface(Module):
                 "crop_group_number"
             ].values.astype(np.float32)
         )
-        # Resolve crop group number to a per-HRU array so all kernel inputs are
-        # either scalars or HRU-dimensioned (avoids a lookup inside the Numba kernel).
-        safe_crop_map: ArrayInt32 = np.clip(
-            self.HRU.var.crop_map, 0, len(crop_group_number_per_group) - 1
+        # Resolve crop group number to a per-HRU array without allocating temporary arrays.
+        crop_group_number: ArrayFloat32 = _resolve_crop_group_number(
+            crop_map=self.HRU.var.crop_map,
+            land_use_type=self.HRU.var.land_use_type,
+            crop_group_number_forest=self.HRU.var.crop_group_number_forest,
+            crop_group_number_grassland_like=self.HRU.var.crop_group_number_grassland_like,
+            crop_group_number_per_group=crop_group_number_per_group,
+            forest_land_use=FOREST,
+            grassland_like_land_use=GRASSLAND_LIKE,
         )
-        crop_group_number: ArrayFloat32 = np.where(
-            self.HRU.var.land_use_type == FOREST,
-            self.HRU.var.crop_group_number_forest,
-            np.where(
-                self.HRU.var.land_use_type == GRASSLAND_LIKE,
-                self.HRU.var.crop_group_number_grassland_like,
-                crop_group_number_per_group[safe_crop_map],
-            ),
-        ).astype(np.float32)
 
         return LandSurfaceInputs(
             unix_time_seconds=unix_time_seconds,
@@ -2464,13 +2563,11 @@ class LandSurface(Module):
         # Load temperature at 2m as a proxy for deep soil temperature boundary condition, which is a common approach in land surface modeling.
         tas_2m_K: TwoDArrayFloat32 = self.HRU.tas_2m_K
 
-        self.HRU.var.deep_soil_temperature_C[:] = (
-            self.HRU.var.deep_soil_temperature_C
-            * (np.float32(1.0) - averaging_weight_alpha)
-            + (
-                tas_2m_K.mean(axis=1).astype(np.float32) - KELVIN_OFFSET
-            )  # daily mean air temperature in Celsius
-            * averaging_weight_alpha
+        _update_deep_soil_temperature(
+            deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
+            tas_2m_K=tas_2m_K,
+            averaging_weight_alpha=averaging_weight_alpha,
+            kelvin_offset=KELVIN_OFFSET,
         )
 
         timer.finish_split("Deep soil temperature update")
@@ -2641,20 +2738,16 @@ class LandSurface(Module):
             + irrigation_loss_to_evaporation_m
         )
 
-        growing_crop_mask: ArrayBool = self.HRU.var.crop_map != -1
-
-        self.HRU.var.actual_evapotranspiration_crop_life[growing_crop_mask] += (
-            actual_evapotranspiration_m[growing_crop_mask]
+        _accumulate_crop_evapotranspiration(
+            crop_map=self.HRU.var.crop_map,
+            crop_sub_stage=crop_sub_stage,
+            actual_evapotranspiration_m=actual_evapotranspiration_m,
+            potential_evapotranspiration_m=potential_evapotranspiration_m,
+            actual_evapotranspiration_crop_life=self.HRU.var.actual_evapotranspiration_crop_life,
+            potential_evapotranspiration_crop_life=self.HRU.var.potential_evapotranspiration_crop_life,
+            actual_evapotranspiration_crop_life_per_crop_stage=self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage,
+            potential_evapotranspiration_crop_life_per_crop_stage=self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage,
         )
-        self.HRU.var.potential_evapotranspiration_crop_life[growing_crop_mask] += (
-            potential_evapotranspiration_m[growing_crop_mask]
-        )
-        self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage[
-            crop_sub_stage[growing_crop_mask], growing_crop_mask
-        ] += actual_evapotranspiration_m[growing_crop_mask]
-        self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage[
-            crop_sub_stage[growing_crop_mask], growing_crop_mask
-        ] += potential_evapotranspiration_m[growing_crop_mask]
 
         reference_evapotranspiration_water_m = self.hydrology.to_grid(
             HRU_data=reference_evapotranspiration_water_m,
