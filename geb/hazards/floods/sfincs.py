@@ -1003,7 +1003,10 @@ class SFINCSRootModel:
                     self.logger.info(
                         f"Outflow point is outside of the model grid. Moving 1 m upstream along the river. Iteration {iteration_count}."
                     )
-                    if iteration_count > 5:
+                    if (
+                        iteration_count > 5
+                        and not self.mask.values[outflow_row, outflow_col]
+                    ):
                         export_diagnostics(outflow_point)
                         self.logger.error(
                             "Outflow point is still outside the model grid after 5 iterations. This is unexpected, please check the river geometries and subbasins boundary."
