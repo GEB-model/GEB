@@ -1,5 +1,6 @@
 """Workflows for DEM processing and river burning."""
 
+import logging
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, Callable
@@ -7,15 +8,18 @@ from typing import Any, Callable
 import geopandas as gpd
 import hydromt_sfincs.workflows.bathymetry as hydromt_sfincs_bathymetry
 import numpy as np
+import pandas as pd
 import xarray as xr
 from rasterio.features import rasterize
 from scipy.spatial import cKDTree  # ty: ignore[unresolved-import]
 from shapely.ops import transform as shapely_transform
 
+logger: logging.Logger = logging.getLogger(__name__)
+
 
 @contextmanager
 def skip_subgrid_tiles_without_river_bed_levels() -> Generator[None, None, None]:
-    """Makes hydromt-sfincs subgrid river burning robust for tiles without river bed levels.
+    """Makes hydromt-sfincs subgrid river burning robust for tiles without usable rivers.
 
     When hydromt-sfincs burns rivers into a subgrid tile, the river bed level is
     estimated from the elevation of the river banks. If a tile only contains a
@@ -70,10 +74,64 @@ def skip_subgrid_tiles_without_river_bed_levels() -> Generator[None, None, None]
             **kwargs,
         )
 
+    original_burn_river_rect: Callable[..., Any] = (
+        hydromt_sfincs_bathymetry.burn_river_rect
+    )
+
+    def burn_river_rect_with_line_only_tiles(**kwargs: Any) -> Any:
+        """Burns rivers into a tile, keeping only valid line geometries after clipping.
+
+        Clipping rivers to a tile can turn a river that only touches the tile edge
+        into a point, an empty geometry or a geometry collection, which makes
+        hydromt-sfincs fail when interpolating along the segments. Here the rivers
+        are clipped beforehand and only line parts are kept.
+
+        Args:
+            **kwargs: Keyword arguments passed to the original `burn_river_rect`,
+                including `da_elv`, `da_man` and `gdf_riv`.
+
+        Returns:
+            Tuple of elevation and Manning's n arrays with the rivers burned in, or
+            the unchanged arrays if no valid river line remains in the tile.
+        """
+        da_elv: xr.DataArray = kwargs["da_elv"]
+        gdf_riv: gpd.GeoDataFrame = kwargs["gdf_riv"]
+
+        clipped_rivers: gpd.GeoDataFrame = gdf_riv.clip(
+            da_elv.raster.box.to_crs(gdf_riv.crs)
+        )
+        clipped_rivers = clipped_rivers.explode(index_parts=False)
+        is_valid_line: pd.Series = (
+            clipped_rivers.geometry.geom_type == "LineString"
+        ) & ~clipped_rivers.geometry.is_empty
+        n_dropped: int = int((~is_valid_line).sum())
+        if n_dropped > 0:
+            dropped_types: dict[str, int] = (
+                clipped_rivers.geometry[~is_valid_line]
+                .geom_type.value_counts()
+                .to_dict()
+            )
+            logger.debug(
+                f"Dropped {n_dropped} non-line river geometries after clipping to "
+                f"tile with bounds {tuple(da_elv.raster.bounds)}: {dropped_types}"
+            )
+        clipped_rivers = clipped_rivers[is_valid_line].reset_index(drop=True)
+        if clipped_rivers.empty:
+            logger.debug("No valid river lines in tile, skipping river burning.")
+            return da_elv, kwargs.get("da_man")
+
+        kwargs["gdf_riv"] = clipped_rivers
+        return original_burn_river_rect(**kwargs)
+
     setattr(
         hydromt_sfincs_bathymetry,
         "interp_along_line_to_grid",
         interpolation_with_empty_fallback,
+    )
+    setattr(
+        hydromt_sfincs_bathymetry,
+        "burn_river_rect",
+        burn_river_rect_with_line_only_tiles,
     )
     try:
         yield
@@ -82,6 +140,11 @@ def skip_subgrid_tiles_without_river_bed_levels() -> Generator[None, None, None]
             hydromt_sfincs_bathymetry,
             "interp_along_line_to_grid",
             original_interpolation,
+        )
+        setattr(
+            hydromt_sfincs_bathymetry,
+            "burn_river_rect",
+            original_burn_river_rect,
         )
 
 

@@ -655,9 +655,6 @@ class Routing(Module):
         Args:
             model: The GEB model instance.
             hydrology: The hydrology submodel instance.
-
-        Raises:
-            ValueError: If inflow is configured on a waterbody cell.
         """
         super().__init__(model)
 
@@ -826,8 +823,6 @@ class Routing(Module):
                 y: int = location["y"]
                 x: int = location["x"]
                 cell_idx: int = self.grid.linear_mapping[y, x]
-                if self.grid.var.waterbody_ids[cell_idx] != -1:
-                    raise ValueError("Inflow cannot be added to waterbody cells.")
                 inflow_arr = inflow.to_numpy(dtype=np.float32)
                 self.inflow[(y, x)] = inflow_arr
                 self._inflow_list.append((cell_idx, inflow_arr))
@@ -1495,6 +1490,9 @@ class Routing(Module):
             that waterbody footprints are flattened and state variables (either synthesized during
             spinup or restored from checkpoint storage) are available before deriving
             setting up the local inertial routing solver.
+
+        Raises:
+            ValueError: If inflow is configured on a waterbody cell.
         """
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
@@ -1556,6 +1554,11 @@ class Routing(Module):
             floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
             floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
         )
+
+        # waterbody ids only exist after WaterBodies is initialised, so check here
+        for cell_idx, _ in self._inflow_list:
+            if self.grid.var.waterbody_ids[cell_idx] != -1:
+                raise ValueError("Inflow cannot be added to waterbody cells.")
 
         bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
             self.model.files["grid"]["routing/bankfull_river_elevation_m"]
@@ -2096,7 +2099,7 @@ class Routing(Module):
         for hour in range(24):
             # stored in self.var so it is saved/restored with the model state,
             # e.g. between forecast members
-            self.var.inflow_idx += 1
+            self.inflow_idx += 1
 
             np.multiply(
                 total_runoff_m[hour, :],
