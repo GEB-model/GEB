@@ -7,7 +7,7 @@ import yaml
 from pydantic import ValidationError
 
 from geb import GEB_PACKAGE_DIR
-from geb.config_schema import Config, ParametersConfig
+from geb.config_schema import Config, FloodsConfig, ParametersConfig
 from geb.runner import parse_config
 
 EXPECTED_PARAMETERS: set[str] = {
@@ -53,6 +53,20 @@ def test_reasonable_default_config_has_all_parameters() -> None:
     # Ensure ParametersConfig validates the section
     validated = ParametersConfig(**params_data)
     assert validated is not None
+
+
+def test_floods_config_representative_year_is_optional() -> None:
+    """Test that the representative year accepts null and explicit years."""
+    default_config_path = GEB_PACKAGE_DIR / "reasonable_default_config.yml"
+    with open(default_config_path, "r") as f:
+        data = yaml.safe_load(f)
+
+    floods_config = FloodsConfig.model_validate(data["hazards"]["floods"])
+    assert floods_config.representative_year is None
+    assert (
+        FloodsConfig.model_validate({"representative_year": 2050}).representative_year
+        == 2050
+    )
 
 
 def test_example_model_config_has_all_parameters() -> None:

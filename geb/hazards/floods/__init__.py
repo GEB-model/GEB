@@ -885,9 +885,9 @@ class Floods(Module):
 
         for return_period in self.config["return_periods"]:
             simulations: list[SFINCSSimulation] = []
-            representative_year = self.config.get(
-                "representative_year", self.model.current_time.year
-            )
+            representative_year = self.config["representative_year"]
+            if representative_year is None:
+                representative_year = self.model.current_time.year
 
             if coastal:
                 sfincs_coastal_simulation: SFINCSSimulation = (

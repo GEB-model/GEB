@@ -1,5 +1,6 @@
 # dev
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
+- Added the optional `hazards.floods.representative_year` setting for sea-level-rise forcing in return-period maps; `null` uses the current model year.
 
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.
