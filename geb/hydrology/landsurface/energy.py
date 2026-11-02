@@ -888,7 +888,6 @@ def solve_soil_enthalpy_column(
     enthalpies_at_start_of_timestep = stack_empty(
         _N_COUPLED_SURFACE_LAYERS, dtype=np.float32
     )
-    enthalpies_updated = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
 
     n_active_snow_layers = 0
     if snow_water_equivalent_m[0] > MIN_ACTIVE_SNOW_SWE_M and snow_density_kg_per_m3[
@@ -1162,40 +1161,38 @@ def solve_soil_enthalpy_column(
     )
 
     # Thomas algorithm forward sweep and back substitution.
-    c_prime = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
-    d_prime = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
-
+    # Reuses upper_diagonal_c (for c') and rhs_vector_d (for d' and final updated enthalpies)
+    # to eliminate 3 temporary stack arrays while computing bit-for-bit identical results.
     if main_diagonal_b[0] == np.float32(0.0):
-        c_prime[0] = np.float32(0.0)
-        d_prime[0] = np.float32(0.0)
+        upper_diagonal_c[0] = np.float32(0.0)
+        rhs_vector_d[0] = np.float32(0.0)
     else:
-        c_prime[0] = upper_diagonal_c[0] / main_diagonal_b[0]
-        d_prime[0] = rhs_vector_d[0] / main_diagonal_b[0]
+        upper_diagonal_c[0] = upper_diagonal_c[0] / main_diagonal_b[0]
+        rhs_vector_d[0] = rhs_vector_d[0] / main_diagonal_b[0]
 
     for layer_idx in range(1, n_total_layers):
         denominator = (
             main_diagonal_b[layer_idx]
-            - lower_diagonal_a[layer_idx] * c_prime[layer_idx - 1]
+            - lower_diagonal_a[layer_idx] * upper_diagonal_c[layer_idx - 1]
         )
         if layer_idx < n_total_layers - 1:
-            c_prime[layer_idx] = upper_diagonal_c[layer_idx] / denominator
-        d_prime[layer_idx] = (
+            upper_diagonal_c[layer_idx] = upper_diagonal_c[layer_idx] / denominator
+        rhs_vector_d[layer_idx] = (
             rhs_vector_d[layer_idx]
-            - lower_diagonal_a[layer_idx] * d_prime[layer_idx - 1]
+            - lower_diagonal_a[layer_idx] * rhs_vector_d[layer_idx - 1]
         ) / denominator
 
-    enthalpies_updated[n_total_layers - 1] = d_prime[n_total_layers - 1]
     for layer_idx in range(n_total_layers - 2, -1, -1):
-        enthalpies_updated[layer_idx] = (
-            d_prime[layer_idx]
-            - c_prime[layer_idx] * (enthalpies_updated[layer_idx + 1])
+        rhs_vector_d[layer_idx] = (
+            rhs_vector_d[layer_idx]
+            - upper_diagonal_c[layer_idx] * rhs_vector_d[layer_idx + 1]
         )
 
     for snow_layer_idx in range(n_active_snow_layers):
-        snow_enthalpy_J_per_m2[snow_layer_idx] = enthalpies_updated[snow_layer_idx]
+        snow_enthalpy_J_per_m2[snow_layer_idx] = rhs_vector_d[snow_layer_idx]
 
     for soil_layer_idx in range(N_SOIL_LAYERS):
-        soil_enthalpies_J_per_m2[soil_layer_idx] = enthalpies_updated[
+        soil_enthalpies_J_per_m2[soil_layer_idx] = rhs_vector_d[
             n_active_snow_layers + soil_layer_idx
         ]
 
@@ -1203,7 +1200,7 @@ def solve_soil_enthalpy_column(
     # This is needed for the surface flux and for synchronizing inactive snow layers.
     surface_temperature_final_C, frozen_fraction_top_layer_final, _, _ = (
         get_phase_state(
-            enthalpy_J_per_m2=enthalpies_updated[n_active_snow_layers],
+            enthalpy_J_per_m2=rhs_vector_d[n_active_snow_layers],
             latent_heat_areal_J_per_m2=top_layer_latent_heat_areal_J_per_m2,
             heat_capacity_liquid_J_per_m2_K=top_layer_heat_capacity_liquid_J_per_m2_K,
             heat_capacity_frozen_J_per_m2_K=top_layer_heat_capacity_frozen_J_per_m2_K,
@@ -1232,7 +1229,7 @@ def solve_soil_enthalpy_column(
             snow_enthalpy_J_per_m2[snow_layer_idx] = np.float32(0.0)
 
     surface_temperature_for_flux_C: np.float32 = (
-        dT_dH_linearized[0] * enthalpies_updated[0] + beta_linearized[0]
+        dT_dH_linearized[0] * rhs_vector_d[0] + beta_linearized[0]
     )
     if n_active_snow_layers > 0:
         surface_temperature_for_flux_C = min(
