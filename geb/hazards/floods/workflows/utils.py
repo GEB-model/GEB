@@ -637,7 +637,7 @@ def run_sfincs_simulation(
         raise ValueError("gpu must be True, False, or 'auto'")
 
     if runtime is None:
-        runtime = os.getenv(key="SFINCS_RUNTIME", default="apptainer")
+        runtime = os.getenv(key="SFINCS_RUNTIME", default="native")
     runtime = runtime.lower()
     if runtime not in SFINCS_RUNTIMES:
         raise ValueError(f"runtime must be one of {SFINCS_RUNTIMES}, got '{runtime}'")
