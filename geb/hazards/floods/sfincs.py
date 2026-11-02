@@ -516,32 +516,30 @@ class SFINCSRootModel:
                 reset_mask=False,
             )
 
-                # create polygon from mask
-                area = list(
-                    rasterio.features.shapes(
-                        self.mask,
-                        transform=self.mask.rio.transform(),
-                        connectivity=8,
-                        mask=self.mask,
-                    )
+            # create polygon from mask
+            area = list(
+                rasterio.features.shapes(
+                    self.mask,
+                    transform=self.mask.rio.transform(),
+                    connectivity=8,
+                    mask=self.mask,
                 )
-                area = gpd.GeoDataFrame.from_features(
-                    [
-                        {"geometry": geom, "properties": {"value": int(value)}}
-                        for geom, value in area
-                    ],
-                    crs=self.mask.rio.crs,
+            )
+            area = gpd.GeoDataFrame.from_features(
+                [
+                    {"geometry": geom, "properties": {"value": int(value)}}
+                    for geom, value in area
+                ],
+                crs=self.mask.rio.crs,
+            )
+            if len(area) > 1:
+                # remove isolated cells by keeping only the polygon touching the active rivers
+                area = area[area.geometry.intersects(self.active_rivers.union_all())]
+            if len(area) > 1:
+                # if there are still multiple polygons, raise an error
+                raise ValueError(
+                    "Multiple polygons found in the model mask after creating outflow boundary. This should not happen."
                 )
-                if len(area) > 1:
-                    # remove isolated cells by keeping only the polygon touching the active rivers
-                    area = area[
-                        area.geometry.intersects(self.active_rivers.union_all())
-                    ]
-                if len(area) > 1:
-                    # if there are still multiple polygons, raise an error
-                    raise ValueError(
-                        "Multiple polygons found in the model mask after creating outflow boundary. This should not happen."
-                    )
 
             self.calculate_outflow_conditions(area=area)
 
@@ -989,8 +987,6 @@ class SFINCSRootModel:
                         river.interpolate(
                             line_locate_point(river, outflow_point)
                             - (0.000008983 if self.is_geographic else 1.0)
-                            line_locate_point(river, outflow_point)
-                            - (0.000008983 if self.is_geographic else 1.0)
                         )
                     )
                     if not isinstance(outflow_point, Point):
@@ -1089,8 +1085,6 @@ class SFINCSRootModel:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
-                            line_locate_point(river, outflow_point)
-                            - (0.000008983 if self.is_geographic else 1.0)
                             line_locate_point(river, outflow_point)
                             - (0.000008983 if self.is_geographic else 1.0)
                         )
