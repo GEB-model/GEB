@@ -86,7 +86,8 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         )
     inputs.pop("capillar_rise_m", None)
     if "HRU_to_grid" not in inputs:
-        inputs["HRU_to_grid"] = np.empty(0, dtype=np.int32)
+        num_cells_err: int = inputs["slope_m_per_m"].shape[0]
+        inputs["HRU_to_grid"] = np.arange(num_cells_err, dtype=np.int32)
 
     # Cast inputs if requested
     if asfloat64:

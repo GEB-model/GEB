@@ -333,7 +333,6 @@ def land_surface_model(
     ) / np.float32(24.0 * 3600.0)
 
     num_cells: int = slope_m_per_m.size
-    use_grid_mapping: bool = HRU_to_grid.size > 0
     capillar_rise_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
     runoff_m: TwoDArrayFloat32 = np.empty((num_cells, 24), dtype=np.float32)
     interflow_m: TwoDArrayFloat32 = np.empty((num_cells, 24), dtype=np.float32)
@@ -471,7 +470,7 @@ def land_surface_model(
         groundwater_recharge_enthalpy_loss_J_per_m2[i] = np.float32(0.0)
         transpiration_enthalpy_loss_J_per_m2[i] = np.float32(0.0)
 
-        grid_i: int = HRU_to_grid[i] if use_grid_mapping else i
+        grid_i: int = HRU_to_grid[i]
 
         # Update deep soil temperature boundary condition using exponential moving average of 2m air temperature
         temperature_sum_K: np.float32 = np.float32(0.0)
@@ -1219,7 +1218,6 @@ def _fast_validate_and_check_water_balance_kernel(
         tolerance: Absolute closure tolerance for water budget (meters).
     """
     num_cells: int = topwater_m.size
-    use_grid_mapping: bool = HRU_to_grid.size > 0
 
     for i in range(num_cells):
         code: int = ERR_NONE
@@ -1321,7 +1319,7 @@ def _fast_validate_and_check_water_balance_kernel(
 
         # 8. Water balance closure
         p_sum: np.float64 = np.float64(0.0)
-        grid_i: int = HRU_to_grid[i] if use_grid_mapping else i
+        grid_i: int = HRU_to_grid[i]
         for t in range(24):
             p_sum += np.float64(pr_kg_per_m2_per_s[grid_i, t])
         influx_pr: np.float64 = p_sum * 3.6
@@ -1941,6 +1939,10 @@ class LandSurface(Module):
         num_cells: int = topwater.shape[0]
         err_flags: ArrayInt8 = np.zeros(num_cells, dtype=np.int8)
 
+        hru_to_grid: ArrayInt32 = getattr(land_surface_inputs, "HRU_to_grid", None)
+        if hru_to_grid is None or hru_to_grid.size == 0:
+            hru_to_grid = np.arange(num_cells, dtype=np.int32)
+
         _fast_validate_and_check_water_balance_kernel(
             topwater_m=topwater,
             runoff_m=runoff_m,
@@ -1964,9 +1966,7 @@ class LandSurface(Module):
             topwater_m_prev=topwater_m_prev,
             water_content_m_prev=water_content_m_prev,
             err_flags=err_flags,
-            HRU_to_grid=getattr(
-                land_surface_inputs, "HRU_to_grid", np.empty(0, dtype=np.int32)
-            ),
+            HRU_to_grid=hru_to_grid,
             tolerance=1e-5,
         )
 
