@@ -3,6 +3,7 @@
 import warnings
 from collections import defaultdict
 from pathlib import Path
+from time import time
 from typing import TYPE_CHECKING, Any, Literal
 
 import geopandas as gpd
@@ -27,7 +28,7 @@ from geb.geb_types import (
 )
 from geb.module import Module
 from geb.store import Bucket
-from geb.workflows import balance_check
+from geb.workflows import TimingModule, balance_check
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom, read_table
 
@@ -2234,6 +2235,7 @@ class Routing(Module):
         Raises:
             ValueError: If inflow is added to waterbody cells.
         """
+        timer: TimingModule = TimingModule("Routing")
         if __debug__:
             pre_waterbody_storage: np.ndarray = (
                 self.hydrology.waterbodies.var.storage.copy()
@@ -2334,7 +2336,18 @@ class Routing(Module):
                     levee_depth_m=dynamic_levee_depth_m,
                 )
 
+        timer.finish_split("Setup & geometry")
+
+        record_timing: bool = bool(
+            getattr(getattr(self, "model", None), "timing", False)
+        )
+        t_lateral_retention: float = 0.0
+        t_channel_losses: float = 0.0
+        t_hydraulic_solver: float = 0.0
+        t_waterbodies_mapping: float = 0.0
+
         for hour in range(24):
+            _t0: float = time() if record_timing else 0.0
             # increment inflow index for next hour
             self.inflow_idx += 1
 
@@ -2413,6 +2426,10 @@ class Routing(Module):
                     self.var.discharge_in_rivers_m3_s_substep[self._not_wb_cell_mask]
                 ).all()
 
+            if record_timing:
+                t_lateral_retention += time() - _t0
+            _t1: float = time() if record_timing else 0.0
+
             calculate_wetted_channel_area(
                 use_kinematic=self.use_kinematic,
                 water_stage_m=self.var.water_stage_m,
@@ -2450,6 +2467,10 @@ class Routing(Module):
                 potential_transmission_loss_m3=self._potential_transmission_loss_buffer_m3,
             )
 
+            if record_timing:
+                t_channel_losses += time() - _t1
+            _t2: float = time() if record_timing else 0.0
+
             (
                 self.var.discharge_in_rivers_m3_s_substep,
                 self.var.river_storage_m3,
@@ -2478,6 +2499,10 @@ class Routing(Module):
             )
 
             self.var.river_transmission_loss_m3 += actual_transmission_loss_m3_per_hour
+
+            if record_timing:
+                t_hydraulic_solver += time() - _t2
+            _t3: float = time() if record_timing else 0.0
 
             if __debug__:
                 if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
@@ -2564,6 +2589,19 @@ class Routing(Module):
                 retention_inflow_m3 += retention_inflow_m3_hour
                 retention_outflow_m3 += retention_outflow_m3_hour
 
+            if record_timing:
+                t_waterbodies_mapping += time() - _t3
+
+        if record_timing:
+            timer.add_split_duration("Lateral flows & retention", t_lateral_retention)
+            timer.add_split_duration("Channel geometry & losses", t_channel_losses)
+            timer.add_split_duration("Hydraulic solver", t_hydraulic_solver)
+            timer.add_split_duration(
+                "Waterbodies & discharge mapping", t_waterbodies_mapping
+            )
+        else:
+            timer.finish_split("Hourly routing")
+
         np.mean(
             self.var.discharge_m3_s_per_substep,
             axis=0,
@@ -2577,6 +2615,8 @@ class Routing(Module):
             self.model.current_timestep > 0 or not self.model.in_spinup
         ):
             self.update_return_periods()
+
+        timer.finish_split("Daily aggregation & return periods")
 
         if __debug__:
             balance_check(
@@ -2650,7 +2690,13 @@ class Routing(Module):
             self.var.retention_inflow_m3_daily = retention_inflow_m3
             self.var.retention_outflow_m3_daily = retention_outflow_m3
 
+        timer.finish_split("Balance check")
+
         self.report(locals())
+        timer.finish_split("Reporting")
+
+        if record_timing and hasattr(self, "model") and hasattr(self.model, "logger"):
+            self.model.logger.debug(timer)
 
         total_over_abstraction_m3: np.float64 = over_abstraction_m3.astype(
             np.float64
