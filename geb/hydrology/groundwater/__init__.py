@@ -39,7 +39,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
 )
 from geb.module import Module
-from geb.workflows import balance_check
+from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import read_zarr
 
 from .model import ModFlowSimulation
@@ -195,6 +195,7 @@ class GroundWater(Module):
         Raises:
             AssertionError: If total groundwater abstraction exceeds available groundwater storage by more than numerical tolerance.
         """
+        timer: TimingModule = TimingModule("Groundwater")
         assert (groundwater_abstraction_m3 + 1e-7 >= 0).all()
         groundwater_abstraction_m3[groundwater_abstraction_m3 < 0] = 0
         assert (groundwater_recharge_m >= 0).all()
@@ -235,6 +236,8 @@ class GroundWater(Module):
                 self.modflow.available_groundwater_m3[epsilon_mask]
             )
 
+        timer.finish_split("Recharge & abstraction")
+
         if __debug__:
             groundwater_storage_pre = self.modflow.groundwater_content_m3
 
@@ -242,7 +245,10 @@ class GroundWater(Module):
             (net_recharge_m * self.grid.var.cell_area).astype(np.float32)
         )
         self.modflow.set_groundwater_abstraction_m3(total_groundwater_abstraction_m3)
+        timer.finish_split("Set MODFLOW forcing")
+
         self.modflow.step()
+        timer.finish_split("MODFLOW solve")
 
         if __debug__:
             influxes: list[npt.NDArray[np.float64] | np.float64] = [
@@ -265,12 +271,20 @@ class GroundWater(Module):
                 tolerance=groundwater_recharge_m.size,  # maximum of 1m3 per cell
             )
 
-        groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
+        timer.finish_split("Balance check")
+
+        groundwater_drainage: ArrayFloat64 = (
+            self.modflow.drainage_m3 / self.grid.var.cell_area
+        )
 
         # All groundwater drainage is discharged as baseflow to the river network
-        baseflow = groundwater_drainage.astype(np.float32)
+        baseflow: ArrayFloat32 = groundwater_drainage.astype(np.float32)
 
         self.report(locals())
+        timer.finish_split("Reporting")
+
+        if getattr(getattr(self, "model", None), "timing", False):
+            self.model.logger.debug(timer)
 
         return baseflow
 
