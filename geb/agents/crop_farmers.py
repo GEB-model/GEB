@@ -38,6 +38,7 @@ from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
     abstract_water,
+    accumulate_farmer_pr_and_water_deficit,
     crop_profit_difference_total,
     farmer_command_area,
     find_most_similar_index,
@@ -1265,6 +1266,89 @@ class CropFarmers(AgentBaseClass):
         # Check if the activation order is correct, by checking if elevation is decreasing
         assert np.diff(elevation[activation_order]).max() <= 0
         return activation_order
+
+    def save_pr_and_water_deficit(
+        self,
+        reference_evapotranspiration_grass_m_per_day: npt.NDArray[np.floating],
+        pr_kg_per_m2_per_s: npt.NDArray[np.floating],
+        discount_factor: float = 0.2,
+    ) -> None:
+        """Accumulate daily precipitation and smoothed water deficit per farmer.
+
+        Combines precipitation and water deficit aggregation into a single efficient
+        kernel, storing daily precipitation in ``self.var.cumulative_pr_mm`` and
+        exponentially smoothed deficit in ``self.var.cumulative_water_deficit_m3``.
+
+        Args:
+            reference_evapotranspiration_grass_m_per_day: Reference ET (m·day⁻¹) per HRU.
+            pr_kg_per_m2_per_s: Precipitation (kg·m⁻²·s⁻¹) per HRU per time-step.
+            discount_factor: Smoothing factor in [0, 1] applied to the new day's
+                deficit (higher values weight the current day more). Defaults to 0.2.
+        """
+        day_index: int = self.model.current_day_of_year - 1
+        n_farmers: int = self.var.field_indices_by_farmer.shape[0]
+
+        pr_mm_per_day_per_farmer: npt.NDArray[np.float32] = np.empty(
+            n_farmers, dtype=np.float32
+        )
+        water_deficit_day_m3_per_farmer: npt.NDArray[np.float32] = np.empty(
+            n_farmers, dtype=np.float32
+        )
+
+        accumulate_farmer_pr_and_water_deficit(
+            pr_kg_per_m2_per_s=pr_kg_per_m2_per_s.astype(np.float32, copy=False),
+            reference_evapotranspiration_grass_m_per_day=reference_evapotranspiration_grass_m_per_day.astype(
+                np.float32, copy=False
+            ),
+            cell_area=self.HRU.var.cell_area.astype(np.float32, copy=False),
+            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
+            field_indices=self.var.field_indices,
+            out_pr_mm_per_day=pr_mm_per_day_per_farmer,
+            out_water_deficit_m3=water_deficit_day_m3_per_farmer,
+            HRU_to_grid=self.HRU.var.HRU_to_grid,
+        )
+
+        # Update cumulative precipitation
+        self.var.cumulative_pr_mm[:, day_index] = pr_mm_per_day_per_farmer
+        if day_index == 364 and not calendar.isleap(self.model.current_time.year):
+            self.var.cumulative_pr_mm[:, 365] = self.var.cumulative_pr_mm[:, 364]
+
+        # Update cumulative water deficit
+        (
+            self.var.cumulative_water_deficit_current_day,
+            self.var.cumulative_water_deficit_previous_day,
+        ) = (
+            (self.var.cumulative_water_deficit_m3[:, day_index]).copy(),
+            self.var.cumulative_water_deficit_current_day,
+        )
+
+        if day_index == 0:
+            self.var.cumulative_water_deficit_m3[:, day_index] = (
+                self.var.cumulative_water_deficit_m3[:, day_index]
+                * (1 - discount_factor)
+                + water_deficit_day_m3_per_farmer * discount_factor
+            )
+        elif day_index == 365:
+            pass
+        else:
+            self.var.cumulative_water_deficit_m3[:, day_index] = (
+                self.var.cumulative_water_deficit_m3[:, day_index - 1]
+                + water_deficit_day_m3_per_farmer * discount_factor
+                + (1 - discount_factor)
+                * (
+                    self.var.cumulative_water_deficit_m3[:, day_index]
+                    - self.var.cumulative_water_deficit_previous_day
+                )
+            )
+            if __debug__:
+                assert (
+                    self.var.cumulative_water_deficit_m3[:, day_index]
+                    >= self.var.cumulative_water_deficit_m3[:, day_index - 1]
+                ).all()
+            if day_index == 364:
+                self.var.cumulative_water_deficit_m3[:, 365] = (
+                    self.var.cumulative_water_deficit_m3[:, 364]
+                )
 
     def save_pr(self, pr_kg_per_m2_per_s: npt.NDArray[np.floating]) -> None:
         """Aggregate and store daily precipitation per farmer.

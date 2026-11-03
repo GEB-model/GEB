@@ -1590,3 +1590,73 @@ def compute_premiums_and_best_contracts_numba(
         best_rmse_arr,
         best_prem_arr,
     )
+
+
+@njit(cache=True)
+def accumulate_farmer_pr_and_water_deficit(
+    pr_kg_per_m2_per_s: npt.NDArray[np.float32],
+    reference_evapotranspiration_grass_m_per_day: npt.NDArray[np.float32],
+    cell_area: npt.NDArray[np.float32],
+    field_indices_by_farmer: npt.NDArray[np.int32],
+    field_indices: npt.NDArray[np.int32],
+    out_pr_mm_per_day: npt.NDArray[np.float32],
+    out_water_deficit_m3: npt.NDArray[np.float32],
+    HRU_to_grid: npt.NDArray[np.int32],
+) -> None:
+    """Accumulate daily precipitation and water deficit per farmer.
+
+    Computes average daily precipitation (mm) and total volumetric water
+    deficit (m³) for each farmer directly using indexed lookups, avoiding full-grid
+    reductions and allocations.
+
+    Args:
+        pr_kg_per_m2_per_s: Precipitation rate per HRU or grid cell per hour (kg·m⁻²·s⁻¹).
+        reference_evapotranspiration_grass_m_per_day: Reference evapotranspiration per HRU (m·day⁻¹).
+        cell_area: Cell area per HRU (m²).
+        field_indices_by_farmer: Slices into field_indices per farmer of shape (n_farmers, 2).
+        field_indices: HRU indices of farmer fields.
+        out_pr_mm_per_day: Output array for daily precipitation per farmer (mm·day⁻¹).
+        out_water_deficit_m3: Output array for daily water deficit per farmer (m³·day⁻¹).
+        HRU_to_grid: Mapping from HRU cell index to compressed grid index. If empty,
+            pr_kg_per_m2_per_s is indexed directly by HRU index.
+    """
+    n_farmers: int = field_indices_by_farmer.shape[0]
+    n_hours: int = pr_kg_per_m2_per_s.shape[1]
+    use_grid_mapping: bool = HRU_to_grid.size > 0
+
+    for farmer_i in range(n_farmers):
+        start_idx: int = field_indices_by_farmer[farmer_i, 0]
+        end_idx: int = field_indices_by_farmer[farmer_i, 1]
+        n_fields: int = end_idx - start_idx
+
+        farmer_pr_mm: float = 0.0
+        farmer_deficit_m3: float = 0.0
+
+        if n_fields > 0:
+            total_pr_mm: float = 0.0
+            total_deficit_m3: float = 0.0
+
+            for k in range(start_idx, end_idx):
+                hru_idx: int = field_indices[k]
+                grid_idx: int = HRU_to_grid[hru_idx] if use_grid_mapping else hru_idx
+                hru_pr_sum: float = 0.0
+                for hour in range(n_hours):
+                    hru_pr_sum += pr_kg_per_m2_per_s[grid_idx, hour]
+
+                # 1 kg/m² = 1 mm. Multiply sum of hourly rates by 3600 seconds/hour to obtain mm/day.
+                hru_pr_mm: float = hru_pr_sum * 3600.0
+                total_pr_mm += hru_pr_mm
+
+                # Convert mm to m: 3600 / 1000 = 3.6
+                hru_pr_m: float = hru_pr_sum * 3.6
+                deficit_m: float = (
+                    reference_evapotranspiration_grass_m_per_day[hru_idx] - hru_pr_m
+                )
+                if deficit_m > 0.0:
+                    total_deficit_m3 += deficit_m * cell_area[hru_idx]
+
+            farmer_pr_mm = total_pr_mm / n_fields
+            farmer_deficit_m3 = total_deficit_m3
+
+        out_pr_mm_per_day[farmer_i] = np.float32(farmer_pr_mm)
+        out_water_deficit_m3[farmer_i] = np.float32(farmer_deficit_m3)

@@ -1,4 +1,8 @@
 # dev
+- Optimized LandSurface model input preparation, finalization, and deep soil temperature updates:
+  - Eliminated full-grid DRAM array expansions (~960 MB/day) for 8 forcing variables by passing compact 2D grid forcing directly into the LSM physics kernel and indexing using `HRU_to_grid`.
+  - Integrated deep soil temperature exponential moving average calculation directly inside the LSM physics kernel cell loop, removing the separate full-pass overhead and redundant array transfers.
+  - Replaced multiple full-grid reductions and repeated bincount passes in crop farmer finalization with a single indexed accumulation kernel (`save_pr_and_water_deficit`).
 
 # v1.0.0b39
 - Cleaned model configuration. This requires manual updating of config if you use any custom configuration. Some works, but this was really needed for future-proofing.

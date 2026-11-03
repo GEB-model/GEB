@@ -102,6 +102,11 @@ from .water import (
 SOIL_ALBEDO: np.float32 = np.float32(0.23)
 SOIL_EMISSIVITY: np.float32 = np.float32(0.95)
 
+# Constants for deep soil temperature exponential moving average (10-year period)
+DEEP_SOIL_AVERAGING_PERIOD_DAYS: np.float32 = np.float32(10.0 * 365.25)
+DEEP_SOIL_ALPHA: np.float32 = np.float32(1.0) / DEEP_SOIL_AVERAGING_PERIOD_DAYS
+DEEP_SOIL_ONE_MINUS_ALPHA: np.float32 = np.float32(1.0) - DEEP_SOIL_ALPHA
+
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -177,6 +182,7 @@ def land_surface_model(
     rainfall_lookup_table: TwoDArrayFloat32,
     daily_reference_evapotranspiration_grass_m: ArrayFloat32,
     max_capillary_rise_m: ArrayFloat32,
+    HRU_to_grid: ArrayInt32,
 ) -> tuple[
     ArrayFloat32,
     ArrayFloat32,
@@ -271,6 +277,7 @@ def land_surface_model(
         rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
         daily_reference_evapotranspiration_grass_m: Daily reference evapotranspiration for grass (meters).
         max_capillary_rise_m: Maximum available groundwater storage for capillary rise per cell (meters).
+        HRU_to_grid: Mapping from HRU cell index to compressed grid index. If empty, forcing arrays are indexed directly by HRU index.
 
     Returns:
         Tuple of:
@@ -326,6 +333,7 @@ def land_surface_model(
     ) / np.float32(24.0 * 3600.0)
 
     num_cells: int = slope_m_per_m.size
+    use_grid_mapping: bool = HRU_to_grid.size > 0
     capillar_rise_m: ArrayFloat32 = np.empty(num_cells, dtype=np.float32)
     runoff_m: TwoDArrayFloat32 = np.empty((num_cells, 24), dtype=np.float32)
     interflow_m: TwoDArrayFloat32 = np.empty((num_cells, 24), dtype=np.float32)
@@ -463,19 +471,33 @@ def land_surface_model(
         groundwater_recharge_enthalpy_loss_J_per_m2[i] = np.float32(0.0)
         transpiration_enthalpy_loss_J_per_m2[i] = np.float32(0.0)
 
+        grid_i: int = HRU_to_grid[i] if use_grid_mapping else i
+
+        # Update deep soil temperature boundary condition using exponential moving average of 2m air temperature
+        temperature_sum_K: np.float32 = np.float32(0.0)
+        for h in range(24):
+            temperature_sum_K += tas_2m_K[grid_i, h]
+        mean_daily_temperature_C: np.float32 = (
+            temperature_sum_K / np.float32(24.0)
+        ) - KELVIN_OFFSET
+        deep_soil_temperature_C[i] = (
+            deep_soil_temperature_C[i] * DEEP_SOIL_ONE_MINUS_ALPHA
+            + mean_daily_temperature_C * DEEP_SOIL_ALPHA
+        )
+
         for hour in range(24):
-            # Climate values for current hour (contigous access [i, hour])
-            tas_2m_K_val = tas_2m_K[i, hour]
-            ps_pascal_val = ps_pascal[i, hour]
-            rlds_W_per_m2_val = rlds_W_per_m2[i, hour]
-            rsds_W_per_m2_val = rsds_W_per_m2[i, hour]
-            pr_val = pr_kg_per_m2_per_s[i, hour]
+            # Climate values for current hour (direct grid lookup [grid_i, hour])
+            tas_2m_K_val = tas_2m_K[grid_i, hour]
+            ps_pascal_val = ps_pascal[grid_i, hour]
+            rlds_W_per_m2_val = rlds_W_per_m2[grid_i, hour]
+            rsds_W_per_m2_val = rsds_W_per_m2[grid_i, hour]
+            pr_val = pr_kg_per_m2_per_s[grid_i, hour]
 
-            tas_C: np.float32 = tas_2m_K_val - np.float32(273.15)
-            dewpoint_tas_C: np.float32 = dewpoint_tas_2m_K[i, hour] - np.float32(273.15)
+            tas_C: np.float32 = tas_2m_K_val - KELVIN_OFFSET
+            dewpoint_tas_C: np.float32 = dewpoint_tas_2m_K[grid_i, hour] - KELVIN_OFFSET
 
-            wind_u = wind_u10m_m_per_s[i, hour]
-            wind_v = wind_v10m_m_per_s[i, hour]
+            wind_u = wind_u10m_m_per_s[grid_i, hour]
+            wind_v = wind_v10m_m_per_s[grid_i, hour]
             wind_10m_m_per_s: np.float32 = np.sqrt(
                 wind_u * wind_u + wind_v * wind_v
             )  # Wind speed at 10m height
@@ -1136,7 +1158,7 @@ ERR_NEG_OPEN_WATER_EVAP: int = 21
 ERR_WATER_IMBALANCE: int = 22
 
 
-@njit(parallel=True, fastmath=False)
+@njit(cache=True, fastmath=False)
 def _fast_validate_and_check_water_balance_kernel(
     topwater_m: ArrayFloat32,
     runoff_m: TwoDArrayFloat32,
@@ -1160,9 +1182,10 @@ def _fast_validate_and_check_water_balance_kernel(
     topwater_m_prev: ArrayFloat32,
     water_content_m_prev: TwoDArrayFloat32,
     err_flags: ArrayInt8,
+    HRU_to_grid: ArrayInt32,
     tolerance: float = 1e-5,
 ) -> None:
-    """Validate land surface water state/flux variables and cellwise water balance closure in parallel.
+    """Validate land surface water state/flux variables and cellwise water balance closure.
 
     Notes:
         Performs non-negativity and finite (non-NaN) checks across all hydrological state and flux
@@ -1192,11 +1215,13 @@ def _fast_validate_and_check_water_balance_kernel(
         topwater_m_prev: Pre-step surface ponding storage (m).
         water_content_m_prev: Pre-step soil layer water content (m).
         err_flags: Output 1D int8 array of error status codes per HRU. Modified in place.
+        HRU_to_grid: Mapping from HRU cell index to compressed grid index (-).
         tolerance: Absolute closure tolerance for water budget (meters).
     """
     num_cells: int = topwater_m.size
+    use_grid_mapping: bool = HRU_to_grid.size > 0
 
-    for i in prange(num_cells):
+    for i in range(num_cells):
         code: int = ERR_NONE
 
         # 1. Topwater
@@ -1296,8 +1321,9 @@ def _fast_validate_and_check_water_balance_kernel(
 
         # 8. Water balance closure
         p_sum: np.float64 = np.float64(0.0)
+        grid_i: int = HRU_to_grid[i] if use_grid_mapping else i
         for t in range(24):
-            p_sum += np.float64(pr_kg_per_m2_per_s[i, t])
+            p_sum += np.float64(pr_kg_per_m2_per_s[grid_i, t])
         influx_pr: np.float64 = p_sum * 3.6
 
         influx: np.float64 = (
@@ -1436,6 +1462,7 @@ class LandSurfaceInputs(NamedTuple):
     rainfall_lookup_table: TwoDArrayFloat32
     daily_reference_evapotranspiration_grass_m: ArrayFloat32
     max_capillary_rise_m: ArrayFloat32
+    HRU_to_grid: ArrayInt32
 
 
 class LandSurfaceVariables(Bucket):
@@ -1539,6 +1566,7 @@ class LandSurface(Module):
         deep_soil_temperature_C: ArrayFloat32,
         leaf_area_index: ArrayFloat32,
         max_capillary_rise_m: ArrayFloat32,
+        HRU_to_grid: ArrayInt32,
     ) -> LandSurfaceInputs:
         """Build the input bundle for `land_surface_model`.
 
@@ -1555,6 +1583,7 @@ class LandSurface(Module):
             deep_soil_temperature_C: Sub-surface boundary temperature (C).
             leaf_area_index: Leaf area index per HRU (-).
             max_capillary_rise_m: Maximum available groundwater storage for capillary rise per HRU (meters).
+            HRU_to_grid: Mapping from HRU cell index to compressed grid index (-).
 
         Returns:
             Bundle of inputs for `land_surface_model`.
@@ -1608,12 +1637,12 @@ class LandSurface(Module):
             interception_capacity_m=interception_capacity_m,
             pr_kg_per_m2_per_s=pr_kg_per_m2_per_s,
             tas_2m_K=tas_2m_K,
-            dewpoint_tas_2m_K=self.HRU.dewpoint_tas_2m_K,
-            ps_pascal=self.HRU.ps_pascal,
-            rlds_W_per_m2=self.HRU.rlds_W_per_m2,
-            rsds_W_per_m2=self.HRU.rsds_W_per_m2,
-            wind_u10m_m_per_s=self.HRU.wind_u10m_m_per_s,
-            wind_v10m_m_per_s=self.HRU.wind_v10m_m_per_s,
+            dewpoint_tas_2m_K=self.grid.dewpoint_tas_2m_K,
+            ps_pascal=self.grid.ps_pascal,
+            rlds_W_per_m2=self.grid.rlds_W_per_m2,
+            rsds_W_per_m2=self.grid.rsds_W_per_m2,
+            wind_u10m_m_per_s=self.grid.wind_u10m_m_per_s,
+            wind_v10m_m_per_s=self.grid.wind_v10m_m_per_s,
             CO2_ppm=CO2_ppm,
             crop_factor=crop_factor,
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
@@ -1633,6 +1662,7 @@ class LandSurface(Module):
             rainfall_lookup_table=self.rainfall_lookup_table,
             daily_reference_evapotranspiration_grass_m=self.HRU.var.daily_reference_evapotranspiration_grass_m,
             max_capillary_rise_m=max_capillary_rise_m,
+            HRU_to_grid=HRU_to_grid,
         )
 
     def _snapshot_land_surface_inputs_for_error(
@@ -1934,6 +1964,9 @@ class LandSurface(Module):
             topwater_m_prev=topwater_m_prev,
             water_content_m_prev=water_content_m_prev,
             err_flags=err_flags,
+            HRU_to_grid=getattr(
+                land_surface_inputs, "HRU_to_grid", np.empty(0, dtype=np.int32)
+            ),
             tolerance=1e-5,
         )
 
@@ -2883,24 +2916,14 @@ class LandSurface(Module):
         # delta_z is not loaded or allocated (distribute_soil_water_ross computes interface distances on the fly)
         delta_z: TwoDArrayFloat32 = np.empty((0, 0), dtype=np.float32)
 
-        # Update deep soil temperature boundary condition using a 10-year Exponential Moving Average.
-        # This reflects the multi-year thermal inertia of the deep soil profile.
-        averaging_period_days = np.float32(10.0 * 365.25)
-        averaging_weight_alpha = np.float32(1.0) / averaging_period_days
-
-        # Load temperature at 2m as a proxy for deep soil temperature boundary condition, which is a common approach in land surface modeling.
-        tas_2m_K: TwoDArrayFloat32 = self.HRU.tas_2m_K
-
-        _update_deep_soil_temperature(
-            deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
-            tas_2m_K=tas_2m_K,
-            averaging_weight_alpha=averaging_weight_alpha,
-            kelvin_offset=KELVIN_OFFSET,
-        )
+        # Load temperature at 2m from grid; deep soil temperature boundary condition is
+        # updated directly inside the land_surface_model physics kernel using an EMA.
+        tas_2m_K: TwoDArrayFloat32 = self.grid.tas_2m_K
 
         timer.finish_split("Deep soil temperature update")
 
-        pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.HRU.pr_kg_per_m2_per_s
+        pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.grid.pr_kg_per_m2_per_s
+        HRU_to_grid: ArrayInt32 = self.HRU.var.HRU_to_grid
 
         land_surface_inputs: LandSurfaceInputs = self._build_land_surface_inputs(
             unix_time_seconds=np.int64(self.model.current_time.timestamp()),
@@ -2915,6 +2938,7 @@ class LandSurface(Module):
             deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
             max_capillary_rise_m=max_capillary_rise_m,
+            HRU_to_grid=HRU_to_grid,
         )
 
         timer.finish_split("Prepare inputs for land surface model")
@@ -3080,12 +3104,12 @@ class LandSurface(Module):
         reference_evapotranspiration_water_m = self.hydrology.to_grid(
             HRU_data=reference_evapotranspiration_water_m,
         )
-        assert (reference_evapotranspiration_water_m >= 0).all()
+        if __debug__:
+            assert (reference_evapotranspiration_water_m >= 0).all()
 
-        self.model.agents.crop_farmers.save_water_deficit(
+        self.model.agents.crop_farmers.save_pr_and_water_deficit(
             reference_evapotranspiration_grass_m, pr_kg_per_m2_per_s
         )
-        self.model.agents.crop_farmers.save_pr(pr_kg_per_m2_per_s)
 
         timer.finish_split("Finalization")
 
@@ -3142,7 +3166,7 @@ class LandSurface(Module):
             pr_total_m3: np.float64 = (
                 (
                     pr_kg_per_m2_per_s.astype(np.float64).mean(axis=1)
-                    * self.HRU.var.cell_area
+                    * self.grid.var.cell_area
                 ).sum()  # kg/s
                 * 0.001  # to m3/s
                 * (24 * 3600.0)  # to m3/day

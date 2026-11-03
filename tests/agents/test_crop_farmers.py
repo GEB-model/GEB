@@ -8,6 +8,7 @@ from geb.agents.crop_farmers import (
     shift_and_update,
 )
 from geb.agents.workflows.crop_farmers import (
+    accumulate_farmer_pr_and_water_deficit,
     adjust_irrigation_to_limit,
     get_deficit_between_dates,
     get_future_deficit,
@@ -870,3 +871,55 @@ def test_advance_crop_rotation_year() -> None:
     assert np.array_equal(
         current_crop_calendar_rotation_year_index, np.array([0, 0, 1, 0, 1])
     )
+
+
+def test_accumulate_farmer_pr_and_water_deficit() -> None:
+    """Test parallel accumulation of daily precipitation and water deficit per farmer."""
+    # 4 HRUs, 3 farmers: farmer 0 has HRU 0 and 1; farmer 1 has HRU 2; farmer 2 has 0 HRUs (edge case)
+    pr_kg_per_m2_per_s = np.zeros((4, 24), dtype=np.float32)
+    # HRU 0: 1 mm/hour = 1/3600 kg/m2/s for all 24h -> 24 mm/day = 0.024 m/day
+    pr_kg_per_m2_per_s[0, :] = 1.0 / 3600.0
+    # HRU 1: 2 mm/hour = 2/3600 kg/m2/s for all 24h -> 48 mm/day = 0.048 m/day
+    pr_kg_per_m2_per_s[1, :] = 2.0 / 3600.0
+    # HRU 2: 0.5 mm/hour for all 24h -> 12 mm/day = 0.012 m/day
+    pr_kg_per_m2_per_s[2, :] = 0.5 / 3600.0
+    # HRU 3: not owned by farmers
+
+    ref_et_grass_m_per_day = np.array([0.030, 0.040, 0.005, 0.010], dtype=np.float32)
+    cell_area = np.array([100.0, 200.0, 50.0, 100.0], dtype=np.float32)
+
+    # farmer 0: fields in indices [0:2] (HRUs 0, 1)
+    # farmer 1: fields in indices [2:3] (HRU 2)
+    # farmer 2: fields in indices [3:3] (0 fields, edge case)
+    field_indices_by_farmer = np.array([[0, 2], [2, 3], [3, 3]], dtype=np.int32)
+    field_indices = np.array([0, 1, 2], dtype=np.int32)
+
+    out_pr_mm = np.empty(3, dtype=np.float32)
+    out_deficit_m3 = np.empty(3, dtype=np.float32)
+
+    accumulate_farmer_pr_and_water_deficit(
+        pr_kg_per_m2_per_s=pr_kg_per_m2_per_s,
+        reference_evapotranspiration_grass_m_per_day=ref_et_grass_m_per_day,
+        cell_area=cell_area,
+        field_indices_by_farmer=field_indices_by_farmer,
+        field_indices=field_indices,
+        out_pr_mm_per_day=out_pr_mm,
+        out_water_deficit_m3=out_deficit_m3,
+        HRU_to_grid=np.empty(0, dtype=np.int32),
+    )
+
+    # Farmer 0: mean pr = (24 + 48) / 2 = 36 mm/day
+    # Deficit: HRU 0: max(0, 0.030 - 0.024) * 100 = 0.006 * 100 = 0.6 m3
+    #          HRU 1: max(0, 0.040 - 0.048) * 200 = 0 m3
+    # Total deficit = 0.6 m3
+    assert np.isclose(out_pr_mm[0], 36.0, atol=1e-4)
+    assert np.isclose(out_deficit_m3[0], 0.6, atol=1e-4)
+
+    # Farmer 1: mean pr = 12 mm/day
+    # Deficit: HRU 2: max(0, 0.005 - 0.012) * 50 = 0 m3
+    assert np.isclose(out_pr_mm[1], 12.0, atol=1e-4)
+    assert np.isclose(out_deficit_m3[1], 0.0, atol=1e-4)
+
+    # Farmer 2: 0 fields -> both 0.0
+    assert out_pr_mm[2] == 0.0
+    assert out_deficit_m3[2] == 0.0

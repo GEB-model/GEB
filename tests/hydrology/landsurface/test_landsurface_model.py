@@ -85,6 +85,8 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
             inputs["root_depth_m"].shape, np.inf, dtype=np.float32
         )
     inputs.pop("capillar_rise_m", None)
+    if "HRU_to_grid" not in inputs:
+        inputs["HRU_to_grid"] = np.empty(0, dtype=np.int32)
 
     # Cast inputs if requested
     if asfloat64:
@@ -314,7 +316,12 @@ def _create_mock_land_surface(
             inputs_dict[field] = np.zeros((num_cells, 2), dtype=np.float64)
         elif field in ("snow_enthalpy_J_per_m2", "snow_density_kg_per_m3"):
             inputs_dict[field] = np.zeros((num_cells, 2), dtype=np.float32)
-        elif field in ("land_use_type", "crop_map", "green_ampt_active_layer_idx"):
+        elif field in (
+            "land_use_type",
+            "crop_map",
+            "green_ampt_active_layer_idx",
+            "HRU_to_grid",
+        ):
             inputs_dict[field] = np.zeros(num_cells, dtype=np.int32)
         elif field == "unix_time_seconds":
             inputs_dict[field] = np.int64(0)
