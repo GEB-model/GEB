@@ -498,9 +498,13 @@ class FloodRiskModule:
             dynamic: Whether to calculate building damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
+        Raises:
+            ValueError: If exporting is enabled but no export years are provided.
         """
         if export_building_damages and (export_building_damages_years is None):
-            raise ValueError("If export_building_damages is set as true then a list of years must be passed to export_building_damages_years")
+            raise ValueError(
+                "If export_building_damages is set as true then a list of years must be passed to export_building_damages_years"
+            )
 
         # create a pandas data array for assigning damage to the agents:
         agent_df = pd.DataFrame(
@@ -530,9 +534,8 @@ class FloodRiskModule:
                         building_multicurve,
                     )
                 )
-                if (
-                    export_building_damages 
-                    and (self.model.current_time.year in export_building_damages_years)
+                if export_building_damages and (
+                    self.model.current_time.year in export_building_damages_years
                 ):
                     fn_for_export = (
                         self.households.model.output_folder / "building_damages"
@@ -661,9 +664,8 @@ class FloodRiskModule:
                     building_multicurve,
                 )
             )
-            if (
-                export_building_damages 
-                and (self.model.current_time.year in export_building_damages_years)
+            if export_building_damages and (
+                self.model.current_time.year in export_building_damages_years
             ):
                 fn_for_export = self.households.model.output_folder / "building_damages"
                 fn_for_export.mkdir(parents=True, exist_ok=True)
