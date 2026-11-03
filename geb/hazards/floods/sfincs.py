@@ -720,6 +720,11 @@ class SFINCSRootModel:
                     bed_elevation_grid[outflow_row, outflow_col].item() + river["depth"]
                 )
 
+        # Clean up NaN values in the mask before writing to prevent SFINCS crashes
+        sf.mask.data["mask"].values = np.nan_to_num(
+            sf.mask.data["mask"].values, nan=0.0
+        ).astype(sf.mask.data["mask"].values.dtype)
+
         sf.write()
 
         write_geom(self.rivers, self.path / "rivers.geoparquet")
@@ -1128,6 +1133,13 @@ class SFINCSRootModel:
         """
         rivers_with_outflow_boundary = self.rivers[self.rivers["is_outflow_boundary"]]
 
+        if rivers_with_outflow_boundary.empty:
+            self.logger.warning("No rivers with outflow boundaries found.")
+            return
+
+        # Clean NaN values in mask to avoid issues
+        mask_values = np.nan_to_num(self.mask.values, nan=0.0)
+
         for river_idx, river in rivers_with_outflow_boundary.iterrows():
             outflow_point_xy = river["outflow_point_xy"]
 
@@ -1137,7 +1149,7 @@ class SFINCSRootModel:
             )
 
             outflow_mask: TwoDArrayBool = create_outflow_in_mask(
-                self.mask.values,
+                mask_values,
                 row=outflow_row,
                 col=outflow_col,
                 width_cells=(
@@ -1171,12 +1183,15 @@ class SFINCSRootModel:
         dx: float = abs(float(transform.a))
         dy: float = abs(float(transform.e))
 
+        # Replace NaN with 0 to avoid issues in comparisons
+        mask_clean = np.nan_to_num(self.mask.values, nan=0.0)
+
         active_polygon = unary_union(
             [
                 shape(geom)
                 for geom, _ in rasterio.features.shapes(
-                    (self.mask.values == 1).astype(np.uint8),
-                    mask=(self.mask.values == 1),
+                    (mask_clean == 1).astype(np.uint8),
+                    mask=(mask_clean == 1),
                     transform=transform,
                     connectivity=4,
                 )
@@ -1186,23 +1201,44 @@ class SFINCSRootModel:
             [
                 shape(geom)
                 for geom, _ in rasterio.features.shapes(
-                    (self.mask.values == SFINCS_WATER_LEVEL_BOUNDARY).astype(np.uint8),
-                    mask=(self.mask.values == SFINCS_WATER_LEVEL_BOUNDARY),
+                    (mask_clean == SFINCS_WATER_LEVEL_BOUNDARY).astype(np.uint8),
+                    mask=(mask_clean == SFINCS_WATER_LEVEL_BOUNDARY),
                     transform=transform,
                     connectivity=4,
                 )
             ]
         )
 
+        # Check if boundary polygon is valid and non-empty
+        if boundary_polygon.is_empty or active_polygon.is_empty:
+            self.logger.warning(
+                "Boundary or active polygon is empty; skipping boundary observation lines setup."
+            )
+            return
+
         shared_boundary = active_polygon.boundary.intersection(
             boundary_polygon.boundary
         )
+
+        # Check if shared boundary is empty
+        if shared_boundary.is_empty:
+            self.logger.warning(
+                "No shared boundary found between active and boundary cells; skipping boundary observation lines setup."
+            )
+            return
+
         if isinstance(shared_boundary, LineString):
             raw_lines: list[LineString] = [shared_boundary]
         else:
-            merged_lines = linemerge(
-                [geom for geom in shared_boundary.geoms if isinstance(geom, LineString)]
-            )
+            line_list = [
+                geom for geom in shared_boundary.geoms if isinstance(geom, LineString)
+            ]
+            if not line_list:
+                self.logger.warning(
+                    "No line geometries found in shared boundary; skipping boundary observation lines setup."
+                )
+                return
+            merged_lines = linemerge(line_list)
             raw_lines = (
                 [merged_lines]
                 if isinstance(merged_lines, LineString)
@@ -1212,11 +1248,24 @@ class SFINCSRootModel:
         oriented_lines: list[LineString] = []
         for line in raw_lines:
             coords = list(line.coords)
+            # Skip lines with fewer than 2 coordinates
+            if len(coords) < 2:
+                self.logger.warning(
+                    f"Skipping line with only {len(coords)} coordinate(s)."
+                )
+                continue
+
             x0, y0 = coords[0]
             x1, y1 = coords[1]
             seg_dx: float = x1 - x0
             seg_dy: float = y1 - y0
             seg_len: float = math.hypot(seg_dx, seg_dy)
+
+            # Skip zero-length segments to avoid division by zero
+            if seg_len < 1e-10:
+                self.logger.warning("Skipping zero-length line segment.")
+                continue
+
             ux: float = seg_dx / seg_len
             uy: float = seg_dy / seg_len
 
@@ -1229,12 +1278,19 @@ class SFINCSRootModel:
             # Reverse the line when the active cell is on the left so active cells
             # are always on the right (positive discharge = outflow).
             if (
-                0 <= row_left < self.mask.shape[0]
-                and 0 <= col_left < self.mask.shape[1]
-                and self.mask.values[row_left, col_left] == 1
+                0 <= row_left < mask_clean.shape[0]
+                and 0 <= col_left < mask_clean.shape[1]
+                and mask_clean[row_left, col_left] == 1
             ):
                 line = LineString(coords[::-1])
             oriented_lines.append(line)
+
+        # Check if any lines were created
+        if not oriented_lines:
+            self.logger.warning(
+                "No valid observation lines created; skipping boundary observation lines setup."
+            )
+            return
 
         observation_lines: gpd.GeoDataFrame = gpd.GeoDataFrame(
             geometry=oriented_lines,
