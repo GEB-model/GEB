@@ -772,16 +772,23 @@ class HRUs(BaseVariables):
         upstream_area = read_grid(
             self.model.files["grid"]["routing/upstream_area_m2"], ndim=2
         )
-        eligible_river_mask = read_grid(
-            self.model.files["grid"]["routing/downstream_of_any_inflow_mask"],
-            ndim=2,
-        ).astype(bool)
+
+        hru_config = self.model.config["hydrology"]["HRU"]
+        threshold_m2 = hru_config["river_cell_threshold_m2"]
+
+        eligible_river_mask = None
+
+        if hru_config["use_downstream_of_inflow_mask"]:
+            eligible_river_mask = read_grid(
+                self.model.files["grid"]["routing/downstream_of_any_inflow_mask"],
+                ndim=2,
+            ).astype(bool)
 
         self.var.nearest_river_grid_cell = determine_nearest_river_cell(
             upstream_area,
             self.var.HRU_to_grid,
             mask=self.data.grid.mask,
-            threshold_m2=25_000_000,  # 25 km² to align with MERIT-Basins defintion of a river, https://www.reachhydro.org/home/params/merit-basins
+            threshold_m2=threshold_m2,
             eligible_river_mask=eligible_river_mask,
         )
 
