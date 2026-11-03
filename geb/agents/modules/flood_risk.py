@@ -483,6 +483,7 @@ class FloodRiskModule:
         self,
         verbose: bool = False,
         export_building_damages: bool = False,
+        export_building_damages_years: list[int] | None = None,
         dynamic: bool = True,
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
@@ -493,10 +494,14 @@ class FloodRiskModule:
         Args:
             verbose: Verbosity flag.
             export_building_damages: Whether to export the building damages to parquet files.
+            export_building_damages_years: Years for which to export building damages.
             dynamic: Whether to calculate building damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
         """
+        if export_building_damages and (export_building_damages_years is None):
+            raise ValueError("If export_building_damages is set as true then a list of years must be passed to export_building_damages_years")
+
         # create a pandas data array for assigning damage to the agents:
         agent_df = pd.DataFrame(
             {"building_id_of_household": self.households.var.building_id_of_household}
@@ -525,11 +530,9 @@ class FloodRiskModule:
                         building_multicurve,
                     )
                 )
-                if export_building_damages and (
-                    self.model.current_time.year
-                    == self.model.agents.households.start_adaptation_year
-                    or self.model.current_time.year
-                    == 2080  # This is hard-coded and should be changed to a parameter
+                if (
+                    export_building_damages 
+                    and (self.model.current_time.year in export_building_damages_years)
                 ):
                     fn_for_export = (
                         self.households.model.output_folder / "building_damages"
@@ -658,7 +661,10 @@ class FloodRiskModule:
                     building_multicurve,
                 )
             )
-            if export_building_damages:
+            if (
+                export_building_damages 
+                and (self.model.current_time.year in export_building_damages_years)
+            ):
                 fn_for_export = self.households.model.output_folder / "building_damages"
                 fn_for_export.mkdir(parents=True, exist_ok=True)
                 building_multicurve.to_parquet(

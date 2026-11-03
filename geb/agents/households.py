@@ -39,7 +39,6 @@ class HouseholdVariables(Bucket):
     income_category: DynamicArray
     building_id_of_household: DynamicArray
     wealth: DynamicArray
-    property_value: DynamicArray
     locations: DynamicArray
     years_since_last_flood: DynamicArray
     risk_perception: DynamicArray
@@ -57,7 +56,6 @@ class HouseholdVariables(Bucket):
     warning_level: DynamicArray
     warning_reached: DynamicArray
     response_probability: DynamicArray
-    amenity_value: DynamicArray
     adaptation_costs: DynamicArray
     recommended_measures: DynamicArray
     time_adapted: DynamicArray
@@ -518,10 +516,6 @@ class Households(AgentBaseClass):
 
         self.assign_income_category(self.var.income)
 
-        # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
-        self.var.property_value = DynamicArray(
-            (self.var.wealth.data * 0.8).astype(np.float32), max_n=self.max_n
-        )
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
         adaptation_costs = np.full(
             self.n,
@@ -1124,11 +1118,16 @@ class Households(AgentBaseClass):
         # calculate damages for adapting and not adapting households based on building footprints
         # calculate expected utilities
         damages_do_not_adapt, damages_adapt = (
-            self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
+            self.flood_risk_module.calculate_building_flood_damages(
+                dynamic=False, 
+                export_building_damages=self.model.config["agent_settings"]["households"]["export_building_damages"],
+                export_building_damages_years=self.model.config["agent_settings"]["households"]["export_building_damages_years"]
+            )
         )
+        project_costs: bool = self.model.config["agent_settings"]["climrisk"]["project_costs"]
         if (
             hasattr(self, "factor_change")
-            and self.model.config["agent_settings"]["climrisk"]["project_costs"]
+            and project_costs
         ):
             GDP_i_t = self.var.factor_change
         else:
@@ -1147,15 +1146,15 @@ class Households(AgentBaseClass):
                 household_distance_to_coastline_m=self.household_distance_to_coastline_m,
                 household_distance_to_river_m=self.household_distance_to_river_m,
                 risk_perception=self.var.risk_perception.data,
-                expected_damages_adapt=damages_adapt,
-                adaptation_costs=self.var.adaptation_costs.data,
+                expected_damages_adapt=damages_adapt*GDP_i_t, # scaled by change in gdp from base to current year
+                adaptation_costs=self.var.adaptation_costs.data*GDP_i_t, # scaled by change in gdp from base to current year
                 time_adapted=self.var.time_adapted.data,
                 loan_duration=20,
                 p_floods=1 / self.return_periods,
                 T=15,
                 r=0.03,
                 sigma=1,
-                GDP_i_t=GDP_i_t,
+                GDP_i_t=GDP_i_t, # scaled by change in gdp from base to current year
             )
         else:
             EU_adapt = np.full(self.n, -np.inf)
@@ -1168,16 +1167,16 @@ class Households(AgentBaseClass):
             household_distance_to_coastline_m=self.household_distance_to_coastline_m,
             household_distance_to_river_m=self.household_distance_to_river_m,
             risk_perception=self.var.risk_perception.data,
-            expected_damages=damages_do_not_adapt,
+            expected_damages=damages_do_not_adapt*GDP_i_t, # scaled by change in gdp from base to current year
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
             T=15,
             r=0.03,
             sigma=1,
-            GDP_i_t=GDP_i_t,
+            GDP_i_t=GDP_i_t, # scaled by change in gdp from base to current year
         )
 
-        # fist sample building IDs to be considere for relocation
+        # fist sample building IDs to be considered for relocation
         if (
             self.config["relocate"]
             or self.model.current_time.year <= self.start_adaptation_year
@@ -1200,12 +1199,13 @@ class Households(AgentBaseClass):
                 distance_to_river_m=sampled_distance_to_river,
                 distance_to_building_m=sampled_distances,
                 max_migration_costs=500_000  # European relocation costs
-                * GDP_i_t  # max migration costs scaled to GDP change
+                # Relocation costs are not affected by climate damages
+                * GDP_i_t  # scaled by change in gdp from base to current year
                 * self.var.adaptation_cost_scaler,  # Scaling to local costs
                 T=15,
                 r=0.03,
                 sigma=1,
-                GDP_i_t=GDP_i_t,
+                GDP_i_t=GDP_i_t, # scaled by change in gdp from base to current year
             )
         else:
             sampled_building_ids = np.full(
@@ -1319,7 +1319,6 @@ class Households(AgentBaseClass):
             "ead_usd_per_year",
             "time_adapted",
             "years_since_last_flood",
-            "property_value",
             "adaptation_costs",
         ]
 
@@ -1603,13 +1602,17 @@ class Households(AgentBaseClass):
                     )
 
             if damage_function == "GDP":
-                ssp_map_name: str = f"SSP{ssp}_{damage_function}.zarr"
+                gdp_damages_map_name: str = f"SSP{ssp}_{damage_function}.zarr"
             else:
-                ssp_map_name: str = (
+                gdp_damages_map_name: str = (
                     f"SSP{ssp}{rcp}_{damage_function}_p{warming_percentile}.zarr"
                 )
-            ssp_map_path: Path = (
-                self.model.input_folder / "other" / "ssp_maps" / ssp_map_name
+            gdp_damages_map_path: Path = (
+                self.model.input_folder / "other" / "ssp_maps" / gdp_damages_map_name
+            )
+            gdp_map_name: str = f"SSP{ssp}_{damage_function}.zarr"
+            gdp_map_path: Path = (
+                self.model.input_folder / "other" / "ssp_maps" / gdp_map_name
             )
             population_map_name: str = f"SSP{ssp}_POP.zarr"
             population_map_path: Path = (
@@ -1621,10 +1624,18 @@ class Households(AgentBaseClass):
             # is currently not loaded into the var bucket, an
             # implementation should probably be set for both maps
             try:
-                ssp_map: xr.DataArray = xr.open_dataarray(ssp_map_path)
+                gdp_damages_map: xr.DataArray = xr.open_dataarray(gdp_damages_map_path)
             except FileNotFoundError as e:
                 raise ValueError(
-                    f"Requested file {ssp_map_name} has not been built. "
+                    f"Requested file {gdp_damages_map_name} has not been built. "
+                    + f"Please build the model again passing the "
+                    + f"requested data to 'setup_climrisk'."
+                ) from e
+            try:
+                gdp_map: xr.DataArray = xr.open_dataarray(gdp_map_path)
+            except FileNotFoundError as e:
+                raise ValueError(
+                    f"Requested file {gdp_map_name} has not been built. "
                     + f"Please build the model again passing the "
                     + f"requested data to 'setup_climrisk'."
                 ) from e
@@ -1640,14 +1651,22 @@ class Households(AgentBaseClass):
             # Contry-wide or cell-level growth rate
             # For the growth rate of income we use GDP per capita
             if not self.country_wide:
-                gdp_pcap = ssp_map / population_map
+                gdp_damages_pcap = gdp_damages_map / population_map
+                gdp_pcap = gdp_map / population_map
             else:
-                gdp_pcap = ssp_map.sum(["lon", "lat"]) / population_map.sum(
+                gdp_damages_pcap = gdp_damages_map.sum(["lon", "lat"]) / population_map.sum(
                     ["lon", "lat"]
                 )
-            self.growth_rate = gdp_pcap.diff(dim="year") / gdp_pcap.shift({"year": 1})
+                gdp_pcap = gdp_map.sum(["lon", "lat"]) / population_map.sum(
+                    ["lon", "lat"]
+                )
+            self.growth_rate_damages = gdp_damages_pcap.diff(dim="year") / gdp_damages_pcap.shift({"year": 1})
+            self.growth_rate_gdp = gdp_pcap.diff(dim="year") / gdp_pcap.shift({"year": 1})
             # For damages and costs, we use a country-level GDP-based factor change.
-            self.factor_change = ssp_map.sum(["lon", "lat"]) / ssp_map.sel(
+            self.factor_change_damages = gdp_damages_map.sum(["lon", "lat"]) / gdp_damages_map.sel(
+                {"year": base_year}
+            ).sum(["lon", "lat"])
+            self.factor_change = gdp_map.sum(["lon", "lat"]) / gdp_map.sel(
                 {"year": base_year}
             ).sum(["lon", "lat"])
 
@@ -1656,6 +1675,23 @@ class Households(AgentBaseClass):
         if not self.country_wide:
             # Sample household data from map
             # sample_from_map takes a map with y, x coordinates
+            growth_rate_damages_map: np.ndarray = (
+                self.growth_rate_damages.sel({"year": current_year}).to_numpy().swapaxes(-2, -1)
+            )
+            growth_rate_damages = sample_from_map(
+                array=growth_rate_damages_map,
+                coords=self.var.locations.data,
+                gt=(
+                    self.growth_rate.attrs["lon_origin"],  # x_offset = gt[0]
+                    self.growth_rate.attrs["lon_resolution"],  # x_step = gt[1]
+                    0,  # row rotation
+                    self.growth_rate.attrs["lat_origin"],  # y_offset = gt[3]
+                    0,  # column rotation
+                    self.growth_rate.attrs["lat_resolution"],  # y_step = gt[5]
+                ),
+                out_of_bounds_value=None,
+                sample_closest_valid_value=True,
+            )
             growth_rate_map: np.ndarray = (
                 self.growth_rate.sel({"year": current_year}).to_numpy().swapaxes(-2, -1)
             )
@@ -1674,43 +1710,20 @@ class Households(AgentBaseClass):
                 sample_closest_valid_value=True,
             )
         else:
+            growth_rate_damages = float(self.growth_rate_damages.sel({"year": current_year}).item())
             growth_rate = float(self.growth_rate.sel({"year": current_year}).item())
+        self.var.factor_change_damages = float(
+            self.factor_change_damages.sel({"year": current_year}).item()
+        )
         self.var.factor_change = float(
             self.factor_change.sel({"year": current_year}).item()
         )
 
-        climrisk_config: dict[str, Any] = self.model.config["agent_settings"][
-            "climrisk"
-        ]
-        project_income: bool = climrisk_config["project_income"]
-        project_costs: bool = climrisk_config["project_costs"]
+        project_income: bool = self.model.config["agent_settings"]["climrisk"]["project_income"]
 
         if project_income:
             self.var.wealth *= 1 + growth_rate
             self.var.income *= 1 + growth_rate
-            self.var.property_value *= 1 + growth_rate
-            self.var.adaptation_costs *= 1 + growth_rate
-
-        if project_costs and hasattr(self, "flood_risk_module"):
-            for (
-                return_period
-            ) in self.flood_risk_module._building_damages_all_return_periods:
-                self.flood_risk_module._building_damages_all_return_periods[
-                    return_period
-                ]["damages"] = (
-                    self.flood_risk_module._building_damages_all_return_periods[
-                        return_period
-                    ]["damages_t0"]
-                    * self.var.factor_change
-                )
-                self.flood_risk_module._building_damages_all_return_periods[
-                    return_period
-                ]["damages_flood_proofed"] = (
-                    self.flood_risk_module._building_damages_all_return_periods[
-                        return_period
-                    ]["damages_flood_proofed_t0"]
-                    * self.var.factor_change
-                )
 
     def step(self) -> None:
         """Advance the households by one time step."""

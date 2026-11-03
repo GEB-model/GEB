@@ -119,6 +119,10 @@ agent_settings:
     adaptation_cost_scaler: 1 # Scale adaptation and relocation costs, usually by relative GDP per capita with respect to the EU
     income_currency_conversion: 1.11  # Convert local currency to USD. Default value: 1.11 EUR/USD
     ammenity_value_scaling_factor: 0.254820579 # scaling factor for riverine amenity based on Tesselaar et al. (2023).
+    export_building_damages: false # Whether to export the building damages to parquet files.
+    export_building_damages_years: # Years for which to export building damages.
+      - 2020
+      - 2080 
     water_demand:
       method: default
     adjust_demand_factor: 1  # multiplier to adjust water demand up or down. 1 = no adjustment, 0.5 = half demand, 2 = double demand

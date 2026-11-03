@@ -22,7 +22,7 @@ class DecisionModule:
 
         Args:
             household_distance_to_river_m: Distance to the river (m)
-            GDP_i_t: GDP of the household at time t
+            GDP_i_t: GDP of the household at time t, relative to base year
             phi_i: Deviation of average national housing prices from the European average
 
         Returns:
@@ -72,7 +72,7 @@ class DecisionModule:
 
         Args:
             x_j: Distance to the coast (m)
-            GDP_i_t: GDP of the household at time t
+            GDP_i_t: GDP of the household at time t, relative to base year
             phi_i: Deviation of average national housing prices from the European average
 
         Returns:
@@ -828,7 +828,7 @@ class DecisionModule:
             T: Decision horizon for each agent.
             r: Time discounting factor for each agent.
             sigma: Risk aversion setting for each agent.
-            GDP_i_t: GDP of the household at time t.
+            GDP_i_t: GDP of the household at time t, relative to the base year.
             **kwargs: Additional keyword arguments.
 
         Returns:

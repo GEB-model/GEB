@@ -1794,7 +1794,7 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method(required=True)
+    @build_method(required=False)
     def setup_climrisk(
         self,
         ssp: list[str] | None = None,
@@ -1807,7 +1807,7 @@ class Agents(BuildModelBase):
 
         For each SSP, stores a population map. It also stores maps for GDP with
         damages for each RCP, damage function, and warming percentile combination.
-        ``"GDP"`` is a special damage function option that selects the GDP data
+        ``"GDP"`` is a special damage function option that is always run and selects the GDP data
         without damages.
 
         Args:
@@ -1815,7 +1815,7 @@ class Agents(BuildModelBase):
                 Defaults to ``["2"]``.
             rcp: RCP identifiers. Defaults to ``["70"]``.
             damage_function: Damage functions (``"K"``, ``"KU"``, ``"KPU"``,
-                ``"RU"``, ``"RPU"``) or ``"GDP"``. Defaults to ``["K"]``.
+                ``"RU"``, ``"RPU"``) or ``"GDP"``. Defaults to ``["K", "GDP"]``.
             warming_percentile: Global warming percentiles: ``"10"``, ``"50"``, or ``"90"``.
                 Defaults to ``["90"]``.
             reference_year: First year to include in damage data, from 2010
@@ -1830,6 +1830,8 @@ class Agents(BuildModelBase):
             rcp = ["70"]
         if damage_function is None:
             damage_function = ["K"]
+        if not "GDP" in damage_function:
+            damage_function += ["GDP"]
         if warming_percentile is None:
             warming_percentile = ["90"]
 

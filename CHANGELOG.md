@@ -1,5 +1,8 @@
 # dev
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
+- Added household relocation intention–behavior adjustment using the configured `intention_behavior_gap`.
+- Applied projected GDP changes to government dike investment and maintenance costs when `agent_settings.climrisk.project_costs` is enabled.
+- Added household and Climrisk options to the configuration schema.
 
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.
