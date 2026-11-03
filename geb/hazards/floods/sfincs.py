@@ -1468,7 +1468,7 @@ class SFINCSRootModel:
         discharge_by_river: pd.DataFrame,
         return_periods: list[int | float],
         prefix: str = "Q",
-        min_exceed: int = 10,
+        min_exceed: int = 1,
         nboot: int = 2000,
         fixed_shape: float | None = None,
         fixed_scale: float | None = None,
