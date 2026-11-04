@@ -146,7 +146,7 @@ class LandSurface(BuildModelBase):
             raise ValueError("DEMs must be provided as a list of dictionaries.")
 
         potential_flood_area_with_buffer = (
-            self.geom["routing/subbasins"].union_all().buffer(0.1)
+            self.geom["routing/subbasins"].union_all().buffer(0.2)
         )
 
         if self.geom["routing/subbasins"]["is_coastal"].any():
@@ -182,7 +182,7 @@ class LandSurface(BuildModelBase):
                     "ignore",
                     category=UserWarning,
                 )
-                coastlines_with_buffer = coastlines.buffer(0.2, resolution=8)
+                coastlines_with_buffer = coastlines.buffer(0.3, resolution=8)
 
             coastlines_with_buffer = coastlines_with_buffer.union_all()
 

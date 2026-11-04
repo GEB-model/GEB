@@ -77,6 +77,7 @@ from .workflows.utils import (
     make_relative_paths,
     read_flood_depth,
     run_sfincs_simulation,
+    select_most_downstream_point,
     select_most_upstream_point,
     to_sfincs_datetime,
 )
@@ -438,11 +439,15 @@ class SFINCSRootModel:
         del rivers
 
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
+        # export
+        flood_plain.to_parquet(self.path / "flood_plain_raw.geoparquet")
         # Clip the flood plain (incl. the river buffer) to the modelled subbasins,
         # so no active cells end up on interpolated elevation outside the DEM coverage.
         subbasin_area = self.subbasins.to_crs(flood_plain.crs).union_all()
         flood_plain = flood_plain[flood_plain.intersects(subbasin_area)].copy()
         flood_plain["geometry"] = flood_plain.intersection(subbasin_area)
+        # export
+        flood_plain.to_parquet(self.path / "flood_plain_clipped.geoparquet")
 
         # Keep only polygonal parts; grazing intersections give lines/points whose
         # union has no boundary, which breaks calculate_outflow_conditions.
@@ -457,7 +462,9 @@ class SFINCSRootModel:
         assert flood_plain.union_all().boundary is not None, (
             "Clipped flood plain unions to a geometry with no boundary"
         )
-
+        # export
+        flood_plain.to_parquet(self.path / "flood_plain_exploded.geoparquet")
+        ### USING self.subbasins instead of flood_plain because the flood plain now breaks outflow points.
         sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
 
         self.rivers["outflow_elevation"] = np.nan
@@ -526,20 +533,19 @@ class SFINCSRootModel:
                 crs=self.mask.rio.crs,
             )
             if len(area) > 1:
-                # remove isolated cells by keeping only the largest polygon
-                area["area"] = area.geometry.area
-                area = area.sort_values("area", ascending=False).iloc[0:1]
-                area = area.drop(columns=["area"])
-                # raise ValueError(
-                #     "Calculated outflow area is not a single polygon, cannot calculate outflow conditions"
-                # )
+                # remove isolated cells by keeping only the polygon touching the active rivers
+                area = area[area.geometry.intersects(self.active_rivers.union_all())]
+            if len(area) > 1:
+                # if there are still multiple polygons, raise an error
+                raise ValueError(
+                    "Multiple polygons found in the model mask after creating outflow boundary. This should not happen."
+                )
 
             self.calculate_outflow_conditions(area=area)
 
             # must be performed BEFORE burning rivers.
             self.setup_river_outflow_boundary()
-
-        self.setup_boundary_observation_lines()
+            self.setup_boundary_observation_lines()
 
         # We are only interested in flooding within the subbasins of interest.
         # This area of interest mask is used later to filter the flood maps.
@@ -604,6 +610,7 @@ class SFINCSRootModel:
                     self.sfincs_model.grid.region.to_crs(
                         rivers_to_burn.crs
                     ).union_all(),
+                    keep_geom_type=True,
                 )
 
                 # Only burn rivers where width and depth are defined.
@@ -668,7 +675,7 @@ class SFINCSRootModel:
                     write_man_tif=True,
                     nr_subgrid_pixels=grid_size_multiplier,
                     nr_levels=20,
-                    nrmax=500,
+                    nrmax=2000,
                 )
 
         else:
@@ -712,6 +719,11 @@ class SFINCSRootModel:
                 self.rivers.at[river_idx, "outflow_elevation"] = (
                     bed_elevation_grid[outflow_row, outflow_col].item() + river["depth"]
                 )
+
+        # Clean up NaN values in the mask before writing to prevent SFINCS crashes
+        sf.mask.data["mask"].values = np.nan_to_num(
+            sf.mask.data["mask"].values, nan=0.0
+        ).astype(sf.mask.data["mask"].values.dtype)
 
         sf.write()
 
@@ -915,7 +927,8 @@ class SFINCSRootModel:
             outflow_gdf = gpd.GeoDataFrame({"geometry": [outflow_point]}, crs=self.crs)
             write_geom(outflow_gdf, self.path / "debug_outflow_point.geoparquet")
 
-        boundary = area.union_all().boundary
+        area_union = area.union_all()
+        boundary = area_union.boundary
         if not (
             self.active_rivers["is_downstream_outflow"]
             | (self.active_rivers["downstream_ID"] == -1)
@@ -937,13 +950,23 @@ class SFINCSRootModel:
                 # Last point of river
                 end_point = Point(river.coords[-1])
 
-                # Compute nearest points between end_point and boundary
-                _, nearest_boundary_point = nearest_points(end_point, boundary)
+                if area_union.covers(end_point):
+                    # Compute nearest points between end_point and boundary
+                    _, nearest_boundary_point = nearest_points(end_point, boundary)
 
-                # Extend river directly to that location
-                river = LineString(
-                    list(river.coords) + [nearest_boundary_point.coords[0]]
-                )
+                    # Extend river directly to that location
+                    river = LineString(
+                        list(river.coords) + [nearest_boundary_point.coords[0]]
+                    )
+                else:
+                    # The river continues beyond the boundary. Extending it to the
+                    # nearest boundary point would make the line double back on
+                    # itself, so that moving "upstream" would go the wrong way
+                    # (out of the region). Instead use the last point where the river
+                    # crosses the boundary.
+                    nearest_boundary_point = select_most_downstream_point(
+                        river, river.intersection(boundary)
+                    )
 
                 outflow_point = nearest_boundary_point
 
@@ -961,7 +984,8 @@ class SFINCSRootModel:
                 # due to floating point precision, the intersection point
                 # may be just outside the model grid. We therefore check if the
                 # point is outside the grid, and if so, move it 1 m upstream along the river
-                if not self.mask.values[outflow_row, outflow_col]:
+                iteration_count = 0
+                while not self.mask.values[outflow_row, outflow_col]:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
@@ -979,10 +1003,22 @@ class SFINCSRootModel:
                         (outflow_point.x, outflow_point.y),
                         self.mask.rio.transform().to_gdal(),
                     )
-
-                    # if still outside the grid, raise error for boundary rivers
-                    if not self.mask.values[outflow_row, outflow_col]:
+                    iteration_count += 1
+                    self.logger.info(
+                        f"Outflow point is outside of the model grid. Moving 1 m upstream along the river. Iteration {iteration_count}."
+                    )
+                    if (
+                        iteration_count > 5
+                        and not self.mask.values[outflow_row, outflow_col]
+                    ):
                         export_diagnostics(outflow_point)
+                        self.logger.error(
+                            "Outflow point is still outside the model grid after 5 iterations. This is unexpected, please check the river geometries and subbasins boundary."
+                        )
+                        # export original outflow point for debugging
+                        gpd.GeoDataFrame(
+                            [nearest_boundary_point], columns=["geometry"]
+                        ).to_file(self.path / "debug_outflow_point_original.gpkg")
                         raise ValueError(
                             "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
                         )
@@ -1097,6 +1133,13 @@ class SFINCSRootModel:
         """
         rivers_with_outflow_boundary = self.rivers[self.rivers["is_outflow_boundary"]]
 
+        if rivers_with_outflow_boundary.empty:
+            self.logger.warning("No rivers with outflow boundaries found.")
+            return
+
+        # Clean NaN values in mask to avoid issues
+        mask_values = np.nan_to_num(self.mask.values, nan=0.0)
+
         for river_idx, river in rivers_with_outflow_boundary.iterrows():
             outflow_point_xy = river["outflow_point_xy"]
 
@@ -1106,7 +1149,7 @@ class SFINCSRootModel:
             )
 
             outflow_mask: TwoDArrayBool = create_outflow_in_mask(
-                self.mask.values,
+                mask_values,
                 row=outflow_row,
                 col=outflow_col,
                 width_cells=(
@@ -1433,7 +1476,7 @@ class SFINCSRootModel:
         discharge_by_river: pd.DataFrame,
         return_periods: list[int | float],
         prefix: str = "Q",
-        min_exceed: int = 30,
+        min_exceed: int = 1,
         nboot: int = 2000,
         fixed_shape: float | None = None,
         fixed_scale: float | None = None,
@@ -1539,6 +1582,7 @@ class SFINCSRootModel:
         hydrograph_shape: str = "triangular",
         shape_window_days: float = 3.5,
         shape_tolerance: float = 0.1,
+        output_root: Path | None = None,
     ) -> None:
         """Estimate discharge for specified return periods and create hydrographs.
 
@@ -1563,6 +1607,9 @@ class SFINCSRootModel:
             shape_tolerance: Fractional tolerance (±) around anchor discharge
                 used to identify events. Only used for ``'direct'`` and
                 ``'anchor'``. Default 0.1 (±10%).
+            output_root: Run-specific directory for generated files. Defaults to the
+                SFINCS model directory.
+
 
         Raises:
             ValueError: If ``hydrograph_shape`` is not one of ``'triangular'``,
@@ -1570,6 +1617,10 @@ class SFINCSRootModel:
             ValueError: If fewer than 3 historical events are found near the
                 anchor discharge when using ``'direct'`` or ``'anchor'``.
         """
+        if output_root is None:
+            output_root = self.path
+        output_root.mkdir(parents=True, exist_ok=True)
+
         if hydrograph_shape not in ("triangular", "direct", "anchor"):
             raise ValueError(
                 f"Unknown hydrograph_shape '{hydrograph_shape}'. "
@@ -1599,14 +1650,16 @@ class SFINCSRootModel:
             fixed_shape=fixed_shape,
             selection_strategy=selection_strategy,
             write_figures=write_figures,
-            output_directory=self.figures_path / "return_periods",
+            output_directory=(
+                output_root / "figures" / "return_periods" if write_figures else None
+            ),
         )
 
         for return_period in return_periods:
             self.rivers[f"hydrograph_{return_period}"] = None
 
         figures_path = (
-            self.figures_path / "hydrograph_shapes" if write_figures else None
+            output_root / "figures" / "hydrograph_shapes" if write_figures else None
         )
 
         for river_idx in rivers_with_return_period.index:
@@ -1666,7 +1719,7 @@ class SFINCSRootModel:
                     hydrograph_dict
                 )
 
-        export_rivers(self.path, self.rivers, postfix="_return_periods")
+        export_rivers(output_root, self.rivers, postfix="_return_periods")
 
     @property
     def root(self) -> Path:
@@ -1692,6 +1745,7 @@ class SFINCSRootModel:
         Args:
             *args: Positional arguments to pass to the SFINCSSimulation constructor.
             **kwargs: Keyword arguments to pass to the SFINCSSimulation constructor.
+                Use `simulation_root` to create the simulation outside of the root model folder.
 
         Returns:
             An instance of SFINCSSimulation with the configured forcing.
@@ -1711,6 +1765,7 @@ class SFINCSRootModel:
         offset: xr.DataArray,
         sea_level_rise: pd.DataFrame | None = None,
         year: int | None = None,
+        simulation_root: Path | None = None,
     ) -> SFINCSSimulation:
         """
         Creates a SFINCS simulation with coastal water level forcing for a specified return period.
@@ -1724,6 +1779,8 @@ class SFINCSRootModel:
             offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
             sea_level_rise: A DataFrame containing sea level rise data.
             year: The year for which to apply sea level rise adjustments.
+            simulation_root: Directory in which the simulation folder is created. If None,
+                the simulation is created in the 'simulations' folder of the root model.
         Returns:
             An instance of SFINCSSimulation configured with coastal water level forcing.
         Raises:
@@ -1783,7 +1840,9 @@ class SFINCSRootModel:
             create_max_intensity_map=True,
         )
 
-        simulation: SFINCSSimulation = self.create_simulation(event=event)
+        simulation: SFINCSSimulation = self.create_simulation(
+            event=event, simulation_root=simulation_root
+        )
 
         # set coastal forcing model
         simulation.set_coastal_waterlevel_forcing(
@@ -1995,6 +2054,8 @@ class SFINCSSimulation:
         spinup_seconds: int = 86400,
         write_figures: bool = False,
         flood_map_output_interval_seconds: int | None = None,
+        setup_river_outflow: bool = True,
+        simulation_root: Path | None = None,
     ) -> None:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
@@ -2007,6 +2068,10 @@ class SFINCSSimulation:
             write_figures: Whether to generate and save figures for the model. Defaults to False.
             flood_map_output_interval_seconds: The interval in seconds at which to output flood maps. Defaults to None (15 minutes).
                 None means no output.
+            setup_river_outflow: Whether to set up river outflow boundary conditions. Defaults to True.
+            simulation_root: Directory in which the simulation folder is created. If None, the
+                simulation is created in the 'simulations' folder of the root model. Setting this
+                allows the (read-only) root model to be located elsewhere than the simulations.
 
         Raises:
             ValueError: If flood_map_output_interval_seconds is not None when exporting final intensity.
@@ -2014,6 +2079,7 @@ class SFINCSSimulation:
         self.logger = logger
         self.event = event
         self.write_figures = write_figures
+        self._simulation_root: Path | None = simulation_root
 
         # Read a new independent instance of the SFINCS model to avoid shared state
         self.sfincs_root_model = SFINCSRootModel(
@@ -2656,7 +2722,12 @@ class SFINCSSimulation:
     @property
     def path(self) -> Path:
         """Returns the root directory for the SFINCS simulation files."""
-        folder: Path = self.root_path / "simulations" / self.name
+        simulation_root: Path = (
+            self._simulation_root
+            if self._simulation_root is not None
+            else self.root_path / "simulations"
+        )
+        folder: Path = simulation_root / self.name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
