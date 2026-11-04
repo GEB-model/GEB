@@ -18,7 +18,10 @@ import pytest
 import shapely.geometry as sg
 
 from geb.evaluate.workflows.dashboard import (
+    _ESA_WORLDCOVER_CLASSES,
+    _ESA_WORLDCOVER_TILES,
     StationChartBundleWriter,
+    _add_land_cover_layer,
     _add_waterbody_layers,
     _build_station_marker_payload,
     _build_timeseries_data,
@@ -597,6 +600,49 @@ def test_write_discharge_dashboard(tmp_path: Path) -> None:
     assert "Download GeoJSON" in html_content
     assert "exportStationGeoJson" in html_content
     assert "Rivers" in html_content
+    # The land cover overlay is offered in the layer menu but hidden initially.
+    assert "esa-worldcover-map-10m-2021-v2_map" in html_content
+    assert "Land cover (ESA WorldCover 2021)" in html_content
+    assert "Bedrock age (Europe, BGR)" in html_content
+    assert "Bedrock rock type (Europe, BGR)" in html_content
+    assert "data-geology-opacity" in html_content
+    assert "geb-landcover-subpanel" in html_content
+    assert "data-landcover-opacity" in html_content
+
+
+def test_add_land_cover_layer() -> None:
+    """Test that WorldCover loads on demand above basemaps with export support."""
+    discharge_map: folium.Map = folium.Map(tiles=None)
+    land_cover_layer: folium.TileLayer = _add_land_cover_layer(discharge_map)
+    assert land_cover_layer.get_name() in discharge_map._children
+    assert land_cover_layer.show is False
+    assert land_cover_layer.tiles == _ESA_WORLDCOVER_TILES
+    assert land_cover_layer.overlay is True
+    assert land_cover_layer.options["cross_origin"] is True
+    # Avoid unsupported zoom levels and upscale native tiles when zooming in.
+    assert land_cover_layer.options["min_zoom"] == 6
+    assert land_cover_layer.options["max_native_zoom"] == 14
+    assert land_cover_layer.options["max_zoom"] == 19
+    assert land_cover_layer.options["bounds"] == [[-60, -180], [83, 180]]
+    assert (
+        f"{land_cover_layer.get_name()}.addTo(" not in discharge_map.get_root().render()
+    )
+    opacity: float = float(cast(float, land_cover_layer.options["opacity"]))
+    assert 0.0 < opacity <= 1.0
+    # Basemaps use Leaflet's default z-index of 1; the overlay must stay above them.
+    z_index: int = int(cast(int, land_cover_layer.options["z_index"]))
+    assert z_index > 1
+
+
+def test_esa_worldcover_classes_are_complete() -> None:
+    """Test that the land cover legend covers all eleven WorldCover classes with valid colours."""
+    class_codes: list[int | str] = [
+        land_cover_class["code"] for land_cover_class in _ESA_WORLDCOVER_CLASSES
+    ]
+    assert class_codes == [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
+    for land_cover_class in _ESA_WORLDCOVER_CLASSES:
+        assert re.fullmatch(r"#[0-9A-F]{6}", str(land_cover_class["color"]))
+        assert land_cover_class["label"]
 
 
 def test_build_station_chart_data_with_bankfull_discharge() -> None:

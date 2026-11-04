@@ -142,6 +142,10 @@ def find_dashboard_excluded_stations(
 ) -> gpd.GeoDataFrame:
     """Identify stations omitted by snapping, reporting, or evaluation filters.
 
+    Notes:
+        Empty inventories are supported. Missing, nonnumeric, nonfinite, and
+        nonpositive station upstream areas receive a missing-area reason.
+
     Args:
         evaluated: Stations with validated or diagnostic scores.
         excluded: Stations already excluded by snapping or report checks.
@@ -168,8 +172,13 @@ def find_dashboard_excluded_stations(
         "No valid river match within 1.5 km and 10% upstream area.",
         index=inventory.index,
     )
-    area: pd.Series = inventory["discharge_observations_upstream_area_m2"]
-    reasons.loc[~np.isfinite(area) | (area <= 0)] = "Missing station upstream area."
+    # Empty GeoParquet columns can have object dtype, which isfinite cannot handle.
+    station_upstream_area_m2: np.ndarray = pd.to_numeric(
+        inventory["discharge_observations_upstream_area_m2"], errors="coerce"
+    ).to_numpy(dtype=np.float64, na_value=np.nan)
+    reasons.loc[
+        ~np.isfinite(station_upstream_area_m2) | (station_upstream_area_m2 <= 0)
+    ] = "Missing station upstream area."
     reasons.loc[reasons.index.intersection(snapped.index)] = (
         "No paired discharge record meets the evaluation period or record-length requirements."
     )

@@ -24,11 +24,17 @@ import scipy.stats
 import shapely
 from branca.element import Figure
 from folium import MacroElement, TileLayer
+from folium.raster_layers import ImageOverlay
 from jinja2 import Environment, Template
 from jinja2.utils import htmlsafe_json_dumps
 from pandas.api.typing import NaTType
 
 from geb.evaluate.workflows import discharge_characteristics, discharge_helpers
+from geb.evaluate.workflows.dashboard_elevation import (
+    add_fathom_dem_layer,
+    add_karst_layer,
+)
+from geb.evaluate.workflows.dashboard_geology import add_geology_layers
 from geb.evaluate.workflows.discharge_characteristics import (
     DASHBOARD_CATCHMENT_CHARACTERISTICS,
     CatchmentCharacteristic,
@@ -59,6 +65,34 @@ _ESRI_TOPO_ATTR = (
     "METI, Mapwithyou, NOSTRA, © OpenStreetMap contributors, and the GIS "
     "user community"
 )
+
+# Stream tiles to keep the dashboard small; the service supplies zoom levels 6–14.
+_ESA_WORLDCOVER_TILES: str = (
+    "https://wmts.terrascope.be/?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+    "&LAYER=esa-worldcover-map-10m-2021-v2_map&STYLE=default&FORMAT=image/png"
+    "&TILEMATRIXSET=EPSG:3857&TILEMATRIX={z}&TILECOL={x}&TILEROW={y}"
+    "&TIME=2021-01-01"
+)
+_ESA_WORLDCOVER_ATTR: str = (
+    "Land cover: © ESA WorldCover project 2021 / Contains modified Copernicus "
+    "Sentinel data (2021) processed by ESA WorldCover consortium (CC BY 4.0)"
+)
+_ESA_WORLDCOVER_OPACITY: float = 0.7
+
+# Official ESA WorldCover v200 class codes, names, and legend colours.
+_ESA_WORLDCOVER_CLASSES: list[dict[str, str | int]] = [
+    {"code": 10, "label": "Tree cover", "color": "#006400"},
+    {"code": 20, "label": "Shrubland", "color": "#FFBB22"},
+    {"code": 30, "label": "Grassland", "color": "#FFFF4C"},
+    {"code": 40, "label": "Cropland", "color": "#F096FF"},
+    {"code": 50, "label": "Built-up", "color": "#FA0000"},
+    {"code": 60, "label": "Bare / sparse vegetation", "color": "#B4B4B4"},
+    {"code": 70, "label": "Snow and ice", "color": "#F0F0F0"},
+    {"code": 80, "label": "Permanent water bodies", "color": "#0064C8"},
+    {"code": 90, "label": "Herbaceous wetland", "color": "#0096A0"},
+    {"code": 95, "label": "Mangroves", "color": "#00CF75"},
+    {"code": 100, "label": "Moss and lichen", "color": "#FAE6A0"},
+]
 
 StationMarkerIndex = dict[str, str | list[str]]
 
@@ -248,6 +282,43 @@ class _StationsPaneMacro(MacroElement):
         )
 
 
+def _add_land_cover_layer(discharge_map: folium.Map) -> TileLayer:
+    """Add a hidden ESA WorldCover 2021 overlay using public Terrascope tiles.
+
+    Notes:
+        Tiles load only when enabled and require internet access. Native zoom
+        limits avoid requests beyond the service's supported range. CORS allows
+        the same tiles to be included in the dashboard's PNG export.
+
+    Args:
+        discharge_map: Dashboard map receiving the overlay.
+
+    Returns:
+        The land cover tile layer, initially hidden with 70 percent opacity.
+    """
+    folium.map.CustomPane("landCoverPane", z_index=300, pointer_events=False).add_to(
+        discharge_map
+    )
+    land_cover_layer: TileLayer = TileLayer(
+        tiles=_ESA_WORLDCOVER_TILES,
+        attr=_ESA_WORLDCOVER_ATTR,
+        name="Land cover (ESA WorldCover 2021)",
+        overlay=True,
+        show=False,
+        opacity=_ESA_WORLDCOVER_OPACITY,
+        pane="landCoverPane",
+        # Basemaps are re-added on switching; keep land cover above them.
+        z_index=10,
+        min_zoom=6,
+        max_native_zoom=14,
+        max_zoom=19,
+        bounds=[[-60, -180], [83, 180]],
+        cross_origin=True,
+    )
+    land_cover_layer.add_to(discharge_map)
+    return land_cover_layer
+
+
 def read_run_completion_time(run_output_folder: Path | None) -> str | None:
     """Read the completion timestamp of a simulation run from done.txt if available.
 
@@ -307,6 +378,8 @@ def create_discharge_dashboard(
     include_return_period_plots: bool = True,
     run_name: str = "default",
     reservoir_period: tuple[int, int, int] | None = None,
+    elevation_path: Path | None = None,
+    karst_path: Path | None = None,
 ) -> dict[str, str]:
     """Create only the discharge evaluation dashboard.
 
@@ -319,6 +392,8 @@ def create_discharge_dashboard(
     Args:
         evaluation_folder: Folder containing saved discharge evaluation metrics.
         run_output_folder: Output folder of the selected simulation run.
+        karst_path: Optional model groundwater/karst_fraction Zarr raster (0–1).
+        elevation_path: Optional model FathomDEM Zarr raster (elevation in meters).
         geometry_files: Model geometry paths keyed by dataset name.
         table_files: Model observation table paths keyed by dataset name.
         minimum_upstream_area_km2: Minimum routing area for evaluation (km²).
@@ -470,6 +545,8 @@ def create_discharge_dashboard(
         run_output_folder=run_output_folder,
         run_name=run_name,
         completion_date=completion_time,
+        elevation_path=elevation_path,
+        karst_path=karst_path,
     )
     logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
     return {"dashboard": str(dashboard_path)}
@@ -490,6 +567,8 @@ def write_discharge_dashboard(
     run_name: str | None = None,
     completion_date: str | datetime.datetime | None = None,
     reservoir_period: tuple[int, int, int] | None = None,
+    elevation_path: Path | None = None,
+    karst_path: Path | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -508,6 +587,9 @@ def write_discharge_dashboard(
         rivers: WGS84 river network shown on the map.
         chart_bundles: List of inlined Base64-encoded compressed chart bundle payloads.
         station_bundle_indices: Mapping from station ID string to its integer bundle index.
+        karst_path: Optional model groundwater/karst_fraction Zarr raster (0–1).
+        elevation_path: Optional model FathomDEM Zarr raster (elevation in meters).
+            Adds an embedded overview capped at 1024 pixels per side when provided.
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
             (2 = reservoir) and polygon geometries. Centroids are used for dot
             placement.
@@ -581,6 +663,18 @@ def write_discharge_dashboard(
         cross_origin=True,
     )
     sat_tile.add_to(discharge_map)
+    land_cover_layer: TileLayer = _add_land_cover_layer(discharge_map)
+    geology_layers: list[tuple[folium.raster_layers.WmsTileLayer, dict[str, Any]]] = (
+        add_geology_layers(discharge_map)
+    )
+    dem_overlay: tuple[ImageOverlay, dict[str, Any]] | None = (
+        add_fathom_dem_layer(discharge_map, elevation_path)
+        if elevation_path is not None
+        else None
+    )
+    karst_overlay: tuple[ImageOverlay, dict[str, Any]] | None = (
+        add_karst_layer(discharge_map, karst_path) if karst_path is not None else None
+    )
     discharge_map.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
     catchment_layer: folium.FeatureGroup = folium.FeatureGroup(
         name="Catchment",
@@ -859,7 +953,20 @@ def write_discharge_dashboard(
             "layer": river_layer.get_name(),
             "active": True,
         },
+        {
+            "id": "landcover",
+            "name": "Land cover (ESA WorldCover 2021)",
+            "layer": land_cover_layer.get_name(),
+            "active": False,
+            "opacity": _ESA_WORLDCOVER_OPACITY,
+            "classes": _ESA_WORLDCOVER_CLASSES,
+        },
     ]
+    if dem_overlay is not None:
+        overlays_data.append(dem_overlay[1])
+    if karst_overlay is not None:
+        overlays_data.append(karst_overlay[1])
+    overlays_data.extend(metadata for _, metadata in geology_layers)
     for wb_layer in waterbody_layers:
         overlays_data.append(
             {
@@ -2373,7 +2480,8 @@ def _inject_station_layer_legend_script(
         caravan_available_count: Stations matched to GRDC-Caravan.
         station_count: Total evaluated stations.
         basemaps: Basemap definitions with layer IDs, labels, and initial active state.
-        overlays: Topographic overlay layer definitions with names, labels, and initial states.
+        overlays: Overlay layer definitions with names, labels, and initial states.
+            The land cover overlay also carries its opacity and class legend.
         excluded_stations: Serialized excluded station markers for search resolution.
         exclusion_summary: Optional summary counts of excluded stations and reasons.
         snapping_layer: Optional name of the station snapping details feature group.

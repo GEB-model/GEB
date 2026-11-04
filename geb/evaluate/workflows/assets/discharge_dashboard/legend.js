@@ -295,6 +295,39 @@
               c.stroke();
             }
           });
+        } else if (id === 'landcover') {
+          if (layer.options.opacity === 0 || map.getZoom() < layer.options.minZoom) return;
+          ov.classes.forEach(function(cls) {
+            visibleItems.push({
+              label: cls.label,
+              draw: function(c, x, y) {
+                c.fillStyle = cls.color;
+                c.fillRect(x, y - 8, 12, 9);
+              }
+            });
+          });
+        } else if (id === 'geology_age' || id === 'geology_lithology') {
+          if (layer.options.opacity === 0 || map.getZoom() < layer.options.minZoom) return;
+          (ov.classes || []).forEach(function(cls) {
+            visibleItems.push({
+              label: 'Bedrock: ' + cls.label,
+              draw: function(c, x, y) {
+                c.fillStyle = cls.color;
+                c.fillRect(x, y - 8, 12, 9);
+              }
+            });
+          });
+        } else if (id === 'dem' || id === 'karst') {
+          if (layer.options.opacity === 0) return;
+          visibleItems.push({
+            label: id === 'karst' ? 'Karst coverage: 0–100%' : 'FathomDEM: ' + ov.minimum_m.toFixed(0) + ' to ' + ov.maximum_m.toFixed(0) + ' m',
+            draw: function(c, x, y) {
+              var gradient = c.createLinearGradient(x, 0, x + 14, 0);
+              ov.colors.forEach(function(color, index) { gradient.addColorStop(index / (ov.colors.length - 1), color); });
+              c.fillStyle = gradient;
+              c.fillRect(x, y - 8, 14, 9);
+            }
+          });
         } else if (id === 'catchment') {
           visibleItems.push({
             label: 'Catchment',
@@ -523,14 +556,21 @@
     ctx.fillStyle = isDark ? '#020617' : '#f8fafc';
     ctx.fillRect(0, 0, w, h);
 
-    // 1. Draw tile images onto exportCanvas
-    var tileImgs = mapContainer.querySelectorAll('.leaflet-tile-pane img');
-    tileImgs.forEach(function(img) {
+    // Raster panes keep elevation below land cover and all vector features.
+    var rasterImgs = Array.from(mapContainer.querySelectorAll('.leaflet-tile, .leaflet-image-layer'));
+    rasterImgs.sort(function(a, b) {
+      var paneDifference = Number(getComputedStyle(a.closest('.leaflet-pane')).zIndex) - Number(getComputedStyle(b.closest('.leaflet-pane')).zIndex);
+      return paneDifference || Number((a.closest('.leaflet-layer') || a).style.zIndex) - Number((b.closest('.leaflet-layer') || b).style.zIndex);
+    });
+    rasterImgs.forEach(function(img) {
       if (img.complete && img.naturalWidth > 0 && img.style.display !== 'none' && img.style.visibility !== 'hidden') {
         var r = img.getBoundingClientRect();
+        var rasterContainer = img.closest('.leaflet-layer') || img;
         try {
+          ctx.globalAlpha = Number(rasterContainer.style.opacity || 1);
           ctx.drawImage(img, r.left - mapRect.left, r.top - mapRect.top, r.width, r.height);
         } catch(e) {}
+        ctx.globalAlpha = 1;
       }
     });
 
@@ -879,6 +919,43 @@
               "<div class=\"geb-subpanel-row\"><span style=\"color:#d97706\">●</span> Other reasons: <b>" + exclusionSummary.otherCount + "</b></div>" +
               "<div class=\"geb-subpanel-note\">Hover or click a red station marker for reason.</div>" +
               "</div>";
+          } else if (ov.id === "landcover" || ov.id === "geology_age" || ov.id === "geology_lithology") {
+            var isGeology = ov.id !== "landcover";
+            var currentOpacity = layer ? layer.options.opacity : ov.opacity;
+            var opacityPercent = Math.round(currentOpacity * 100);
+            var tiledOpacityAttribute = isGeology ? "data-geology-opacity" : "data-landcover-opacity";
+            var tiledOpacityLabel = isGeology ? ov.name + " opacity" : "Land cover opacity";
+            var tiledPanelId = isGeology ? "geb-" + ov.id + "-subpanel" : "geb-landcover-subpanel";
+            var tiledNote = isGeology ?
+              "IGME5000 · © BGR Hannover · 1:5 million pre-Quaternary bedrock, beneath younger cover. Requires internet; selected legend entries below. " + escapeHtml(ov.note) +
+              " <a href=\"" + escapeHtml(ov.legend_url) + "\" target=\"_blank\" rel=\"noopener\">Full official legend</a>." :
+              "ESA WorldCover 2021 · Terrascope. Requires internet access; zoom in to level 6 or closer.";
+            subpanelHtml = "<div class=\"geb-subpanel\" id=\"" + tiledPanelId + "\" style=\"" + (isChecked ? "" : "display:none;") + "\">" +
+              "<div class=\"geb-subpanel-row\">Opacity " +
+              "<input aria-label=\"" + escapeHtml(tiledOpacityLabel) + "\" type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"" + opacityPercent + "\" " + tiledOpacityAttribute + "=\"" + ov.layer + "\" class=\"geb-landcover-opacity\">" +
+              "<span class=\"geb-landcover-opacity-value\">" + opacityPercent + "%</span></div>" +
+              "<div class=\"geb-subpanel-note\">" + tiledNote + "</div>" +
+              (ov.classes || []).map(function(cls) {
+                return "<div class=\"geb-subpanel-row\"><i class=\"geb-landcover-swatch\" style=\"background:" + escapeHtml(cls.color) + "\"></i>" + escapeHtml(cls.label) + "</div>";
+              }).join("") +
+              "</div>";
+          } else if (ov.id === "dem" || ov.id === "karst") {
+            var isKarst = ov.id === "karst";
+            var rasterPanelId = isKarst ? "geb-karst-subpanel" : "geb-dem-subpanel";
+            var opacityAttribute = isKarst ? "data-karst-opacity" : "data-dem-opacity";
+            var opacityLabel = isKarst ? "Karst coverage opacity" : "Elevation opacity";
+            var minimumLabel = isKarst ? "0%" : ov.minimum_m.toFixed(0) + " m";
+            var maximumLabel = isKarst ? "100%" : ov.maximum_m.toFixed(0) + " m";
+            var rasterNote = isKarst ? "Mapped karst coverage (0–100%); zero coverage is transparent. Runoff capture also depends on model settings." : "FathomDEM · Elevation (m). Downsampled overview. © Hawker et al. (2025), CC BY-NC-SA 4.0.";
+            var rasterOpacityPercent = Math.round((layer ? layer.options.opacity : ov.opacity) * 100);
+            subpanelHtml = "<div class=\"geb-subpanel\" id=\"" + rasterPanelId + "\" style=\"" + (isChecked ? "" : "display:none;") + "\">" +
+              "<div class=\"geb-subpanel-row\">Opacity " +
+              "<input aria-label=\"" + opacityLabel + "\" type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"" + rasterOpacityPercent + "\" " + opacityAttribute + "=\"" + ov.layer + "\" class=\"geb-landcover-opacity\">" +
+              "<span class=\"geb-landcover-opacity-value\">" + rasterOpacityPercent + "%</span></div>" +
+              "<div style=\"height:10px;border-radius:2px;background:linear-gradient(to right," + ov.colors.join(",") + ");\"></div>" +
+              "<div class=\"geb-subpanel-row\" style=\"justify-content:space-between\"><span>" + minimumLabel + "</span><span>" + maximumLabel + "</span></div>" +
+              "<div class=\"geb-subpanel-note\">" + rasterNote + " Preview (" + ov.width + " × " + ov.height + " pixels).</div>" +
+              "</div>";
           } else if (ov.id === "snapping") {
             subpanelHtml = "<div class=\"geb-subpanel\" id=\"geb-snapping-subpanel\" style=\"" + (isChecked ? "" : "display:none;") + "\">" +
               "<div class=\"geb-subpanel-title\">Snapping: 1 → 2 → 3</div>" +
@@ -1018,6 +1095,12 @@
       var snapPanel = menuRoot.querySelector("#geb-snapping-subpanel");
       if (snapPanel) snapPanel.style.display = isChecked ? "" : "none";
     }
+    overlayConfigs.forEach(function(ov) {
+      if ((ov.id === "landcover" || ov.id === "dem" || ov.id === "karst" || ov.id === "geology_age" || ov.id === "geology_lithology") && ov.layer === layerName) {
+        var rasterPanel = menuRoot.querySelector("#geb-" + ov.id + "-subpanel");
+        if (rasterPanel) rasterPanel.style.display = isChecked ? "" : "none";
+      }
+    });
   }
 
   function resolveMarkers(station) {
@@ -1197,6 +1280,17 @@
       });
     });
 
+    var opacitySliders = menuRoot.querySelectorAll("input[data-landcover-opacity], input[data-dem-opacity], input[data-karst-opacity], input[data-geology-opacity]");
+    opacitySliders.forEach(function(slider) {
+      slider.addEventListener("input", function(e) {
+        var opacityLayer = window[e.target.getAttribute("data-landcover-opacity") || e.target.getAttribute("data-dem-opacity") || e.target.getAttribute("data-karst-opacity") || e.target.getAttribute("data-geology-opacity")];
+        var opacityFraction = Number(e.target.value) / 100;
+        if (opacityLayer && opacityLayer.setOpacity) opacityLayer.setOpacity(opacityFraction);
+        var valueLabel = e.target.parentNode.querySelector(".geb-landcover-opacity-value");
+        if (valueLabel) valueLabel.textContent = e.target.value + "%";
+      });
+    });
+
     var searchInput = menuRoot.querySelector("#geb-station-search-input");
     var searchClear = menuRoot.querySelector("#geb-station-search-clear");
     if (searchInput) {
@@ -1289,7 +1383,7 @@
     ".geb-basemap-row{display:flex;gap:12px;margin-bottom:6px;font-size:11px}" +
     ".geb-basemap-label{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-weight:500}" +
     ".geb-overlays-list{display:flex;flex-direction:column;gap:5px;font-size:11px}" +
-    ".geb-overlay-item{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:500}" +".geb-overlay-entry{display:flex;flex-direction:column}" +".geb-subpanel{margin:3px 0 5px 18px;padding:6px 8px;border-radius:6px;font-size:10px;line-height:1.4}" +".geb-subpanel-title{font-weight:700;margin-bottom:3px}" +".geb-subpanel-row{display:flex;align-items:center;gap:5px;margin:1px 0}" +".geb-subpanel-note{display:block;margin-top:4px;font-size:9px;line-height:1.3}" +".geb-snap-step{display:flex;align-items:center;gap:6px;margin:2px 0}" +".geb-snap-step i{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;color:white;font-style:normal;font-weight:bold;font-size:9px}" +".geb-snapping-status{margin-top:4px;font-size:9px;font-weight:600}" +
+    ".geb-overlay-item{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:500}" +".geb-overlay-entry{display:flex;flex-direction:column}" +".geb-subpanel{margin:3px 0 5px 18px;padding:6px 8px;border-radius:6px;font-size:10px;line-height:1.4}" +".geb-subpanel-title{font-weight:700;margin-bottom:3px}" +".geb-subpanel-row{display:flex;align-items:center;gap:5px;margin:1px 0}" +".geb-subpanel-note{display:block;margin-top:4px;font-size:9px;line-height:1.3}" +".geb-snap-step{display:flex;align-items:center;gap:6px;margin:2px 0}" +".geb-snap-step i{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;color:white;font-style:normal;font-weight:bold;font-size:9px}" +".geb-snapping-status{margin-top:4px;font-size:9px;font-weight:600}" +".geb-landcover-swatch{display:inline-block;width:12px;height:10px;border-radius:2px;border:1px solid rgba(0,0,0,0.25);flex:none}" +".geb-landcover-opacity{flex:1;min-width:60px;margin:0 4px}" +".geb-landcover-opacity-value{min-width:30px;text-align:right}" +
     // Dark Theme Styles
     "[data-geb-theme=\"dark\"] .geb-unified-menu{background:rgba(15,23,42,.98);border:1px solid #334155;color:#f8fafc}" +
     "[data-geb-theme=\"dark\"] .geb-unified-header{background:#020617;color:#f8fafc;border-bottom:1px solid #1e293b}" +
