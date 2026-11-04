@@ -1827,9 +1827,9 @@ class Households(AgentBaseClass):
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
                 ):
-                    climrisk_config = self.model.config["agent_settings"].get(
-                        "climrisk", {}
-                    ) or {}
+                    climrisk_config = (
+                        self.model.config["agent_settings"].get("climrisk", {}) or {}
+                    )
                     if self.model.current_time.year > self.start_adaptation_year and (
                         climrisk_config.get("project_income", False)
                         or climrisk_config.get("project_costs", False)
