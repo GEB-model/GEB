@@ -1,4 +1,5 @@
 # dev
+- Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
 
 # v1.0.0b37
