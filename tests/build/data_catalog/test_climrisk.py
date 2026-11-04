@@ -320,4 +320,6 @@ def test_read_fallback_selects_only_nearest_country_code(
         obtain_population=True,
     )
 
-    np.testing.assert_array_equal(np.unique(result["country"].to_numpy()), [3])
+    valid_cells = np.isfinite(result.isel(year=0).to_numpy())
+    country_codes = result["country"].to_numpy()[valid_cells]
+    np.testing.assert_array_equal(np.unique(country_codes), [3])

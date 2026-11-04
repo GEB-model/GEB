@@ -33,8 +33,7 @@ class AR6(Adapter):
             The AR6 adapter instance.
         """
         if not self.is_ready:
-            if not self.path.exists():
-                fetch_and_save(url=url, file_path=self.path, logger=self.logger)
+            fetch_and_save(url=url, file_path=self.path, logger=self.logger)
         return self
 
     def read(self, scenario: str | int, projection_quantile: float) -> xr.Dataset:
