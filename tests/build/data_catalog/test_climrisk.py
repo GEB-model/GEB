@@ -318,6 +318,7 @@ def test_read_fallback_selects_only_nearest_country_code(
         damage_function=None,
         warming_percentile=None,
         obtain_population=True,
+        reference_year=2010,
     )
 
     valid_cells = np.isfinite(result.isel(year=0).to_numpy())
