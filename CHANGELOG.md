@@ -1,4 +1,5 @@
 # dev
+- Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
 - Added household relocation intention–behavior adjustment using the configured `intention_behavior_gap`.
 - Applied projected GDP changes to government dike investment and maintenance costs when `agent_settings.climrisk.project_costs` is enabled.
