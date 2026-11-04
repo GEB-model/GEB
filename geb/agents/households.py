@@ -68,6 +68,7 @@ class HouseholdVariables(Bucket):
     agriculture_curve: pd.DataFrame
     road_curves: pd.DataFrame
     adapted: DynamicArray
+    floodproofing_years_left: DynamicArray
     max_dam_buildings_content: float
     max_dam_rail: float
     max_dam_forest_m2: float
@@ -291,6 +292,44 @@ class Households(AgentBaseClass):
             np.isin(self.var.building_id_of_household.data, flooded_building_ids)
         )[0]
 
+    @property
+    def pathway_mode(self) -> bool:
+        """Whether the government adaptation pathway mode is active.
+
+        Returns:
+            True if government adaptation is enabled in pathway mode.
+        """
+        adaptation_config = (
+            self.model.config["agent_settings"]
+            .get("government", {})
+            .get("adaptation", {})
+        )
+        return (
+            adaptation_config.get("enabled", False)
+            and adaptation_config.get("mode") == "pathway"
+        )
+
+    def remaining_floodproofing_uptake(self) -> int:
+        """Number of households that can still floodproof under the 55% uptake cap.
+
+        Only used in the government adaptation pathway mode. Only 55% of households
+        in the flood zone is willing to floodproof, so the cumulative number of
+        adapted households (government-supported and self-adapted) in the flood
+        zone is capped at that fraction.
+
+        Returns:
+            Number of additional households in the flood zone that can still adapt.
+        """
+        if "flooded" not in self.buildings.columns:
+            self.update_building_attributes()
+        flooded_building_ids = self.buildings.loc[self.buildings["flooded"], "id"]
+        households_in_flood_zone = np.where(
+            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
+        )[0]
+        max_adapted = int(0.55 * len(households_in_flood_zone))
+        already_adapted = int(self.var.adapted.data[households_in_flood_zone].sum())
+        return max(max_adapted - already_adapted, 0)
+
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
@@ -409,6 +448,12 @@ class Households(AgentBaseClass):
 
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
+
+        # initiate array with remaining lifespan of floodproofing in years [-1 = not tracked].
+        # Only used in the government adaptation pathway mode.
+        self.var.floodproofing_years_left = DynamicArray(
+            np.full(self.n, -1, np.int32), max_n=self.max_n
+        )
 
         # initiate array for warning state [0 = not warned, 1 = warned]
         self.var.warning_reached = DynamicArray(
@@ -700,9 +745,15 @@ class Households(AgentBaseClass):
         self.var.years_since_last_flood.data += 1
 
         # Here we update flood risk perception based on actual floods that have happened and whether a household was flooded (yes/no)
-        if self.config["adapt_to_actual_floods"] and self.model.multiverse_name is None:
+        if self.config["adapt_to_actual_floods"]:
+            # Hypothetical runs (multiverse_name set) skip actual-flood updates, since the
+            # replayed flood is already in the household state. They also must not fall
+            # through to the random return-period flood in the else branch.
+            flood_events = (
+                self.flood_events if self.model.multiverse_name is None else []
+            )
             # Find the flood event that corresponds to the current time (in the model)
-            for event in self.flood_events:
+            for event in flood_events:
                 end: datetime = event["end_time"]
 
                 if (
@@ -1075,6 +1126,22 @@ class Households(AgentBaseClass):
 
         # execute strategy
         household_adapting = np.where(EU_adapt > EU_do_not_adapt)[0]
+
+        # in the pathway mode the 55% uptake cap also applies to self-adaptation:
+        # if more households want to adapt than the cap allows, the ones with the
+        # largest utility gain adapt
+        if self.pathway_mode:
+            new_adapters = household_adapting[
+                self.var.adapted.data[household_adapting] == 0
+            ]
+            remaining_uptake = self.remaining_floodproofing_uptake()
+            if len(new_adapters) > remaining_uptake:
+                utility_gain = (EU_adapt - EU_do_not_adapt)[new_adapters]
+                rejected = new_adapters[
+                    np.argsort(utility_gain)[::-1][remaining_uptake:]
+                ]
+                household_adapting = np.setdiff1d(household_adapting, rejected)
+
         self.var.adapted[household_adapting] = 1
         self.var.time_adapted[household_adapting] += 1
 
@@ -1305,18 +1372,10 @@ class Households(AgentBaseClass):
 
     def step(self) -> None:
         """Advance the households by one time step."""
-        # Skip household self-adaptation during spinup when the government's
-        # own adaptation pathway is active: otherwise decide_household_strategy()
-        # runs unconstrained for the whole (multi-decade) spinup period and the
-        # household population is already saturated at its self-adaptation
-        # equilibrium before the actual scenario starts, leaving no room for
-        # government measures (e.g. risk communication) to show any effect.
-        government_config = self.model.config["agent_settings"].get("government", {})
-        skip_for_spinup = self.model.in_spinup and government_config.get(
-            "adaptation", {}
-        ).get("enabled", False)
-
-        if self.config["adapt"] and not skip_for_spinup:
+        # Households also adapt during spinup. In the government adaptation pathway
+        # mode this does not saturate the population, since floodproofing expires
+        # after its lifespan (also during spinup) and uptake is capped at 55%.
+        if self.config["adapt"]:
             if self.config["adapt_to_actual_floods"]:
                 self.flood_events: list[dict[str, datetime]] = self.model.config[
                     "hazards"

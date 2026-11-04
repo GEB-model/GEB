@@ -219,9 +219,6 @@ class Government(AgentBaseClass):
         ):
             self.prepare_modified_soil_maps_for_forest()
         self.adaptation()
-        if self.model.current_time == self.model.run_end and adaptation_enabled:
-            self.plot_indicators()
-            self.plot_adaptation_pathway()
 
         self.set_irrigation_limit()
 
@@ -589,6 +586,11 @@ class Government(AgentBaseClass):
             self.model.current_time.month == 1 and self.model.current_time.day == 1
         ):
             return  # exits because it is not the first of January
+        if self.config["adaptation"]["mode"] == "pathway":
+            # floodproofing wears out, so expired households become unprotected again
+            # before this year's indicators are calculated. This also runs during
+            # spinup, since households already adapt themselves during spinup.
+            self.update_floodproofing_lifespan()
         if self.model.in_spinup:
             return  # exits because the model is in spinup, no adaptation during spinup
         if self.config["adaptation"]["mode"] == "cba":
@@ -628,7 +630,7 @@ class Government(AgentBaseClass):
         )
 
         # do a mental simulationin an alternate universeof the improvement (based on indicators) the implementation of all measures would generate. This will help the government to decide which
-        # adaptation_measure_to_implement = "floodproofing"
+        # adaptation_measure_to_implement = "risk_communication"
         adaptation_measure_to_implement = self.select_adaptation_measure_to_implement(
             budget, current_weighted_IPV
         )
@@ -1397,6 +1399,42 @@ class Government(AgentBaseClass):
 
         return normalised_ecosystem_health
 
+    def update_floodproofing_lifespan(self) -> None:
+        """Age floodproofing by one year and make expired households unprotected again.
+
+        Only called in the adaptation pathway mode. Adapted households without a
+        lifespan yet (e.g. households that adapted themselves) get one first.
+        """
+        households = self.agents.households
+        adapted = households.var.adapted.data
+        years_left = households.var.floodproofing_years_left.data
+
+        untracked = np.where((adapted == 1) & (years_left < 0))[0]
+        if len(untracked) > 0:
+            rng = np.random.default_rng(
+                self.config.get("floodproofing", {}).get("seed", 42)
+                + self.model.current_time.year
+            )
+            # floodproofing has a lifespan of 20-30 years
+            years_left[untracked] = rng.integers(20, 31, size=len(untracked))
+
+        tracked = years_left >= 0
+        years_left[tracked] -= 1
+        expired = np.where((adapted == 1) & tracked & (years_left <= 0))[0]
+        if len(expired) == 0:
+            return
+
+        adapted[expired] = 0
+        years_left[expired] = -1
+        households.var.time_adapted.data[expired] = 0
+
+        households.update_building_adaptation_status(np.where(adapted == 1)[0])
+
+        self.model.logger.info(
+            "Floodproofing of %d households expired after reaching its lifespan.",
+            len(expired),
+        )
+
     def apply_adaptation(
         self, budget: float, adaptation_measure_to_implement: str | None
     ) -> None:
@@ -1447,13 +1485,22 @@ class Government(AgentBaseClass):
                 )
                 return
 
+            # Only 55% of households in the flood zone is willing to floodproof
+            # (government-supported and self-adapted together)
+            remaining_uptake = households.remaining_floodproofing_uptake()
+
             # the government decides who of those are adapting
             # the number to adapt should actually be based on the available budget, but if the eligible households are less than budget allows, we can only adapt that numnber.
             potential_to_adapt = int(budget / floodproofing_cost_per_household)
-            n_to_adapt = min(potential_to_adapt, len(eligible_households))
+            n_to_adapt = min(
+                potential_to_adapt, len(eligible_households), remaining_uptake
+            )
             if n_to_adapt == 0:
                 self.model.logger.info(
-                    "No households selected for government floodproofing this year."
+                    "No households selected for government floodproofing this year "
+                    "(%d eligible, %d remaining under the 55%% uptake cap).",
+                    len(eligible_households),
+                    remaining_uptake,
                 )
                 return
             # randomly select the households that are adapted based on the number of households that can be adapted.
@@ -1467,6 +1514,10 @@ class Government(AgentBaseClass):
             )
             # update the households that are adapted so they are not eligible for adaptation again.
             households.var.adapted[adapting_households_sample] = 1
+            # floodproofing has a lifespan of 20-30 years, after which it is no longer effective
+            households.var.floodproofing_years_left[adapting_households_sample] = (
+                rng.integers(20, 31, size=n_to_adapt)
+            )
 
             # use the function to floodproof the buildings of the households who are selected to adapt.
             # pass the full accumulated adapted set (not just this year's
@@ -1613,132 +1664,6 @@ class Government(AgentBaseClass):
                     "Implemented_measure": adaptation_measure_to_implement,
                 }
             )
-
-    def plot_indicators(self) -> None:
-        """Plot the evaluation criteria over the run time and calculate the final score of the government's adaptation strategy."""
-        # plot the evaluation criteria over time
-        csv_file = (
-            self.model.output_folder / "adaptation" / "adaptation_record_timeseries.csv"
-        )
-        df = pd.read_csv(csv_file)
-
-        fig, (ax1, ax2, ax3) = plt.subplots(3)
-        fig.suptitle("Normalised Evaluation Criteria Over Time")
-
-        ax1.plot(df["year"], df["EAD"], label="EAD")
-        ax1.set_ylabel("Normalised EAD")
-        ax1.set_xlabel("Year")
-        ax1.set_title("Normalised Expected Annual Damage over time")
-
-        ax2.plot(df["year"], df["equity_indicator"], label="Exposure Inequality")
-        ax2.set_ylabel("Normalised Equity Indicator")
-        ax2.set_xlabel("Year")
-        ax2.set_title("Normalised Equity Indicator over time")
-
-        ax3.plot(df["year"], df["ecosystem_health"], label="Ecosystem Health")
-        ax3.set_ylabel("Normalised Ecosystem Health")
-        ax3.set_xlabel("Year")
-        ax3.set_title("Normalised Ecosystem Health over time")
-
-        fig.tight_layout()
-        output_folder = self.model.output_folder / "adaptation"
-        output_folder.mkdir(parents=True, exist_ok=True)
-        plt.savefig(
-            output_folder / "adaptation_indicators_over_time.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close()
-
-    def plot_adaptation_pathway(self) -> None:
-        """plot the adaptation pathway, showing the adaptation measures that are implemented over time."""
-        csv_file = (
-            self.model.output_folder / "adaptation" / "adaptation_record_timeseries.csv"
-        )
-
-        df = pd.read_csv(csv_file)
-
-        colour_map = {
-            "floodproofing": "#1F77B4",
-            "reforestation": "#3B8B2E",
-            "risk_communication": "#F1C40F",
-        }
-
-        fig, ax = plt.subplots(figsize=(10, 5))
-
-        # plot each segment between adjacent years -- lines stay black, only
-        # the markers (below) are coloured by the measure implemented that year
-        for i in range(len(df) - 1):
-            x_seg = [int(df["year"].iloc[i]), int(df["year"].iloc[i + 1])]
-            y_seg = [float(df["IPV"].iloc[i]), float(df["IPV"].iloc[i + 1])]
-            ax.plot(x_seg, y_seg, color="black", linewidth=2.5)
-
-        # add dots at each year coloured by measure
-        for _, row in df.iterrows():
-            colour = colour_map.get(row["Implemented_measure"], "#aaaaaa")
-            ax.scatter(
-                int(row["year"]), float(row["IPV"]), color=colour, s=40, zorder=5
-            )
-
-        # legend -- markers now, not lines, since colour lives on the dots
-        from matplotlib.lines import Line2D
-
-        legend_elements = [
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                color="none",
-                markerfacecolor="#1F77B4",
-                markersize=8,
-                label="Floodproofing",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                color="none",
-                markerfacecolor="#3B8B2E",
-                markersize=8,
-                label="Reforestation",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                color="none",
-                markerfacecolor="#F1C40F",
-                markersize=8,
-                label="Risk Communication",
-            ),
-        ]
-        ax.legend(handles=legend_elements, fontsize=10, framealpha=0.3)
-
-        ax.set_title("Adaptation pathway", fontsize=13)
-        ax.set_xlabel("Year", fontsize=11)
-        ax.set_ylabel(
-            "Integrated Performance Value",
-            fontsize=11,
-        )
-
-        # Auto-scale y-axis to show actual variation in scores rather than fixed 0–1 range.
-        # This makes small improvements visible without distorting the data.
-        score_min = df["IPV"].min()
-        score_max = df["IPV"].max()
-        score_range = score_max - score_min
-        padding = max(score_range * 0.1, 0.01)  # 10% padding or 0.01 minimum
-        ax.set_ylim(score_min - padding, score_max + padding)
-
-        ax.grid(True, alpha=0.3)
-
-        output_folder = self.model.output_folder / "adaptation"
-        output_folder.mkdir(parents=True, exist_ok=True)
-        plt.savefig(
-            output_folder / "adaptation_pathway.png",
-            dpi=150,
-            bbox_inches="tight",
-        )
-        plt.close()
 
     def _apply_cumulative_time_discounting(
         self, value_to_discount: float, discount_rate: float = 0.1, years: int = 35
