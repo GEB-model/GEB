@@ -1183,15 +1183,12 @@ class SFINCSRootModel:
         dx: float = abs(float(transform.a))
         dy: float = abs(float(transform.e))
 
-        # Replace NaN with 0 to avoid issues in comparisons
-        mask_clean = np.nan_to_num(self.mask.values, nan=0.0)
-
         active_polygon = unary_union(
             [
                 shape(geom)
                 for geom, _ in rasterio.features.shapes(
-                    (mask_clean == 1).astype(np.uint8),
-                    mask=(mask_clean == 1),
+                    (self.mask.values == 1).astype(np.uint8),
+                    mask=(self.mask.values == 1),
                     transform=transform,
                     connectivity=4,
                 )
@@ -1201,44 +1198,23 @@ class SFINCSRootModel:
             [
                 shape(geom)
                 for geom, _ in rasterio.features.shapes(
-                    (mask_clean == SFINCS_WATER_LEVEL_BOUNDARY).astype(np.uint8),
-                    mask=(mask_clean == SFINCS_WATER_LEVEL_BOUNDARY),
+                    (self.mask.values == SFINCS_WATER_LEVEL_BOUNDARY).astype(np.uint8),
+                    mask=(self.mask.values == SFINCS_WATER_LEVEL_BOUNDARY),
                     transform=transform,
                     connectivity=4,
                 )
             ]
         )
 
-        # Check if boundary polygon is valid and non-empty
-        if boundary_polygon.is_empty or active_polygon.is_empty:
-            self.logger.warning(
-                "Boundary or active polygon is empty; skipping boundary observation lines setup."
-            )
-            return
-
         shared_boundary = active_polygon.boundary.intersection(
             boundary_polygon.boundary
         )
-
-        # Check if shared boundary is empty
-        if shared_boundary.is_empty:
-            self.logger.warning(
-                "No shared boundary found between active and boundary cells; skipping boundary observation lines setup."
-            )
-            return
-
         if isinstance(shared_boundary, LineString):
             raw_lines: list[LineString] = [shared_boundary]
         else:
-            line_list = [
-                geom for geom in shared_boundary.geoms if isinstance(geom, LineString)
-            ]
-            if not line_list:
-                self.logger.warning(
-                    "No line geometries found in shared boundary; skipping boundary observation lines setup."
-                )
-                return
-            merged_lines = linemerge(line_list)
+            merged_lines = linemerge(
+                [geom for geom in shared_boundary.geoms if isinstance(geom, LineString)]
+            )
             raw_lines = (
                 [merged_lines]
                 if isinstance(merged_lines, LineString)
@@ -1248,24 +1224,11 @@ class SFINCSRootModel:
         oriented_lines: list[LineString] = []
         for line in raw_lines:
             coords = list(line.coords)
-            # Skip lines with fewer than 2 coordinates
-            if len(coords) < 2:
-                self.logger.warning(
-                    f"Skipping line with only {len(coords)} coordinate(s)."
-                )
-                continue
-
             x0, y0 = coords[0]
             x1, y1 = coords[1]
             seg_dx: float = x1 - x0
             seg_dy: float = y1 - y0
             seg_len: float = math.hypot(seg_dx, seg_dy)
-
-            # Skip zero-length segments to avoid division by zero
-            if seg_len < 1e-10:
-                self.logger.warning("Skipping zero-length line segment.")
-                continue
-
             ux: float = seg_dx / seg_len
             uy: float = seg_dy / seg_len
 
@@ -1277,20 +1240,9 @@ class SFINCSRootModel:
 
             # Reverse the line when the active cell is on the left so active cells
             # are always on the right (positive discharge = outflow).
-            if (
-                0 <= row_left < mask_clean.shape[0]
-                and 0 <= col_left < mask_clean.shape[1]
-                and mask_clean[row_left, col_left] == 1
-            ):
+            if self.mask.values[row_left, col_left] == 1:
                 line = LineString(coords[::-1])
             oriented_lines.append(line)
-
-        # Check if any lines were created
-        if not oriented_lines:
-            self.logger.warning(
-                "No valid observation lines created; skipping boundary observation lines setup."
-            )
-            return
 
         observation_lines: gpd.GeoDataFrame = gpd.GeoDataFrame(
             geometry=oriented_lines,
