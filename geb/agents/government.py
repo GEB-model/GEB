@@ -601,16 +601,16 @@ class Government(AgentBaseClass):
             riverine_dike_heights_altered_fps = riverine_dike_heights[altered_fps][
                 subbasin
             ]
-            if subbasin in coastal_dike_heights[current_fps]:
-                coastal_dike_heights_current_fps = coastal_dike_heights[current_fps][
-                    subbasin
-                ]
-                coastal_dike_heights_altered_fps = coastal_dike_heights[altered_fps][
-                    subbasin
-                ]
+            coastal_current = coastal_dike_heights.get(current_fps, {}).get(subbasin)
+            coastal_altered = coastal_dike_heights.get(altered_fps, {}).get(subbasin)
+
+            if coastal_current is None or coastal_altered is None:
+                # No coastal dike data: this cost calculation uses riverine dikes only.
+                coastal_dike_heights_current_fps = np.zeros(1)
+                coastal_dike_heights_altered_fps = np.zeros(1)
             else:
-                coastal_dike_heights_current_fps = np.array([0])
-                coastal_dike_heights_altered_fps = np.array([0])
+                coastal_dike_heights_current_fps = coastal_current
+                coastal_dike_heights_altered_fps = coastal_altered
             damage_reduction = current_ead - altered_ead
             # account for indirect damages
             damage_reduction *= indirect_damages

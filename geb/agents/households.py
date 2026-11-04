@@ -133,7 +133,7 @@ class Households(AgentBaseClass):
         self.start_adaptation_year = self.model.config["agent_settings"][
             "start_adaptation_year"
         ]
-        self.decision_module = DecisionModule()
+        self.decision_module = DecisionModule(model=self.model)
         if (
             self.config["adapt"]
             or self.model.config["agent_settings"]["households"]["warning_response"]
@@ -1259,7 +1259,7 @@ class Households(AgentBaseClass):
         self.update_building_adaptation_status(household_adapting)
 
         # print percentage of households that adapted
-        # self.model.logger.info(f"N households that adapted: {len(household_adapting)}")
+        self.model.logger.info(f"N households that adapted: {len(household_adapting)}")
         self.var.ead_usd_per_year[:] = self.flood_risk_module.calculate_ead(
             damages_do_not_adapt, damages_adapt, self.var.adapted.data
         ).astype(np.float32)
@@ -1696,7 +1696,12 @@ class Households(AgentBaseClass):
                     {"year": 1}
                 )
                 self._growth_rate_geotransform = (
-                    gdp_damages_map.rio.transform().to_gdal()
+                    self.growth_rate.attrs["lon_origin"],  # x_offset = gt[0]
+                    self.growth_rate.attrs["lon_resolution"],  # x_step = gt[1]
+                    0,  # row rotation
+                    self.growth_rate.attrs["lat_origin"],  # y_offset = gt[3]
+                    0,  # column rotation
+                    self.growth_rate.attrs["lat_resolution"],  # y_step = gt[5]
                 )
 
             if project_costs:
@@ -1822,13 +1827,12 @@ class Households(AgentBaseClass):
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
                 ):
+                    climrisk_config = self.model.config["agent_settings"].get(
+                        "climrisk", {}
+                    ) or {}
                     if self.model.current_time.year > self.start_adaptation_year and (
-                        self.model.config["agent_settings"]["climrisk"][
-                            "project_income"
-                        ]
-                        or self.model.config["agent_settings"]["climrisk"][
-                            "project_costs"
-                        ]
+                        climrisk_config.get("project_income", False)
+                        or climrisk_config.get("project_costs", False)
                     ):
                         self.update_monetary_variables_to_ssp()
                     if "flooded" not in self.buildings.columns:

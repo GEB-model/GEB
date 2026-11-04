@@ -314,7 +314,7 @@ class CropFarmers(AgentBaseClass):
             self.grid = model.hydrology.grid
 
         self.redundancy = reduncancy
-        self.decision_module = DecisionModule()
+        self.decision_module = DecisionModule(model=self.model)
 
         self.hydrological_year_start_month = self.model.config["general"][
             "hydrological_year_start_month"

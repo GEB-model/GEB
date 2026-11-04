@@ -1,13 +1,29 @@
 """This module contains the DecisionModule class for handling decision-making processes in the GEB model."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numba import njit, prange
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel
+
 
 class DecisionModule:
     """This class implements the decision module for drought adaptation."""
+
+    def __init__(self, model: GEBModel) -> None:
+        """Initialize the Decision Module.
+
+        Args:
+            model: The GEB model.
+        """
+        self.model = model
+        self.config = (
+            self.model.config["agent_settings"]["households"]
+            if "households" in self.model.config["agent_settings"]
+            else {}
+        )
 
     @staticmethod
     def calculate_riverine_amenity(
@@ -564,16 +580,12 @@ class DecisionModule:
         amenity_value = self.calculate_riverine_amenity(
             household_distance_to_river_m,
             GDP_i_t=GDP_i_t,
-            phi_i=self.model.config["agent_settings"]["households"][
-                "ammenity_value_scaling_factor"
-            ],
+            phi_i=self.config["ammenity_value_scaling_factor"],
         )
         amenity_value += self.calculate_coastal_amenity(
             x_j=household_distance_to_coastline_m,
             GDP_i_t=GDP_i_t,
-            phi_i=self.model.config["agent_settings"]["households"][
-                "ammenity_value_scaling_factor"
-            ],
+            phi_i=self.config["ammenity_value_scaling_factor"],
         )
         # Ensure p floods is in increasing order
         indices = np.argsort(p_floods)
@@ -693,16 +705,12 @@ class DecisionModule:
         amenity_value = self.calculate_riverine_amenity(
             household_distance_to_river_m,
             GDP_i_t=GDP_i_t,
-            phi_i=self.model.config["agent_settings"]["households"][
-                "ammenity_value_scaling_factor"
-            ],
+            phi_i=self.config["ammenity_value_scaling_factor"],
         )
         amenity_value += self.calculate_coastal_amenity(
             x_j=household_distance_to_coastline_m,
             GDP_i_t=GDP_i_t,
-            phi_i=self.model.config["agent_settings"]["households"][
-                "ammenity_value_scaling_factor"
-            ],
+            phi_i=self.config["ammenity_value_scaling_factor"],
         )
 
         # Ensure p floods is in increasing order
@@ -839,16 +847,12 @@ class DecisionModule:
         amenity_value = self.calculate_riverine_amenity(
             distance_to_river_m,
             GDP_i_t=GDP_i_t,
-            phi_i=self.model.config["agent_settings"]["households"][
-                "ammenity_value_scaling_factor"
-            ],
+            phi_i=self.config["ammenity_value_scaling_factor"],
         )
         amenity_value += self.calculate_coastal_amenity(
             x_j=distance_to_coastline_m,
             GDP_i_t=GDP_i_t,
-            phi_i=self.model.config["agent_settings"]["households"][
-                "ammenity_value_scaling_factor"
-            ],
+            phi_i=self.config["ammenity_value_scaling_factor"],
         )
 
         # calculate migration costs based on distance to each building
