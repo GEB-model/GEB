@@ -2227,6 +2227,7 @@ class SFINCSSimulation:
         nodes.index.name = None  # SFINCS expects the index to be unnamed
         # SFINCS >= 2.5.0 splits src lines on whitespace and rejects more than 3 numbers per line,
         # so names must not contain spaces (hydromt-sfincs defaults to "Point 001")
+        # Likely this could be removed in a future hydromt-sfincs version.
         nodes = nodes.copy()
         nodes["name"] = [f"point_{node_index}" for node_index in nodes.index]
         self.sfincs_model.discharge_points.create(
