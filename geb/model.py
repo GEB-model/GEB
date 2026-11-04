@@ -1232,6 +1232,7 @@ class GEBModel(Module):
         Raises:
             FileNotFoundError: If the requested checkpoint cannot be found.
             ValueError: If the checkpoint specification is invalid.
+            RuntimeError: If the checkpoint was not fully saved (``.incomplete`` exists).
         """
         if checkpoint_spec is True or checkpoint_spec == "latest":
             latest: tuple[datetime.datetime, Path] | None = self.get_latest_checkpoint()

@@ -1909,7 +1909,14 @@ class Reporter:
 
     @staticmethod
     def _definition(config: dict) -> dict:
-        """Keep only the user/resolved definition, not the runtime buffers."""
+        """Keep only the user/resolved definition, not the runtime buffers.
+
+        Args:
+            config: Reporter configuration, including runtime state.
+
+        Returns:
+            A copy of the configuration with runtime-only entries removed.
+        """
         return {
             key: copy.deepcopy(value)
             for key, value in config.items()
@@ -1978,6 +1985,15 @@ class Reporter:
 
         Existing report stores must contain the history up to the checkpoint;
         only the partial boundary chunk is included in the checkpoint itself.
+
+        Args:
+            checkpoint_path: Directory containing the saved reporter checkpoint state.
+
+        Raises:
+            FileNotFoundError: If the checkpoint state or required historical
+                Zarr stores are missing.
+            ValueError: If the checkpoint metadata, variable definitions,
+                reporting progress, or stored Zarr data are inconsistent.
         """
         if not self.is_activated:
             return
