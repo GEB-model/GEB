@@ -15,6 +15,7 @@ import numpy as np
 import shapely
 import xarray as xr
 from scipy.io import loadmat
+from scipy.ndimage import binary_dilation
 
 from geb.build.data_catalog.base import Adapter
 
@@ -262,9 +263,47 @@ class CLIMRISK(Adapter):
         region_geometry = region.to_crs("EPSG:4326").geometry.union_all()
         lon_grid, lat_grid = np.meshgrid(longitudes, latitudes, indexing="ij")
         inside = shapely.intersects_xy(region_geometry, lon_grid, lat_grid)
-        codes = country_grid[inside]
-        codes = codes[np.isfinite(codes) & (codes > 0)]
-        country_code_numbers = np.unique(codes).astype(int).tolist()
+
+        def get_country_codes(mask: np.ndarray) -> list[int]:
+            codes = country_grid[mask]
+            codes = codes[np.isfinite(codes) & (codes > 0)]
+            return np.unique(codes).astype(int).tolist()
+
+        country_code_numbers = get_country_codes(inside)
+        if not country_code_numbers:
+            # Search one cell beyond the region, then choose only the nearest
+            # valid country-grid cell.
+            padded_inside = binary_dilation(
+                inside, structure=np.ones((3, 3), dtype=bool)
+            )
+            if not padded_inside.any():
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=r"Geometry is in a geographic CRS.*",
+                        category=UserWarning,
+                    )
+                    padded_geometry = region_geometry.buffer(0.5)
+                padded_inside = shapely.intersects_xy(
+                    padded_geometry, lon_grid, lat_grid
+                )
+
+            candidate_mask = (
+                padded_inside & np.isfinite(country_grid) & (country_grid > 0)
+            )
+            candidate_indices = np.argwhere(candidate_mask)
+
+            if candidate_indices.size:
+                candidate_lon = lon_grid[tuple(candidate_indices.T)]
+                candidate_lat = lat_grid[tuple(candidate_indices.T)]
+                candidate_points = shapely.points(candidate_lon, candidate_lat)
+                distances = shapely.distance(candidate_points, region_geometry)
+                nearest_index = int(np.argmin(distances))
+                nearest_cell = tuple(candidate_indices[nearest_index])
+                country_code_numbers = [int(country_grid[nearest_cell])]
+
+        if not country_code_numbers:
+            raise ValueError("No country-grid cells were found within the region.")
 
         # Find the smallest rectangular crop containing all requested countries.
         country_mask: xr.DataArray = climrisk_data["country"].isin(country_code_numbers)
@@ -274,12 +313,6 @@ class CLIMRISK(Adapter):
         matching_latitudes: np.ndarray = np.flatnonzero(
             country_mask.any(dim="lon").to_numpy()
         )
-        if (
-            not country_code_numbers
-            or not matching_longitudes.size
-            or not matching_latitudes.size
-        ):
-            raise ValueError("No country-grid cells were found within the region.")
 
         # Pad values by one cell to avoid out of boundary errors in basins located at the extremes of our regions
         first_longitude_index: int = int(max(matching_longitudes[0] - 1, 0))

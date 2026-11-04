@@ -283,3 +283,40 @@ def test_read_gdp_damage_uses_gdp_formula(
     assert opened_paths == [expected_file]
     assert result.name == "GDP"
     np.testing.assert_allclose(result.to_numpy(), 40.0)
+
+def test_read_fallback_selects_only_nearest_country_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use only the nearest country when the region contains no grid centers."""
+    (tmp_path / "KompasCountry.mat").touch()
+    (tmp_path / "OECD_POP_SSP2_SPATIAL13R.mat").touch()
+    _use_small_grid(monkeypatch)
+
+    population_source = np.ones((2, 2, 3), dtype=np.float32)
+    monkeypatch.setattr(
+        climrisk_module,
+        "loadmat",
+        lambda path: (
+            # After the adapter's flip/transpose, the nearest cell
+            # (lon=-0.25, lat=-0.25) has country code 3.
+            {"CountryMap": np.array([[1, 2], [3, 4]], dtype=np.int16)}
+            if Path(path).name == "KompasCountry.mat"
+            else {"POP_MAP": population_source}
+        ),
+    )
+
+    tiny_region = gpd.GeoDataFrame(
+        geometry=[box(-0.21, -0.21, -0.19, -0.19)],
+        crs="EPSG:4326",
+    )
+
+    result = _adapter(tmp_path).read(
+        region=tiny_region,
+        ssp="2",
+        rcp=None,
+        damage_function=None,
+        warming_percentile=None,
+        obtain_population=True,
+    )
+
+    np.testing.assert_array_equal(np.unique(result["country"].to_numpy()), [3])
