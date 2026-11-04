@@ -28,12 +28,23 @@ os.environ["GEB_PACKAGE_DIR"] = str(files("geb"))
 load_dotenv()
 
 
+SFINCS_VERSION: str = "2.5.0"
+SFINCS_RELEASE_NAME: str = "Hautacam"
+
 # Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
 if Path("/research/BETA-IVM-HPC/GEB").exists():
     os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/datacatalog/"
+    os.environ["SFINCS_BINARY"] = os.getenv(
+        "SFINCS_BINARY",
+        f"/research/BETA-IVM-HPC/GEB/sfincs/bin/sfincs-{SFINCS_VERSION}",
+    )
+    os.environ["SFINCS_BINARY_GPU"] = os.getenv(
+        "SFINCS_BINARY_GPU",
+        f"/research/BETA-IVM-HPC/GEB/sfincs/bin/sfincs-gpu-{SFINCS_VERSION}",
+    )
     os.environ["SFINCS_CONTAINER"] = os.getenv(
         "SFINCS_CONTAINER",
-        "/ada-software/containers/sfincs-cpu_v2.4.0-Galibier-Release.sif",
+        f"/ada-software/containers/sfincs-cpu_v{SFINCS_VERSION}-{SFINCS_RELEASE_NAME}.sif",
     )
     os.environ["SFINCS_CONTAINER_GPU"] = os.getenv(
         "SFINCS_CONTAINER_GPU",
@@ -41,20 +52,30 @@ if Path("/research/BETA-IVM-HPC/GEB").exists():
     )
 elif Path("/gpfs/work5/0/prjs2035/GEB").exists():
     os.environ["GEB_DATA_ROOT"] = "/gpfs/work5/0/prjs2035/GEB/datacatalog/"
-    os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
-        "SFINCS_SIF_CONTAINER",
-        "/gpfs/work5/0/prjs2035/GEB/containers/sfincs-cpu_v2.4.0-Galibier-Release.sif",
+    os.environ["SFINCS_BINARY"] = os.getenv(
+        "SFINCS_BINARY",
+        f"/gpfs/work5/0/prjs2035/GEB/sfincs/bin/sfincs-{SFINCS_VERSION}",
+    )
+    os.environ["SFINCS_BINARY_GPU"] = os.getenv(
+        "SFINCS_BINARY_GPU",
+        f"/gpfs/work5/0/prjs2035/GEB/sfincs/bin/sfincs-gpu-{SFINCS_VERSION}",
+    )
+    os.environ["SFINCS_CONTAINER"] = os.getenv(
+        "SFINCS_CONTAINER",
+        f"/gpfs/work5/0/prjs2035/GEB/containers/sfincs-cpu_v{SFINCS_VERSION}-{SFINCS_RELEASE_NAME}.sif",
     )  # not implemented yet
-    os.environ["SFINCS_SIF_CONTAINER_GPU"] = os.getenv(
-        "SFINCS_SIF_CONTAINER_GPU",
+    os.environ["SFINCS_CONTAINER_GPU"] = os.getenv(
+        "SFINCS_CONTAINER_GPU",
         "/gpfs/work5/0/prjs2035/GEB/containers/sfincs-gpu.coldeze_combo_ccall.sif",
     )  # not implemented yet
 else:
-    os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
-        "SFINCS_SIF_CONTAINER", "deltares/sfincs-cpu:sfincs-v2.4.0-Galibier-Release"
+    os.environ["SFINCS_RUNTIME"] = os.getenv("SFINCS_RUNTIME", "docker")
+    os.environ["SFINCS_CONTAINER"] = os.getenv(
+        "SFINCS_CONTAINER",
+        f"deltares/sfincs-cpu:sfincs-v{SFINCS_VERSION}-{SFINCS_RELEASE_NAME}",
     )
-    os.environ["SFINCS_SIF_CONTAINER_GPU"] = os.getenv(
-        "SFINCS_SIF_CONTAINER_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
+    os.environ["SFINCS_CONTAINER_GPU"] = os.getenv(
+        "SFINCS_CONTAINER_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
     )
 
 TBB_VERSION: str = "2023.1.0"
