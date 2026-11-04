@@ -284,6 +284,7 @@ def test_read_gdp_damage_uses_gdp_formula(
     assert result.name == "GDP"
     np.testing.assert_allclose(result.to_numpy(), 40.0)
 
+
 def test_read_fallback_selects_only_nearest_country_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
