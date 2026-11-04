@@ -7,6 +7,9 @@ import pytest
 
 from geb.build import GEBModel
 
+SSPS = ("ssp1", "ssp2", "ssp3", "ssp4", "ssp5")
+RCPS = ("19", "26", "34", "45", "60", "70", "85")
+
 
 @pytest.fixture
 def model(tmp_path: Path) -> GEBModel:
