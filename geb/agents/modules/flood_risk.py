@@ -217,8 +217,8 @@ class FloodRiskModule:
                 )["maximum_damage"]
 
         if not max_dam_road_m:
-            print(
-                "Warning: No maximum damage values found for roads. Skipping loading maximum damage for roads."
+            self.model.logger.warning(
+                "No maximum damage values found for roads. Skipping loading maximum damage for roads."
             )
         else:
             self.households.roads["maximum_damage_m"] = self.households.roads[
@@ -565,10 +565,10 @@ class FloodRiskModule:
                     )
 
                 if verbose:
-                    print(
+                    self.model.logger.info(
                         f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
                     )
-                    print(
+                    self.model.logger.info(
                         f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                     )
             # set attributes
@@ -676,10 +676,10 @@ class FloodRiskModule:
                 )
 
             if verbose:
-                print(
+                self.model.logger.info(
                     f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
                 )
-                print(
+                self.model.logger.info(
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
         # set attributes
@@ -937,7 +937,7 @@ class FloodRiskModule:
                 buildings.loc[early_mask, "object_type"] = (
                     "building_elevated_possessions_early"
                 )
-                print(f"Early action buildings: {early_mask.sum()}")
+                self.model.logger.info(f"Early action buildings: {early_mask.sum()}")
 
                 # Medium action: 24-48 hours lead time
                 medium_mask = (
@@ -948,20 +948,20 @@ class FloodRiskModule:
                 buildings.loc[medium_mask, "object_type"] = (
                     "building_elevated_possessions_medium"
                 )
-                print(f"Medium action buildings: {medium_mask.sum()}")
+                self.model.logger.info(f"Medium action buildings: {medium_mask.sum()}")
 
                 # Late action: <24 hours lead time
                 late_mask = elevated_mask & (buildings["action_lead_time"] <= 24)
                 buildings.loc[late_mask, "object_type"] = (
                     "building_elevated_possessions_late"
                 )
-                print(f"Late action buildings: {late_mask.sum()}")
+                self.model.logger.info(f"Late action buildings: {late_mask.sum()}")
 
                 # Summary of object types
                 object_type_counts = buildings["object_type"].value_counts()
-                print("Building object type counts:")
+                self.model.logger.info("Building object type counts:")
                 for obj_type, count in object_type_counts.items():
-                    print(f"  {obj_type}: {count}")
+                    self.model.logger.info(f"  {obj_type}: {count}")
                 buildings.to_parquet(output_path)
                 # Timing-based object type assignment for buildings_centroid
                 buildings_centroid["object_type"] = np.select(
@@ -1081,7 +1081,7 @@ class FloodRiskModule:
         filename: str = f"damage_map_{category_name}.gpkg"
         gdf_content.to_file(damage_folder / filename, driver="GPKG")
 
-        print(f"damages to building content are: {total_damages_content}")
+        self.model.logger.info(f"damages to building content are: {total_damages_content}")
 
         # Compute damages for buildings structure
         damages_buildings_structure: pd.Series = VectorScanner(
@@ -1092,7 +1092,7 @@ class FloodRiskModule:
 
         total_damage_structure = damages_buildings_structure.sum()
 
-        print(f"damages to building structure are: {total_damage_structure}")
+        self.model.logger.info(f"damages to building structure are: {total_damage_structure}")
 
         # save it to a gpkg file
         gdf_structure = buildings.copy()
@@ -1101,7 +1101,7 @@ class FloodRiskModule:
         filename: str = f"damage_map_{category_name}.gpkg"
         gdf_structure.to_file(damage_folder / filename, driver="GPKG")
 
-        print(
+        self.model.logger.info(
             f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
         )
 
@@ -1121,7 +1121,7 @@ class FloodRiskModule:
             vulnerability_curves=self.households.var.agriculture_curve,
         )
         total_damages_agriculture = damages_agriculture.sum()
-        print(f"damages to agriculture are: {total_damages_agriculture}")
+        self.model.logger.info(f"damages to agriculture are: {total_damages_agriculture}")
 
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
@@ -1142,7 +1142,7 @@ class FloodRiskModule:
             vulnerability_curves=self.households.var.forest_curve,
         )
         total_damages_forest = damages_forest.sum()
-        print(f"damages to forest are: {total_damages_forest}")
+        self.model.logger.info(f"damages to forest are: {total_damages_forest}")
 
         roads = self.households.roads.to_crs(flood_depth.rio.crs)
         damages_roads = VectorScanner(
@@ -1151,7 +1151,7 @@ class FloodRiskModule:
             vulnerability_curves=self.households.var.road_curves,
         )
         total_damages_roads = damages_roads.sum()
-        print(f"damages to roads are: {total_damages_roads} ")
+        self.model.logger.info(f"damages to roads are: {total_damages_roads} ")
 
         rail = self.households.rail.to_crs(flood_depth.rio.crs)
         damages_rail = VectorScanner(
@@ -1160,7 +1160,7 @@ class FloodRiskModule:
             vulnerability_curves=self.households.var.rail_curve,
         )
         total_damages_rail = damages_rail.sum()
-        print(f"damages to rail are: {total_damages_rail}")
+        self.model.logger.info(f"damages to rail are: {total_damages_rail}")
 
         total_flood_damages = (
             total_damage_structure
@@ -1170,7 +1170,7 @@ class FloodRiskModule:
             + total_damages_forest
             + total_damages_agriculture
         )
-        print(f"the total flood damages are: {total_flood_damages}")
+        self.model.logger.info(f"the total flood damages are: {total_flood_damages}")
 
         return total_flood_damages
 

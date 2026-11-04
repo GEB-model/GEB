@@ -112,8 +112,7 @@ def decision_module() -> DecisionModule:
     Returns:
         Decision module configured with the household amenity scaling factor.
     """
-    module = DecisionModule()
-    module.model = SimpleNamespace(
+    model = SimpleNamespace(
         config={
             "agent_settings": {
                 "households": {
@@ -122,7 +121,7 @@ def decision_module() -> DecisionModule:
             }
         }
     )
-    return module
+    return DecisionModule(model)
 
 
 def test_expenditure_cap(
@@ -425,6 +424,12 @@ def test_update_monetary_variables_respects_projection_flags(
         ),
         dims=("year", "lon", "lat"),
         coords={"year": years, "lon": [0.0, 1.0], "lat": [0.0, 1.0]},
+        attrs={
+            "lon_origin": 0.0,
+            "lon_resolution": 1.0,
+            "lat_origin": 0.0,
+            "lat_resolution": -1.0,
+        },
     )
     population_map = xr.DataArray(
         np.full((2, 2, 2), 10.0),

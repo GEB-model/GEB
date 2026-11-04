@@ -657,8 +657,8 @@ class DecisionModule:
         NPV_summed = np.maximum(1, NPV_summed)
         if (NPV_summed == 1).any():
             n_negative = np.sum(NPV_summed == 1)
-            print(
-                f"[calcEU_adapt] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+            self.model.logger.warning(
+                f"[calcEU_adapt] {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
             )
 
         # Calculate expected utility
@@ -762,8 +762,8 @@ class DecisionModule:
 
         if (NPV_summed == 1).any():
             n_negative = np.sum(NPV_summed == 1)
-            print(
-                f"[calcEU_do_nothing] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+            self.model.logger.warning(
+                f"[calcEU_do_nothing] {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
             )
 
         # Calculate expected utility
