@@ -1081,7 +1081,9 @@ class FloodRiskModule:
         filename: str = f"damage_map_{category_name}.gpkg"
         gdf_content.to_file(damage_folder / filename, driver="GPKG")
 
-        self.model.logger.info(f"damages to building content are: {total_damages_content}")
+        self.model.logger.info(
+            f"damages to building content are: {total_damages_content}"
+        )
 
         # Compute damages for buildings structure
         damages_buildings_structure: pd.Series = VectorScanner(
@@ -1092,7 +1094,9 @@ class FloodRiskModule:
 
         total_damage_structure = damages_buildings_structure.sum()
 
-        self.model.logger.info(f"damages to building structure are: {total_damage_structure}")
+        self.model.logger.info(
+            f"damages to building structure are: {total_damage_structure}"
+        )
 
         # save it to a gpkg file
         gdf_structure = buildings.copy()
@@ -1121,7 +1125,9 @@ class FloodRiskModule:
             vulnerability_curves=self.households.var.agriculture_curve,
         )
         total_damages_agriculture = damages_agriculture.sum()
-        self.model.logger.info(f"damages to agriculture are: {total_damages_agriculture}")
+        self.model.logger.info(
+            f"damages to agriculture are: {total_damages_agriculture}"
+        )
 
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
