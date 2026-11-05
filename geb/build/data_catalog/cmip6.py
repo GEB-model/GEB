@@ -20,6 +20,11 @@ mapping_variables_to_cdf = {
 
 available_scenarios = ["ssp1_1_9", "ssp1_2_6", "ssp2_4_5", "ssp3_7_0", "ssp5_8_5"]
 
+supported_models = [
+    "gfdl_esm4",
+    "access_cm2",
+]
+
 from ...workflows.io import (
     read_zarr,
     write_zarr,
@@ -69,6 +74,11 @@ class CMIP6(Adapter):
         Returns:
              A dictionary containing the parameters for the CMIP6/CDS API call.
         """
+        if cmip6_model not in supported_models:
+            raise ValueError(
+                f"Unsupported/ untested CMIP6 model '{cmip6_model}'. Supported and tested models are: {supported_models}. If you want to use a different model, please ensure it is available in the CDS API and modify the code accordingly."
+            )
+
         # Add a buffer to the bounds to ensure we match the extent of the ERA5 data
         buffer: float = 3.0
         buffered_bounds: tuple[float, float, float, float] = (
