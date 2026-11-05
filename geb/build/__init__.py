@@ -50,6 +50,7 @@ from geb.workflows.raster import (
     create_temp_zarr,
     full_like,
     repeat_grid,
+    snap_to_grid,
 )
 
 from ..workflows.io import (
@@ -2162,6 +2163,9 @@ class GEBModel(
         )
 
         assert ldd_elevation.shape == ldd.shape == mask.shape
+        # Elevation and flow direction tiles can have coordinates that differ by
+        # floating-point noise, which makes the exact-join xr.where below fail.
+        ldd_elevation = snap_to_grid(ldd_elevation, ldd)
 
         ldd_elevation: xr.DataArray = xr.where(
             mask,
