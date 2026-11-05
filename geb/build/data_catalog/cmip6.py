@@ -337,7 +337,9 @@ class CMIP6(Adapter):
 
         # fetch both precipitation and near-surface air temperature for the historical period, since we'll need both to compute deltas
         for variable in ["precipitation", "near_surface_air_temperature"]:
-            historical_data_path = self.root / f"cmip6_{cmip6_model}_historical_{variable}.zip"
+            historical_data_path = (
+                self.root / f"cmip6_{cmip6_model}_historical_{variable}.zip"
+            )
             if not historical_data_path.exists():
                 request = self.construct_request(
                     years=years_historical,
