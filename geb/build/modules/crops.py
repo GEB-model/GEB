@@ -2329,7 +2329,10 @@ class Crops(BuildModelBase):
                 crop_calendar_per_farmer, base_crops, resistant_crops
             )
 
-        assert crop_calendar_per_farmer[:, :, 3].max() == 0
+        assert (
+            crop_calendar_per_farmer.shape[0] == 0
+            or crop_calendar_per_farmer[:, :, 3].max() == 0
+        )
 
         check_crop_calendar(crop_calendar_per_farmer)
 

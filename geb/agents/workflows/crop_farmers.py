@@ -1100,7 +1100,7 @@ def plant(
     )
     planting_farmers = planting_farmers_per_season.sum(axis=1)
 
-    assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
+    assert (planting_farmers <= 1).all(), "Multiple crops planted on the same day"
 
     planting_farmers_idx = np.where(planting_farmers == 1)[0]
     if not planting_farmers_idx.size == 0:
