@@ -270,6 +270,29 @@ def read_run_completion_time(run_output_folder: Path | None) -> str | None:
     return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def read_run_geb_version(
+    run_output_folder: Path | None,
+) -> tuple[str | None, str | None]:
+    """Read the GEB version and git commit that produced a simulation run, if recorded.
+
+    Both are written to the run's output folder at the start of a run (``geb_version.txt``
+    always, ``git_commit.txt`` only when GEB runs from a git checkout).
+
+    Args:
+        run_output_folder: Simulation output directory for the run.
+
+    Returns:
+        Tuple of (GEB version, git commit hash); each is None when not available.
+    """
+    if run_output_folder is None:
+        return None, None
+    values: list[str | None] = []
+    for filename in ("geb_version.txt", "git_commit.txt"):
+        path: Path = run_output_folder / filename
+        values.append(path.read_text().strip() or None if path.exists() else None)
+    return values[0], values[1]
+
+
 def read_run_completion_timestamp_for_filename(
     run_output_folder: Path | None,
 ) -> str | None:
@@ -525,6 +548,7 @@ def write_discharge_dashboard(
     Returns:
         The Folium map object (already saved to ``output_path``).
     """
+    geb_version, git_commit = read_run_geb_version(run_output_folder)
     formatted_completion_date: str | None = None
     if completion_date is None and run_output_folder is not None:
         formatted_completion_date = read_run_completion_time(run_output_folder)
@@ -895,6 +919,8 @@ def write_discharge_dashboard(
         snapping_layer=snapping_layer.get_name() if snapping_stations else None,
         run_name=run_name,
         completion_date=formatted_completion_date,
+        geb_version=geb_version,
+        git_commit=git_commit,
     )
 
     chart_macro_data: dict[str, Any] = {
@@ -2347,6 +2373,8 @@ def _inject_station_layer_legend_script(
     snapping_layer: str | None = None,
     run_name: str | None = None,
     completion_date: str | None = None,
+    geb_version: str | None = None,
+    git_commit: str | None = None,
 ) -> None:
     """Add unified dynamic station legend with metric selector and distribution plots.
 
@@ -2370,6 +2398,8 @@ def _inject_station_layer_legend_script(
         snapping_layer: Optional name of the station snapping details feature group.
         run_name: Optional simulation run name displayed in the legend.
         completion_date: Optional completion timestamp string displayed in the legend.
+        geb_version: Optional GEB version that produced the run, displayed in the legend.
+        git_commit: Optional git commit of the GEB source that produced the run, displayed in the legend.
     """
     configs_by_column: dict[str, dict[str, Any]] = {
         str(config["col"]): config for config in _METRIC_LAYER_CONFIGS
@@ -2469,6 +2499,8 @@ def _inject_station_layer_legend_script(
         "snappingLayer": snapping_layer,
         "runName": run_name,
         "completionDate": completion_date,
+        "gebVersion": geb_version,
+        "gitCommit": git_commit,
     }
     _JavascriptMacro("legend.js", unified_menu_payload).add_to(discharge_map)
 

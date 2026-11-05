@@ -1115,6 +1115,11 @@ def test_create_discharge_dashboard_filename_with_date(tmp_path: Path) -> None:
     run_dir: Path = tmp_path / "scenario_b"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "done.txt").touch()
+    # written by the model at the start of the run; shown in the dashboard
+    (run_dir / "geb_version.txt").write_text("1.2.3\n")
+    (run_dir / "git_commit.txt").write_text(
+        "0123456789abcdef0123456789abcdef01234567\n"
+    )
 
     region_box: sg.Polygon = sg.box(7.0, 49.0, 9.0, 51.0)
     scores = gpd.GeoDataFrame(
@@ -1186,6 +1191,9 @@ def test_create_discharge_dashboard_filename_with_date(tmp_path: Path) -> None:
     )
     dashboard_created_path: Path = Path(res["dashboard"])
     assert dashboard_created_path.exists()
+    dashboard_html: str = dashboard_created_path.read_text()
+    assert "1.2.3" in dashboard_html
+    assert "0123456789abcdef0123456789abcdef01234567" in dashboard_html
     assert re.search(
         r"discharge_evaluation_map_\d{8}_\d{6}\.html$", dashboard_created_path.name
     )

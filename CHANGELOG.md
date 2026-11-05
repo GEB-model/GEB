@@ -1,4 +1,5 @@
 # dev
+- At the start of a (non-continued) run or spinup, the GEB version is written to `geb_version.txt` in the run's output folder, and, when GEB runs from a git checkout, the commit of the GEB source to `git_commit.txt` (nothing is written for pip installs). The discharge evaluation dashboard shows both.
 - Models can now be built and run for regions without cultivated land or buildings (e.g. small dryland, desert or mountain basins). Such models get zero farmers and/or zero households instead of failing during the build.
 - Fixed `geb evaluate` failing with "ufunc 'isfinite' not supported" for models without any discharge stations.
 - Fixed a build failure in `setup_crop_prices` ("zip() argument 2 is longer than argument 1") for regions without any crop price data; general inflation rates are now used for those regions.
