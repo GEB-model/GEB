@@ -901,7 +901,7 @@ class IHDSSurvey(Survey):
         crop_cols = ["kharif_crop_name", "rabi_crop_name", "summer_crop_name"]
 
         for col in crop_cols:
-            self.samples_crops[col].fillna("None", inplace=True)
+            self.samples_crops[col] = self.samples_crops[col].fillna("None")
             std_col = f"{col}_std"
             self.samples_crops[std_col] = (
                 self.samples_crops[col].map(raw2std).fillna("Fallow")
@@ -915,7 +915,7 @@ class IHDSSurvey(Survey):
             "summer_crop_irrigation",
         ]
         for col in irr_cols:
-            self.samples_crops[col].fillna("No", inplace=True)
+            self.samples_crops[col] = self.samples_crops[col].fillna("No")
 
         # ── drop any plot whose rabi or summer crop is Sugarcane ────────────────
         mask_sc = (self.samples_crops["rabi_crop_name_std"] == "Sugarcane") | (
