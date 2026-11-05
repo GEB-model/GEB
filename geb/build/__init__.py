@@ -2577,13 +2577,19 @@ class GEBModel(
         Args:
             ssp: The SSP name. Supported SSPs are: ssp1, ssp2, ssp3, ssp4, ssp5. Some data might not be available for all SSPs.
             rcp: The RCP name. Supported RCPs are: 19, 26, 34, 45, 60, 70, 85. Some data might not be available for all RCPs.
+        Raises:
+            ValueError: If the SSP or RCP value is not supported.
         """
-        assert ssp in ["ssp1", "ssp2", "ssp3", "ssp4", "ssp5", None], (
-            f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp2, ssp3, ssp4, ssp5."
-        )
-        assert rcp in ["19", "26", "34", "45", "60", "70", "85", None], (
-            f"RCP {rcp} not supported. Supported RCPs are: 19, 26, 34, 45, 60, 70, 85."
-        )
+        if ssp not in ["ssp1", "ssp2", "ssp3", "ssp4", "ssp5", None]:
+            raise ValueError(
+                f"SSP {ssp} not supported. Supported SSPs are: "
+                "ssp1, ssp2, ssp3, ssp4, ssp5."
+            )
+        if rcp not in ["19", "26", "34", "45", "60", "70", "85", None]:
+            raise ValueError(
+                f"RCP {rcp} not supported. Supported RCPs are: "
+                "19, 26, 34, 45, 60, 70, 85."
+            )
         self.set_params({"ssp": ssp, "rcp": rcp}, name="ssp")
 
     @property
