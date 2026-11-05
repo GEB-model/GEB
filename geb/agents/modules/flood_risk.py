@@ -254,7 +254,9 @@ class FloodRiskModule:
                 "damage_model/flood/residential/structure/curve"
             ]
         )
-        self.households.buildings_structure_curve.set_index("depth", inplace=True)
+        self.households.buildings_structure_curve = (
+            self.households.buildings_structure_curve.set_index("depth")
+        )
 
         # now do the same for the content curve. Since there are no content curves in the global model, we use the structural curve again.
         if (
@@ -270,7 +272,9 @@ class FloodRiskModule:
                     "damage_model/flood/residential/content/curve"
                 ]
             )
-            self.households.buildings_content_curve.set_index("depth", inplace=True)
+            self.households.buildings_content_curve = (
+                self.households.buildings_content_curve.set_index("depth")
+            )
 
         """Load damage curves from model files and store them in the model variables."""
         # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
@@ -304,7 +308,9 @@ class FloodRiskModule:
             self.households.var.road_curves = pd.concat(
                 [depth_column] + road_curves, axis=1
             )
-            self.households.var.road_curves.set_index("depth", inplace=True)
+            self.households.var.road_curves = self.households.var.road_curves.set_index(
+                "depth"
+            )
 
         if (
             "damage_model/flood/land_use/forest/curve"
@@ -315,7 +321,9 @@ class FloodRiskModule:
                     "damage_model/flood/land_use/forest/curve"
                 ]
             )
-            self.households.var.forest_curve.set_index("depth", inplace=True)
+            self.households.var.forest_curve = (
+                self.households.var.forest_curve.set_index("depth")
+            )
             self.households.var.forest_curve = self.households.var.forest_curve.rename(
                 columns={"damage_ratio": "forest"}
             )
@@ -328,7 +336,9 @@ class FloodRiskModule:
                     "damage_model/flood/land_use/agriculture/curve"
                 ]
             )
-            self.households.var.agriculture_curve.set_index("depth", inplace=True)
+            self.households.var.agriculture_curve = (
+                self.households.var.agriculture_curve.set_index("depth")
+            )
             self.households.var.agriculture_curve = (
                 self.households.var.agriculture_curve.rename(
                     columns={"damage_ratio": "agriculture"}
@@ -341,7 +351,9 @@ class FloodRiskModule:
                     "damage_model/flood/rail/main/curve"
                 ]
             )
-            self.households.var.rail_curve.set_index("depth", inplace=True)
+            self.households.var.rail_curve = self.households.var.rail_curve.set_index(
+                "depth"
+            )
             self.households.var.rail_curve = self.households.var.rail_curve.rename(
                 columns={"damage_ratio": "rail"}
             )
