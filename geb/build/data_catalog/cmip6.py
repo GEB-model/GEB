@@ -55,8 +55,8 @@ class CMIP6(Adapter):
         years: list[str],
         bounds: tuple[float, float, float, float],
         variable: str,
+        cmip6_model: str,
         experiment: str = "historical",
-        model: str = "gfdl_esm4",
     ) -> dict[str, Any]:
         """Construct the API call dictionary for GTSM data retrieval.
 
@@ -64,8 +64,8 @@ class CMIP6(Adapter):
              years: A list of years to include in the request.
              bounds: A tuple containing the bounding coordinates (min_lon, min_lat, max_lon, max_lat).
              variable: The variable to retrieve (e.g., "near_surface_air_temperature" or "precipitation").
+             cmip6_model: The CMIP6 model to retrieve data from (e.g., "gfdl_esm4").
              experiment: The CMIP6 experiment to retrieve data for (e.g., "historical", "ssp5_8_5").
-             model: The CMIP6 model to retrieve data from (e.g., "gfdl_esm4").
         Returns:
              A dictionary containing the parameters for the CMIP6/CDS API call.
         """
@@ -88,7 +88,7 @@ class CMIP6(Adapter):
             "temporal_resolution": "monthly",
             "experiment": experiment,
             "variable": variable,
-            "model": model,
+            "model": cmip6_model,
             "year": years,
             "area": area,
         }
@@ -299,6 +299,7 @@ class CMIP6(Adapter):
         end_year: int,
         ssp_rcp: int,
         representative_forcing_year: int,
+        cmip6_model: str,
         url: str | None = None,
     ) -> CMIP6:
         """Fetch CMIP6 data and save it to the cache directory.
@@ -308,8 +309,9 @@ class CMIP6(Adapter):
             bounds: A tuple containing the bounding coordinates (min_lon, min_lat, max_lon, max_lat).
             start_year: The start year for calculating deltas.
             end_year: The end year for the data range.
-            representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
             ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
+            cmip6_model: The CMIP6 model to retrieve data from (e.g., "gfdl_esm4").
+            representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
             url: Not used for CMIP6, included for compatibility with base class.
         Raises:
             ValueError: If the SSP-RCP is invalid or if the historical and future periods are not of equal length.
@@ -341,7 +343,7 @@ class CMIP6(Adapter):
                     variable=variable,
                     bounds=bounds,
                     experiment="historical",
-                    model="gfdl_esm4",
+                    cmip6_model=cmip6_model,
                 )
                 self._retrieve(request, str(historical_data_path))
 
@@ -356,7 +358,7 @@ class CMIP6(Adapter):
                     variable=variable,
                     bounds=bounds,
                     experiment=ssp_scenario,
-                    model="gfdl_esm4",
+                    cmip6_model=cmip6_model,
                 )
 
                 self._retrieve(request, str(future_data_path))
