@@ -1108,7 +1108,10 @@ def test_write_discharge_dashboard_with_run_and_completion_date(tmp_path: Path) 
     assert "data-set-theme" in html_content
 
 
-def test_create_discharge_dashboard_filename_with_date(tmp_path: Path) -> None:
+@pytest.mark.parametrize("upstream_area_dtype", [float, object])
+def test_create_discharge_dashboard_filename_with_date(
+    tmp_path: Path, upstream_area_dtype: type
+) -> None:
     """Test that create_discharge_dashboard appends the completion timestamp (date, hour, minute, second) to the html filename."""
     eval_folder: Path = tmp_path / "evaluate"
     eval_folder.mkdir(parents=True, exist_ok=True)
@@ -1142,7 +1145,10 @@ def test_create_discharge_dashboard_filename_with_date(tmp_path: Path) -> None:
         {
             "station_name": pd.Series(dtype=str),
             "evaluation_exclusion_reason": pd.Series(dtype=str),
-            "discharge_observations_upstream_area_m2": pd.Series(dtype=float),
+            # an empty inventory written by the build can have object dtype (no gauges)
+            "discharge_observations_upstream_area_m2": pd.Series(
+                dtype=upstream_area_dtype
+            ),
         },
         geometry=gpd.GeoSeries(crs="EPSG:4326"),
         crs="EPSG:4326",
