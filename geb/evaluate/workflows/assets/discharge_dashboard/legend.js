@@ -9,6 +9,8 @@
   var snappingLayerName = macroData.snappingLayer || null;
   var runName = macroData.runName || null;
   var completionDate = macroData.completionDate || null;
+  var gebVersion = macroData.gebVersion || null;
+  var gitCommit = macroData.gitCommit || null;
   var map = {{this._parent.get_name()}};
   var currentFrequency = "all";
   window._gebCurrentFrequency = currentFrequency;
@@ -905,10 +907,12 @@
       "</div>";
 
     var runMetaHtml = "";
-    if (runName || completionDate) {
+    if (runName || completionDate || gebVersion || gitCommit) {
       runMetaHtml = "<div class=\"geb-run-meta\">" +
         (runName ? "<div class=\"geb-run-meta-row\"><span class=\"geb-run-meta-label\">Run</span><b class=\"geb-run-meta-value\" title=\"" + escapeHtml(runName) + "\">" + escapeHtml(runName) + "</b></div>" : "") +
         (completionDate ? "<div class=\"geb-run-meta-row\"><span class=\"geb-run-meta-label\">Completed</span><span class=\"geb-run-meta-value\" title=\"" + escapeHtml(completionDate) + "\">" + escapeHtml(completionDate) + "</span></div>" : "") +
+        (gebVersion ? "<div class=\"geb-run-meta-row\"><span class=\"geb-run-meta-label\">Version</span><span class=\"geb-run-meta-value\" title=\"" + escapeHtml(gebVersion) + "\">" + escapeHtml(gebVersion) + "</span></div>" : "") +
+        (gitCommit ? "<div class=\"geb-run-meta-row\"><span class=\"geb-run-meta-label\">Commit</span><span class=\"geb-run-meta-value\" title=\"" + escapeHtml(gitCommit) + "\">" + escapeHtml(gitCommit.slice(0, 10)) + "</span></div>" : "") +
         "</div>";
     }
 
