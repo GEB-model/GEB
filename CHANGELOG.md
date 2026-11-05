@@ -1,4 +1,5 @@
 # dev
+- Updated hydromt-sfincs from 2.0.0rc3 to the official 2.0.0 release
 - At the start of every run or spinup (also when continuing from a checkpoint), the GEB version is written to `geb_version.txt` in the run's output folder, and, when GEB runs from a git checkout, the commit of the GEB source to `git_commit.txt`. The discharge evaluation dashboard shows both.
 - Models can now be built and run for regions without cultivated land or buildings (e.g. small dryland, desert or mountain basins). Such models get zero farmers and/or zero households instead of failing during the build.
 - Fixed `geb evaluate` failing with "ufunc 'isfinite' not supported" for models without any discharge stations.
