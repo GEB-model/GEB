@@ -1,4 +1,5 @@
 # dev
+- Fixed a build failure in `setup_crop_prices` ("zip() argument 2 is longer than argument 1") for regions without any crop price data; general inflation rates are now used for those regions.
 - Removed use of `inplace=True` in pandas methods where it is deprecated as of pandas 3.1 (`rename`, `drop`, `set_index`, `reset_index`, `dropna`, `Series.fillna`), which caused deprecation warnings during model building.
 - Fixed a build failure in `setup_region` ("cannot align objects ... along y") for some regions, caused by tiny floating-point differences between the coordinates of the MERIT Hydro elevation and flow direction data.
 - Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
