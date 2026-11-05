@@ -111,7 +111,7 @@ setup_crop_prices:
     millet:
       - millet
     oil palm: 
-      - palm oil
+      - oil palm fruit
     others annual:
       - buckwheat
       - cabbages

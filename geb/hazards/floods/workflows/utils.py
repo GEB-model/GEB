@@ -14,8 +14,9 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
-from hydromt_sfincs import SfincsModel, utils
+from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.components.config.config_variables import SfincsConfigVariables
+from hydromt_sfincs.workflows import downscale_floodmap
 from matplotlib.colors import LinearSegmentedColormap
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
@@ -141,7 +142,7 @@ def read_flood_depth(
             .drop_vars(["band"])
         )
 
-        flood_depth_m: xr.DataArray = utils.downscale_floodmap(
+        flood_depth_m: xr.DataArray = downscale_floodmap(
             zsmax=water_surface_elevation,
             dep=surface_elevation,
             hmin=minimum_flood_depth,
