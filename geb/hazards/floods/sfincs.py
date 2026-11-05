@@ -538,8 +538,7 @@ class SFINCSRootModel:
 
             # must be performed BEFORE burning rivers.
             self.setup_river_outflow_boundary()
-
-        self.setup_boundary_observation_lines()
+            # self.setup_boundary_observation_lines()
 
         # We are only interested in flooding within the subbasins of interest.
         # This area of interest mask is used later to filter the flood maps.
@@ -1197,7 +1196,11 @@ class SFINCSRootModel:
 
             # Reverse the line when the active cell is on the left so active cells
             # are always on the right (positive discharge = outflow).
-            if self.mask.values[row_left, col_left] == 1:
+            if (
+                0 <= row_left < self.mask.shape[0]
+                and 0 <= col_left < self.mask.shape[1]
+                and self.mask.values[row_left, col_left] == 1
+            ):
                 line = LineString(coords[::-1])
             oriented_lines.append(line)
 

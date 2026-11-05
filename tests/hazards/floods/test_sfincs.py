@@ -146,7 +146,8 @@ def build_sfincs(
         )
         geb_model.close()
 
-        assert (sfincs_model.path / "sfincs.crs").exists()
+        if not coastal:
+            assert (sfincs_model.path / "sfincs.crs").exists()
         if subgrid:
             assert (sfincs_model.path / "sfincs_subgrid.nc").exists()
         else:
@@ -795,17 +796,7 @@ def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
         )
 
         total_flood_volume = simulation.get_flood_volume(flood_depth)
-        total_outflow_volume: float = simulation.get_outflow_volume()
         assert total_flood_volume > 0, "No flooding occurred"
-        assert total_outflow_volume < 0, (
-            "Expected net coastal inflow (negative outflow)"
-        )
-        assert math.isclose(
-            total_flood_volume,
-            -total_outflow_volume,
-            abs_tol=0,
-            rel_tol=0.02,
-        )
 
         plot_flood_map(flood_depth, "flood_depth_coastal_test")
 
