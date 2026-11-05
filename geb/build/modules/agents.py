@@ -331,7 +331,6 @@ class Agents(BuildModelBase):
             "indWW",
             self.ssp,
         )
-
         self.set_other(da, name="water_demand/industry_water_demand")
         da = parse_demand(
             "industry_water_demand",
@@ -342,7 +341,7 @@ class Agents(BuildModelBase):
         da = parse_demand(
             "livestock_water_demand",
             "livestockConsumption",
-            "ssp2",
+            "ssp2",  # There is only data for SSP2 for livestock consumption
         )
         self.set_other(da, name="water_demand/livestock_water_consumption")
 

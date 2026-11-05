@@ -6,7 +6,8 @@ set_time_range:
   end_date: 2024-12-31
 
 set_ssp:
-  ssp: ssp3
+  ssp: 'ssp3'
+  rcp: '70'
 
 setup_coastlines:
 
