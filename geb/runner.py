@@ -769,7 +769,6 @@ def get_builder(
 def init_fn(
     config: str | Path,
     build_config: str | Path,
-    update_config: str | Path,
     working_directory: str | Path,
     from_example: str,
     basin_id: str | None = None,
@@ -787,7 +786,6 @@ def init_fn(
     Args:
         config: Path to the model configuration file to create.
         build_config: Path to the model build configuration file to create.
-        update_config: Path to the model update configuration file to create.
         working_directory: Working directory for the model.
         from_example: Name of the example to use as a base for the model.
         basin_id: Basin ID(s) to use for the model. Can be a comma-separated list of integers.
@@ -812,7 +810,6 @@ def init_fn(
 
     config: Path = Path(config)
     build_config: Path = Path(build_config)
-    update_config: Path = Path(update_config)
     working_directory: Path = Path(working_directory)
 
     if not working_directory.exists():
@@ -829,11 +826,6 @@ def init_fn(
         if build_config.exists() and not overwrite:
             raise FileExistsError(
                 f"Build config file {build_config} already exists. Please remove it or use a different name, or use --overwrite."
-            )
-
-        if update_config.exists() and not overwrite:
-            raise FileExistsError(
-                f"Update config file {update_config} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
         example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
@@ -879,14 +871,8 @@ def init_fn(
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
         shutil.copy(example_folder / BUILD_DEFAULT, build_config)
-        shutil.copy(example_folder / UPDATE_DEFAULT, update_config)
 
-        logger.info(
-            "Initialized model files: %s, %s, %s",
-            config,
-            build_config,
-            update_config,
-        )
+        logger.info("Initialized model files: %s, %s", config, build_config)
 
     with WorkingDirectory(working_directory):
         _run_with_optional_profiling(
