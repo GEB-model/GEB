@@ -5,8 +5,7 @@
 - Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
 - Allow SSP and RCP to be configured independently, infer standard defaults when either is omitted, and raise errors when a downstream climate-data identifier does not support the selected RCP. The separation between climate forcing scenario and socioeconomic scenario will also come in handy when we start using the new CMIP7 climate forcing scenarios.
-- Added household relocation intention–behavior adjustment using the configured `intention_behavior_gap`.
-- Applied projected GDP changes to government dike investment and maintenance costs when `agent_settings.climrisk.project_costs` is enabled.
+- Applied projected GDP changes to household income, wealth, adaptation and relocation costs and ammenity value.
 - Added household and Climrisk options to the configuration schema.
 
 # v1.0.0b37
