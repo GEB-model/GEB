@@ -1650,10 +1650,22 @@ class Households(AgentBaseClass):
                         raise ValueError(
                             f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}."
                         )
+                    self.model.logger.info(
+                        f"CLIMRISK: Scenario for income and wealth projections: SSP{ssp}-{rcp.replace('', '.')}"
+                    )
+                    self.model.logger.info(
+                        f"CLIMRISK: Damage function for income and wealth projections: {damage_function}p{warming_percentile}"
+                    )
                     gdp_damages_map_name: str = (
                         f"SSP{ssp}{rcp}_{damage_function}_p{warming_percentile}.zarr"
                     )
                 else:
+                    self.model.logger.info(
+                        f"CLIMRISK: Secnario for income and wealth projections: SSP{ssp}"
+                    )
+                    self.model.logger.info(
+                        f"CLIMRISK: Damage function for income and wealth projections: no damages"
+                    )
                     gdp_damages_map_name: str = f"SSP{ssp}_GDP.zarr"
 
                 gdp_damages_map_path: Path = (
@@ -1714,6 +1726,12 @@ class Households(AgentBaseClass):
             if project_costs:
                 self.model.logger.info(
                     "CLIMRISK: Loading scenario for ammenity value, adaptation and relocation costs projection"
+                )
+                self.model.logger.info(
+                    f"CLIMRISK: Secnario for ammenity value, adaptation and relocation costs projection: SSP{ssp}"
+                )
+                self.model.logger.info(
+                    f"CLIMRISK: Damage function ammenity value, adaptation and relocation costs projection: no damages"
                 )
                 gdp_map_name: str = f"SSP{ssp}_GDP.zarr"
                 gdp_map_path: Path = (
