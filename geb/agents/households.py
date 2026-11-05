@@ -1573,7 +1573,7 @@ class Households(AgentBaseClass):
         """Update monetary variables to match the specified SSP scenario.
 
         Raises:
-            ValueError: If the SSP, damage function, RCP, or warming percentile is
+            ValueError: If the damage function or warming percentile is
                 invalid, or if the requested scenario map has not been built.
         """
         try:
@@ -1587,7 +1587,6 @@ class Households(AgentBaseClass):
             "project_costs",
             "project_income",
             "country_wide",
-            "ssp",
         }
         missing_settings = required_settings.difference(climrisk_config)
         if missing_settings:
@@ -1605,9 +1604,6 @@ class Households(AgentBaseClass):
             self.model.logger.info(
                 "CLIMRISK: Initializing SSP socioeconomic projections"
             )
-            ssp: str = self.model.config["agent_settings"]["climrisk"]["ssp"]
-            if ssp not in ["1", "2", "3", "4", "5"]:
-                raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
 
             if project_income:
                 self.model.logger.info(
@@ -1623,7 +1619,7 @@ class Households(AgentBaseClass):
                         f"Missing required settings in 'agent_settings.climrisk': {missing}."
                     )
                 if climrisk_config["damage_function"] != "GDP":
-                    required_settings = {"rcp", "warming_percentile"}
+                    required_settings = {"warming_percentile"}
                     missing_settings = required_settings.difference(climrisk_config)
                     if missing_settings:
                         missing = ", ".join(sorted(missing_settings))
@@ -1638,7 +1634,6 @@ class Households(AgentBaseClass):
                         f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}."
                     )
                 if damage_function != "GDP":
-                    rcp: str = self.model.config["agent_settings"]["climrisk"]["rcp"]
                     warming_percentile: str = self.model.config["agent_settings"][
                         "climrisk"
                     ]["warming_percentile"]
@@ -1646,27 +1641,17 @@ class Households(AgentBaseClass):
                         raise ValueError(
                             f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}."
                         )
-                    if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
-                        raise ValueError(
-                            f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}."
-                        )
-                    self.model.logger.info(
-                        f"CLIMRISK: Scenario for income and wealth projections: SSP{ssp}-{rcp.replace('', '.')}"
-                    )
                     self.model.logger.info(
                         f"CLIMRISK: Damage function for income and wealth projections: {damage_function}p{warming_percentile}"
                     )
                     gdp_damages_map_name: str = (
-                        f"SSP{ssp}{rcp}_{damage_function}_p{warming_percentile}.zarr"
+                        f"{damage_function}_p{warming_percentile}.zarr"
                     )
                 else:
                     self.model.logger.info(
-                        f"CLIMRISK: Secnario for income and wealth projections: SSP{ssp}"
-                    )
-                    self.model.logger.info(
                         f"CLIMRISK: Damage function for income and wealth projections: no damages"
                     )
-                    gdp_damages_map_name: str = f"SSP{ssp}_GDP.zarr"
+                    gdp_damages_map_name: str = f"GDP.zarr"
 
                 gdp_damages_map_path: Path = (
                     self.model.input_folder
@@ -1690,7 +1675,7 @@ class Households(AgentBaseClass):
                         + f"requested data to 'setup_climrisk'."
                     ) from e
 
-                population_map_name: str = f"SSP{ssp}_POP.zarr"
+                population_map_name: str = f"POP.zarr"
                 population_map_path: Path = (
                     self.model.input_folder / "other" / "ssp_maps" / population_map_name
                 )
@@ -1728,12 +1713,9 @@ class Households(AgentBaseClass):
                     "CLIMRISK: Loading scenario for ammenity value, adaptation and relocation costs projection"
                 )
                 self.model.logger.info(
-                    f"CLIMRISK: Secnario for ammenity value, adaptation and relocation costs projection: SSP{ssp}"
-                )
-                self.model.logger.info(
                     f"CLIMRISK: Damage function ammenity value, adaptation and relocation costs projection: no damages"
                 )
-                gdp_map_name: str = f"SSP{ssp}_GDP.zarr"
+                gdp_map_name: str = f"GDP.zarr"
                 gdp_map_path: Path = (
                     self.model.input_folder / "other" / "ssp_maps" / gdp_map_name
                 )

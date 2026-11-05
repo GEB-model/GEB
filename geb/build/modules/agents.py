@@ -1805,102 +1805,126 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method(required=False)
+    @build_method(depends_on=["set_ssp"], required=True)
     def setup_climrisk(
         self,
-        ssp: list[str] | None = None,
-        rcp: list[str] | None = None,
         damage_function: list[str] | None = None,
         warming_percentile: list[str] | None = None,
         reference_year: int = 2020,
     ) -> None:
-        """Load CLIMRISK population and damage maps into the model.
+        """Load CLIMRISK population and GDP maps into the model.
 
-        For each SSP, stores a population map. It also stores maps for GDP with
-        damages for each RCP, damage function, and warming percentile combination.
-        ``"GDP"`` is a special damage function option that is always run and selects the GDP data
-        without damages.
+        Stores the population map for the configured SSP, then stores GDP maps
+        for each requested damage-function and warming-percentile combination.
+        ``"GDP"`` is a special damage-function option: it loads GDP without
+        damages and is always included.
 
         Args:
-            ssp: SSP scenario identifiers, from ``"1"`` through ``"5``.
-                Defaults to ``["2"]``.
-            rcp: RCP identifiers. Defaults to ``["70"]``.
-            damage_function: Damage functions (``"K"``, ``"KU"``, ``"KPU"``,
-                ``"RU"``, ``"RPU"``) or ``"GDP"``. Defaults to ``["K", "GDP"]``.
-            warming_percentile: Global warming percentiles: ``"10"``, ``"50"``, or ``"90"``.
-                Defaults to ``["90"]``.
-            reference_year: First year to include in damage data, from 2010
+            damage_function: Damage functions to load: ``"K"``, ``"KU"``,
+                ``"KPU"``, ``"RU"``, or ``"RPU"``. ``"GDP"`` may also be
+                supplied; it is added automatically if omitted. Defaults to
+                ``["K"]``.
+            warming_percentile: Global warming percentiles to load:
+                ``"10"``, ``"50"``, or ``"90"``. Defaults to ``["90"]``.
+            reference_year: First year included in damage data, from 2010
                 through 2100. Defaults to 2020.
 
         Raises:
-            TypeError: If a scenario argument is not a list of strings.
+            TypeError: If either scenario argument is not a list of strings,
+                or if ``reference_year`` is not an integer.
+            ValueError: If a scenario option is unsupported or the reference
+                year is outside 2010-2100.
         """
-        if ssp is None:
-            ssp = ["2"]
-        if rcp is None:
-            rcp = ["70"]
         if damage_function is None:
             damage_function = ["K"]
-        if not "GDP" in damage_function:
-            damage_function += ["GDP"]
+        elif not isinstance(damage_function, list):
+            raise TypeError(
+                f"damage_function must be a list, got {type(damage_function).__name__}"
+            )
+        else:
+            damage_function = damage_function.copy()
+
         if warming_percentile is None:
             warming_percentile = ["90"]
+        elif not isinstance(warming_percentile, list):
+            raise TypeError(
+                f"warming_percentile must be a list, got {type(warming_percentile).__name__}"
+            )
 
         for name, value in {
-            "ssp": ssp,
-            "rcp": rcp,
             "damage_function": damage_function,
             "warming_percentile": warming_percentile,
         }.items():
-            if not isinstance(value, list):
-                raise TypeError(f"{name} must be a list, got {type(value).__name__}")
-            if not all(isinstance(v, str) for v in value):
+            if not all(isinstance(item, str) for item in value):
                 raise TypeError(f"All items in {name} must be strings.")
 
-        self.logger.info("Processing climrisk data")
-        for i in range(len(ssp)):
-            self.logger.info(f"Processing population: SSP{ssp[i]}")
-            climrisk = self.data_catalog.fetch("climrisk").read(
-                region=self.region,
-                ssp=ssp[i],
-                rcp=None,
-                damage_function=None,
-                warming_percentile=None,
-                obtain_population=True,
+        valid_damage_functions = {"K", "KU", "KPU", "RU", "RPU", "GDP"}
+        invalid_damage_functions = set(damage_function) - valid_damage_functions
+        if invalid_damage_functions:
+            raise ValueError(
+                f"Unsupported damage_function value(s): {sorted(invalid_damage_functions)}"
             )
-            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}_POP")
-            for l in range(len(damage_function)):
-                if damage_function[l] == "GDP":
-                    self.logger.info(f"Processing GDP for combination: SSP{ssp[i]}")
+
+        valid_percentiles = {"10", "50", "90"}
+        invalid_percentiles = set(warming_percentile) - valid_percentiles
+        if invalid_percentiles:
+            raise ValueError(
+                f"Unsupported warming_percentile value(s): {sorted(invalid_percentiles)}"
+            )
+
+        if not isinstance(reference_year, int):
+            raise TypeError(
+                f"reference_year must be an integer, got {type(reference_year).__name__}"
+            )
+        if not 2010 <= reference_year <= 2100:
+            raise ValueError("reference_year must be between 2010 and 2100.")
+
+        if "GDP" not in damage_function:
+            damage_function.append("GDP")
+
+        self.logger.info("Processing climrisk data")
+        self.logger.info(f"Processing population: SSP{self.ssp}")
+        climrisk = self.data_catalog.fetch("climrisk").read(
+            region=self.region,
+            ssp=self.ssp,
+            rcp=None,
+            damage_function=None,
+            warming_percentile=None,
+            obtain_population=True,
+        )
+        self.set_other(climrisk, name=f"ssp_maps/POP")
+
+        for function in damage_function:
+            if function == "GDP":
+                self.logger.info(f"Processing GDP for combination: SSP{self.ssp}")
+                climrisk = self.data_catalog.fetch("climrisk").read(
+                    region=self.region,
+                    ssp=self.ssp,
+                    rcp=None,
+                    damage_function=function,
+                    warming_percentile=None,
+                    reference_year=reference_year,
+                )
+                self.set_other(climrisk, name=f"ssp_maps/{function}")
+            else:
+                for percentile in warming_percentile:
+                    self.logger.info(
+                        f"Processing GDP for combination: SSP{self.ssp}-{self.rcp}, "
+                        f"damage function {function}"
+                    )
                     climrisk = self.data_catalog.fetch("climrisk").read(
                         region=self.region,
-                        ssp=ssp[i],
-                        rcp=None,
-                        damage_function=damage_function[l],
-                        warming_percentile=None,
+                        ssp=self.ssp,
+                        rcp=self.rcp,
+                        damage_function=function,
+                        warming_percentile=percentile,
                         reference_year=reference_year,
                     )
                     self.set_other(
-                        climrisk, name=f"ssp_maps/SSP{ssp[i]}_{damage_function[l]}"
+                        climrisk,
+                        name=(f"ssp_maps/{function}_p{percentile}"),
                     )
-                else:
-                    for j in range(len(rcp)):
-                        for k in range(len(warming_percentile)):
-                            self.logger.info(
-                                f"Processing GDP for combination: SSP{ssp[i]}-{rcp[j]}, Damage function {damage_function[l]}"
-                            )
-                            climrisk = self.data_catalog.fetch("climrisk").read(
-                                region=self.region,
-                                ssp=ssp[i],
-                                rcp=rcp[j],
-                                damage_function=damage_function[l],
-                                warming_percentile=warming_percentile[k],
-                                reference_year=reference_year,
-                            )
-                            self.set_other(
-                                climrisk,
-                                name=f"ssp_maps/SSP{ssp[i]}{rcp[j]}_{damage_function[l]}_p{warming_percentile[k]}",
-                            )
+
         self.logger.info("All climrisk data processed.")
 
     @build_method(

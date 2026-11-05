@@ -1,5 +1,6 @@
 """Test suite for household decision making module."""
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -441,7 +442,7 @@ def test_update_monetary_variables_respects_projection_flags(
 
     def fake_open_dataarray(path: Path) -> xr.DataArray:
         opened_paths.append(path.name)
-        return population_map if path.name == "SSP2_POP.zarr" else gdp_map
+        return population_map if path.name == "POP.zarr" else gdp_map
 
     monkeypatch.setattr(
         "geb.agents.households.xr.open_dataarray",
@@ -473,6 +474,7 @@ def test_update_monetary_variables_respects_projection_flags(
     households.model = SimpleNamespace(
         input_folder=tmp_path,
         current_time=datetime(2021, 1, 1),
+        logger=logging.getLogger("test"),
         config={"agent_settings": {"climrisk": climrisk_config}},
     )
     households.var = SimpleNamespace(
@@ -489,9 +491,9 @@ def test_update_monetary_variables_respects_projection_flags(
     assert households.var.factor_change == pytest.approx(cost_factor)
 
     if project_income:
-        assert "SSP2_POP.zarr" in opened_paths
+        assert "POP.zarr" in opened_paths
     else:
-        assert "SSP2_POP.zarr" not in opened_paths
+        assert "POP.zarr" not in opened_paths
 
 
 def test_update_monetary_variables_requires_climrisk_config() -> None:
