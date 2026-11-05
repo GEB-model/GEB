@@ -1,4 +1,5 @@
 # dev
+- Models can now be built and run for regions without cultivated land or buildings (e.g. small dryland, desert or mountain basins). Such models get zero farmers and/or zero households instead of failing during the build.
 - Fixed `geb evaluate` failing with "ufunc 'isfinite' not supported" for models without any discharge stations.
 - Fixed a build failure in `setup_crop_prices` ("zip() argument 2 is longer than argument 1") for regions without any crop price data; general inflation rates are now used for those regions.
 - Removed use of `inplace=True` in pandas methods where it is deprecated as of pandas 3.1 (`rename`, `drop`, `set_index`, `reset_index`, `dropna`, `Series.fillna`), which caused deprecation warnings during model building.
