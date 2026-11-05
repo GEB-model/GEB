@@ -1602,13 +1602,17 @@ class Households(AgentBaseClass):
         # We consider self.start_adaptation_year to be the base year
         base_year = self.start_adaptation_year
         if not getattr(self, "_ssp_maps_initialized", False):
-            self.model.logger.info("CLIMRISK: Initializing SSP socioeconomic projections")
+            self.model.logger.info(
+                "CLIMRISK: Initializing SSP socioeconomic projections"
+            )
             ssp: str = self.model.config["agent_settings"]["climrisk"]["ssp"]
             if ssp not in ["1", "2", "3", "4", "5"]:
                 raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
 
             if project_income:
-                self.model.logger.info("CLIMRISK: Loading household income and wealth projections")
+                self.model.logger.info(
+                    "CLIMRISK: Loading household income and wealth projections"
+                )
                 required_settings = {
                     "damage_function",
                 }
@@ -1708,7 +1712,9 @@ class Households(AgentBaseClass):
                 )
 
             if project_costs:
-                self.model.logger.info("CLIMRISK: Loading scenario for ammenity value, adaptation and relocation costs projection")
+                self.model.logger.info(
+                    "CLIMRISK: Loading scenario for ammenity value, adaptation and relocation costs projection"
+                )
                 gdp_map_name: str = f"SSP{ssp}_GDP.zarr"
                 gdp_map_path: Path = (
                     self.model.input_folder / "other" / "ssp_maps" / gdp_map_name
