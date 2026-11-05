@@ -58,7 +58,7 @@ class CMIP6(Adapter):
         cmip6_model: str,
         experiment: str = "historical",
     ) -> dict[str, Any]:
-        """Construct the API call dictionary for GTSM data retrieval.
+        """Construct the API call dictionary for CMIP6 data retrieval.
 
         Args:
              years: A list of years to include in the request.
@@ -297,8 +297,8 @@ class CMIP6(Adapter):
         bounds: tuple[float, float, float, float],
         start_year: int,
         end_year: int,
-        ssp_rcp: int,
         representative_forcing_year: int,
+        ssp_rcp: int,
         cmip6_model: str,
         url: str | None = None,
     ) -> CMIP6:
@@ -309,15 +309,16 @@ class CMIP6(Adapter):
             bounds: A tuple containing the bounding coordinates (min_lon, min_lat, max_lon, max_lat).
             start_year: The start year for calculating deltas.
             end_year: The end year for the data range.
+            representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
             ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
             cmip6_model: The CMIP6 model to retrieve data from (e.g., "gfdl_esm4").
-            representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
-            url: Not used for CMIP6, included for compatibility with base class.
         Raises:
             ValueError: If the SSP-RCP is invalid or if the historical and future periods are not of equal length.
         Returns:
             The current instance of the CMIP6 adapter.
         """
+        # cache per model, so that switching model does not silently reuse deltas of another model
+        self.filename = f"cmip6_combined_deltas_{cmip6_model}.zarr"
         if self.path.exists():
             return self
 
@@ -336,7 +337,7 @@ class CMIP6(Adapter):
 
         # fetch both precipitation and near-surface air temperature for the historical period, since we'll need both to compute deltas
         for variable in ["precipitation", "near_surface_air_temperature"]:
-            historical_data_path = self.root / f"cmip6_historical_{variable}.zip"
+            historical_data_path = self.root / f"cmip6_{cmip6_model}_historical_{variable}.zip"
             if not historical_data_path.exists():
                 request = self.construct_request(
                     years=years_historical,
@@ -350,7 +351,7 @@ class CMIP6(Adapter):
             # future data
             future_data_path = (
                 self.root
-                / f"cmip6_{ssp_scenario}_{variable}_{representative_forcing_year}.zip"
+                / f"cmip6_{cmip6_model}_{ssp_scenario}_{variable}_{representative_forcing_year}.zip"
             )
             if not future_data_path.exists():
                 request = self.construct_request(
