@@ -694,8 +694,8 @@ class SFINCSRootModel:
                     manning_grid=sf.roughness.data["manning"],
                     rivers=rivers_to_burn,
                 )
-                sf.elevation.data["dep"] = burned_elv
-                sf.roughness.data["manning"] = burned_manning
+                sf.grid.data["dep"] = burned_elv
+                sf.grid.data["manning"] = burned_manning
 
         if not rivers_to_burn.empty:
             bed_elevation_grid: xr.DataArray = (

@@ -1,4 +1,5 @@
 # dev
+- Updated hydromt-sfincs from 2.0.0rc3 to the official 2.0.0 release
 - Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
 
