@@ -71,6 +71,8 @@ class CMIP6(Adapter):
              variable: The variable to retrieve (e.g., "near_surface_air_temperature" or "precipitation").
              cmip6_model: The CMIP6 model to retrieve data from (e.g., "gfdl_esm4").
              experiment: The CMIP6 experiment to retrieve data for (e.g., "historical", "ssp5_8_5").
+        Raises:
+            ValueError: If the specified CMIP6 model is not supported or tested.
         Returns:
              A dictionary containing the parameters for the CMIP6/CDS API call.
         """
