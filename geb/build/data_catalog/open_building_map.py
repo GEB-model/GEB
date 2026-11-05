@@ -71,7 +71,7 @@ class OpenBuildingMap(Adapter):
 
     def _extract_buildings_in_geom(
         self, gpkg_filename: Path, geom: geometry.polygon.Polygon
-    ) -> gpd.GeoDataFrame | None:
+    ) -> gpd.GeoDataFrame:
         """This function reads the downloaded geopackage containing the buildings. It then extracts only the buildings that lie within the geom.
 
         Args:
@@ -96,11 +96,7 @@ class OpenBuildingMap(Adapter):
         t1 = time()
         buildings = buildings[buildings.intersects(geom)]
         t2 = time()
-        if len(buildings) == 0:
-            print("No buildings found in region geom")
-            return
-        else:
-            return buildings
+        return buildings
 
     def _download_and_extract_tile(
         self,
@@ -175,10 +171,7 @@ class OpenBuildingMap(Adapter):
             geom: Polygon representing the model region.
 
         Returns:
-            A GeoDataFrame with the buildings data.
-
-        Raises:
-            RuntimeError: If no buildings can be downloaded for the model region.
+            A GeoDataFrame with the buildings data (empty when the region has no buildings).
         """
         # get bounds for geom
         tiles: list = self._quadkeys_for_geom(geom=geom)
@@ -194,16 +187,16 @@ class OpenBuildingMap(Adapter):
                     tile_url, temp_dir, tile_filename
                 )
                 # Add all extracted geopackage files (already filtered during extraction)
-                buildings = self._extract_buildings_in_geom(gpkg_filename, geom)
-                if buildings is not None:
-                    list_of_buildings_in_geom.append(buildings)
-
-        # raise error if no buildings are found in model region
-        if len(list_of_buildings_in_geom) == 0:
-            raise RuntimeError("No OpenBuildingMap features were found in model domain")
+                # also keep empty results: they carry the column schema of the source file
+                list_of_buildings_in_geom.append(
+                    self._extract_buildings_in_geom(gpkg_filename, geom)
+                )
 
         # concatenate all buildings
         gdf: gpd.GeoDataFrame = pd.concat(list_of_buildings_in_geom, ignore_index=True)  # ty:ignore[invalid-assignment]
+        if len(gdf) == 0:
+            # e.g. small uninhabited desert or mountain basins
+            self.logger.warning("No OpenBuildingMap buildings found in model domain")
 
         # add x and y columns for building centroids in EPSG:4326 (lon/lat)
         gdf["x"] = gdf.geometry.centroid.x
