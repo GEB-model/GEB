@@ -2617,14 +2617,7 @@ class Agents(BuildModelBase):
 
         unique_regions = self.geom["regions"]
 
-        data = donate_and_receive_crop_prices(
-            donor_data,
-            unique_regions,
-            TRADE_REGIONS,
-            self.data_catalog,
-            self.geom["global_countries"],
-            self.geom["regions"],
-        )
+        data = donate_and_receive_crop_prices(donor_data, unique_regions, TRADE_REGIONS)
 
         # Map to corresponding region
         data_reset = data.reset_index(level="region_id")

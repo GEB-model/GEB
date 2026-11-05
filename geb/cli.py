@@ -548,13 +548,6 @@ def click_build_options(
     help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
 )
 @click.option(
-    "--update-config",
-    "-u",
-    type=click.Path(path_type=Path),
-    default=Path(UPDATE_DEFAULT),
-    help="Path of the model update configuration file.",
-)
-@click.option(
     "--from-example",
     default="geul",
     help="Name of the example to use as a base for the model. Defaults to 'geul'.",
