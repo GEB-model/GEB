@@ -2269,7 +2269,7 @@ class Agents(BuildModelBase):
         n_farmers = self.array["agents/farmers/region_id"].size
 
         preferences_global = self.create_behavioural_parameters()
-        preferences_global.rename(
+        preferences_global = preferences_global.rename(
             columns={
                 "country": "Country",
                 "isocode": "ISO3",
@@ -2279,8 +2279,7 @@ class Agents(BuildModelBase):
                 "discount_std": "Discount_std",
                 "risktaking_losses_std": "Losses_std",
                 "risktaking_gains_std": "Gains_std",
-            },
-            inplace=True,
+            }
         )
 
         ISO3_codes_region: set[str] = set(self.geom["regions"]["ISO3"].unique())
@@ -2340,7 +2339,7 @@ class Agents(BuildModelBase):
                     "Discount_std",
                 ]
             ]
-            region_risk_aversion_data.reset_index(drop=True, inplace=True)
+            region_risk_aversion_data = region_risk_aversion_data.reset_index(drop=True)
             # Store pivoted data in dictionary with region_id as key
             donor_data[ISO3] = region_risk_aversion_data
 
