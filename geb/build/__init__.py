@@ -2597,9 +2597,12 @@ class GEBModel(
             return "ssp3"
 
         params = self.params["ssp"]
-        if params["ssp"] is not None:
-            return params["ssp"]
-        if params["rcp"] is None:
+        configured_ssp = params.get("ssp")
+        if configured_ssp is not None:
+            return configured_ssp
+
+        configured_rcp = params.get("rcp")
+        if configured_rcp is None:
             return "ssp3"
 
         default_ssps = {
@@ -2627,9 +2630,12 @@ class GEBModel(
             return "70"
 
         params = self.params["ssp"]
-        if params["rcp"] is not None:
-            return params["rcp"]
-        if params["ssp"] is None:
+        configured_rcp = params.get("rcp")
+        if configured_rcp is not None:
+            return configured_rcp
+
+        configured_ssp = params.get("ssp")
+        if configured_ssp is None:
             return "70"
 
         default_rcps = {

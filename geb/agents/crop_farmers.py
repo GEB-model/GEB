@@ -964,7 +964,10 @@ class CropFarmers(AgentBaseClass):
             np.sum(self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER]),
         )
 
-        self.var.mean_irrigation_efficiency = np.mean(self.var.irrigation_efficiency)
+        # mean of an empty array is undefined; 0 farmers occurs in regions without cultivated land
+        self.var.mean_irrigation_efficiency = (
+            np.mean(self.var.irrigation_efficiency) if self.var.n > 0 else np.nan
+        )
         _, self.var.irrigation_efficiency_group[:] = np.unique(
             self.var.irrigation_efficiency, return_inverse=True
         )
@@ -1044,7 +1047,8 @@ class CropFarmers(AgentBaseClass):
         classes, counts = np.unique(
             self.var.why_class[self.var.why_class >= 0], return_counts=True
         )
-        self.var.why_class[self.var.why_class < 0] = classes[counts.argmax()]
+        if (self.var.why_class < 0).any():
+            self.var.why_class[self.var.why_class < 0] = classes[counts.argmax()]
 
         ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
         self.var.GEV_parameters = DynamicArray(
@@ -1275,7 +1279,7 @@ class CropFarmers(AgentBaseClass):
         if self.model.config["agent_settings"]["fix_activation_order"]:
             self.var.activation_order_by_elevation_fixed = activation_order
         # Check if the activation order is correct, by checking if elevation is decreasing
-        assert np.diff(elevation[activation_order]).max() <= 0
+        assert (np.diff(elevation[activation_order]) <= 0).all()
         return activation_order
 
     def save_pr(self, pr_kg_per_m2_per_s: npt.NDArray[np.floating]) -> None:
@@ -1978,8 +1982,10 @@ class CropFarmers(AgentBaseClass):
         Returns:
             npt.NDArray: Values mapped to each field (same shape as ``land_owners``).
         """
-        by_field = np.take(array, self.HRU.var.land_owners)
-        by_field[self.HRU.var.land_owners == -1] = nodata
+        # only index owned fields, so this also works when there are no farmers
+        owned_fields = self.HRU.var.land_owners != -1
+        by_field = np.full(self.HRU.var.land_owners.shape, nodata, dtype=array.dtype)
+        by_field[owned_fields] = np.take(array, self.HRU.var.land_owners[owned_fields])
         return by_field
 
     def decompress(self, array: npt.NDArray) -> npt.NDArray:
@@ -4894,10 +4900,11 @@ class CropFarmers(AgentBaseClass):
         self.water_abstraction_sum()
         timer.finish_split("water abstraction calculation")
 
-        ## yearly actions
+        ## yearly actions (none needed when there are no farmers, e.g. no cultivated land)
         if (
             self.model.current_time.month == self.hydrological_year_start_month
             and self.model.current_time.day == 1
+            and self.var.n > 0
         ):
             if self.model.current_time.year > self.model.spinup_start.year:
                 # reset the irrigation limit, but only if a full year has passed already. Otherwise

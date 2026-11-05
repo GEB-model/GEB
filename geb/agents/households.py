@@ -1767,7 +1767,8 @@ class Households(AgentBaseClass):
 
     def step(self) -> None:
         """Advance the households by one time step."""
-        if self.config["adapt"]:
+        # adaptation decisions need at least one household (none in uninhabited regions)
+        if self.config["adapt"] and self.n > 0:
             if self.config["adapt_to_actual_floods"]:
                 self.flood_events: list[dict[str, datetime]] = self.model.config[
                     "hazards"
