@@ -1068,7 +1068,10 @@ class Crops(BuildModelBase):
             changes = np.nanmean(
                 region_data[1:].to_numpy() / region_data[:-1].to_numpy(), axis=1
             )
-            changes = np.insert(changes, 0, np.nan)
+            # first year has no previous year; skip when the region has no price data at all,
+            # in which case the inflation rates below are used for every year
+            if len(region_data) > 0:
+                changes = np.insert(changes, 0, np.nan)
 
             for year, change in zip(region_data.index, changes, strict=True):
                 costs.at[(region_id, year), "_crop_price_inflation"] = change
@@ -2326,7 +2329,10 @@ class Crops(BuildModelBase):
                 crop_calendar_per_farmer, base_crops, resistant_crops
             )
 
-        assert crop_calendar_per_farmer[:, :, 3].max() == 0
+        assert (
+            crop_calendar_per_farmer.shape[0] == 0
+            or crop_calendar_per_farmer[:, :, 3].max() == 0
+        )
 
         check_crop_calendar(crop_calendar_per_farmer)
 

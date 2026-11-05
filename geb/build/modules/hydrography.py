@@ -2073,9 +2073,9 @@ class Hydrography(BuildModelBase):
                 custom_reservoir_capacity_df.index != -1
             ]
 
-            waterbodies.set_index("waterbody_id", inplace=True)
+            waterbodies = waterbodies.set_index("waterbody_id")
             waterbodies.update(custom_reservoir_capacity_df)
-            waterbodies.reset_index(inplace=True)
+            waterbodies = waterbodies.reset_index()
 
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
         assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"
