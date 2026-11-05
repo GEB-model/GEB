@@ -338,7 +338,7 @@ def process_station_data(Q_station: pd.DataFrame, station_path: Path) -> pd.Data
     Q_station.index.name = "time"  # rename index to time
 
     # delete missing values in the dataframe
-    Q_station.dropna(inplace=True)  # drop missing time steps
+    Q_station = Q_station.dropna()  # drop missing time steps
 
     # checks
     if Q_station.shape[1] != 1:

@@ -587,8 +587,8 @@ class Households(AgentBaseClass):
         buildings_with_postal_codes = buildings_with_postal_codes.set_geometry(
             "geometry"
         )
-        buildings_with_postal_codes.drop(
-            columns=["building_geometry", "index_right"], inplace=True
+        buildings_with_postal_codes = buildings_with_postal_codes.drop(
+            columns=["building_geometry", "index_right"]
         )
 
         write_geom(
@@ -614,7 +614,9 @@ class Households(AgentBaseClass):
         )
 
         # Drop columns that are not needed
-        households_with_postal_codes.drop(columns=["index_right"], inplace=True)
+        households_with_postal_codes = households_with_postal_codes.drop(
+            columns=["index_right"]
+        )
         households_with_postal_codes.to_parquet(
             self.model.output_folder / "household_points_w_postal_codes.geoparquet"
         )
@@ -893,9 +895,8 @@ class Households(AgentBaseClass):
                 distance_col="distance",
             )
             # Rename the fid_right column for clarity
-            postal_codes_with_assets.rename(
-                columns={"fid_right": "asset_id"},
-                inplace=True,
+            postal_codes_with_assets = postal_codes_with_assets.rename(
+                columns={"fid_right": "asset_id"}
             )
 
         elif asset_type == "critical_facilities":
@@ -913,8 +914,8 @@ class Households(AgentBaseClass):
                 how="left",
                 predicate="within",
             )
-            critical_facilities_with_postal_codes.drop(
-                columns=["index_right"], inplace=True
+            critical_facilities_with_postal_codes = (
+                critical_facilities_with_postal_codes.drop(columns=["index_right"])
             )
 
             # Rename the id column for clarity and drop fid so it can save to gpkg
