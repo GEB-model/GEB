@@ -81,9 +81,7 @@ class OpenBuildingMap(Adapter):
             A geopandas geodataframe containing all building within the geom.
         """
         # load buildings (should already be masked by region in this step)
-        from time import time
 
-        t0 = time()
         buildings = gpd.read_file(
             gpkg_filename,
             engine="pyogrio",
@@ -93,9 +91,7 @@ class OpenBuildingMap(Adapter):
             use_arrow=True,
         )
         # mask buildings to region geom
-        t1 = time()
         buildings = buildings[buildings.intersects(geom)]
-        t2 = time()
         return buildings
 
     def _download_and_extract_tile(
