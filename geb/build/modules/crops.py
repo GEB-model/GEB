@@ -944,11 +944,6 @@ class Crops(BuildModelBase):
                             float(crop_id) in crops_in_region
                             and np.isnan(region_data[crop_name]).any()
                         ):
-<<<<<<< Updated upstream
-                            raise ValueError(
-                                f"Crop {crop_name} has NaN values in region {region_id} data."
-=======
-                            # log a warning that the crop has NaN values in the region data
                             self.logger.warning(
                                 f"Crop {crop_name} has NaN values in region {region_id} data, substituting with mean price."
                             )
@@ -960,7 +955,6 @@ class Crops(BuildModelBase):
                                 )
                             region_data[crop_name] = region_data[crop_name].fillna(
                                 mean_price
->>>>>>> Stashed changes
                             )
                         region_dict[str(crop_id)] = region_data[crop_name].tolist()
                     # check if crop is in the crop calendar, if is raise an error because it must be
