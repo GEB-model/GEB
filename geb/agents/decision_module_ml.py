@@ -401,26 +401,19 @@ class DecisionModuleML:
             config.get("random_seed", self.bundle.get("model_random_seed", 44))
         )
         self.selection_rng = np.random.default_rng(self.selection_random_seed)
-        # Optional rice-only gate overrides (crop ID 2). The exit gate replaces
-        # the trained persistence threshold for rice-origin decisions. The entry
-        # gate acts AFTER the trained gate for other origin crops, matching the
-        # offline one-step entry/exit sensitivity sweep.
-        # None: leave the corresponding trained/original behaviour unchanged.
-        # 0.0: disable the corresponding additional gate.
-        rice_exit_gate_threshold = config.get("rice_exit_gate_threshold", None)
-        self.rice_exit_gate_threshold = (
-            None
-            if rice_exit_gate_threshold is None
-            else float(rice_exit_gate_threshold)
-        )
-        if self.rice_exit_gate_threshold is not None and (
-            not np.isfinite(self.rice_exit_gate_threshold)
-            or not 0.0 <= self.rice_exit_gate_threshold <= 1.0
-        ):
-            raise ValueError(
-                "machine_learning.rice_exit_gate_threshold must be between 0 and 1 "
-                "or None to use the trained gate."
-            )
+        # Crop-specific exit overrides reuse the trained persistence-gate logic.
+        # None: use the trained threshold; 0.0: disable persistence for that crop.
+        # Other-origin persistence (including maize entries) remains unchanged.
+        for crop_name in ("rice", "maize"):
+            key = f"{crop_name}_exit_gate_threshold"
+            value = config.get(key)
+            value = None if value is None else float(value)
+            if value is not None and (not np.isfinite(value) or not 0 <= value <= 1):
+                raise ValueError(
+                    f"machine_learning.{key} must be between 0 and 1 "
+                    "or None to use the trained gate."
+                )
+            setattr(self, key, value)
         rice_entry_gate_threshold = config.get("rice_entry_gate_threshold", None)
         self.rice_entry_gate_threshold = (
             None
@@ -446,10 +439,11 @@ class DecisionModuleML:
                 "applied before restricting rice entry."
             )
         self.model.logger.info(
-            "Online rice gate thresholds: entry=%s (None=no extra gate), "
-            "exit=%s (None=trained persistence gate); prediction_model=%s.",
+            "Online crop gate thresholds: rice_entry=%s, rice_exit=%s, "
+            "maize_exit=%s (None=trained, 0=disabled); prediction_model=%s.",
             self.rice_entry_gate_threshold,
             self.rice_exit_gate_threshold,
+            self.maize_exit_gate_threshold,
             self.prediction_model,
         )
         self.log_crop_counts = bool(config.get("log_crop_counts", False))
@@ -1554,6 +1548,7 @@ class DecisionModuleML:
             # prescribed and remains identical when their values change.
             "rice_entry_gate_threshold",
             "rice_exit_gate_threshold",
+            "maize_exit_gate_threshold",
         }
         history_settings = {k: v for k, v in self.config.items() if k not in excluded}
         digest.update(
@@ -4307,7 +4302,7 @@ class DecisionModuleML:
         current_crop_ids: ArrayInt32,
         feasible_classes: TwoDArrayBool,
     ) -> TwoDArrayFloat64:
-        """Apply trained persistence plus optional rice exit and entry overrides.
+        """Apply trained persistence plus crop-specific exit and rice-entry overrides.
 
         The rice entry threshold is evaluated on the post-persistence marginal
         P(rice), BEFORE absolute-date calendar feasibility renormalization.
@@ -4365,11 +4360,13 @@ class DecisionModuleML:
             same_crop_feasible_mass = float(
                 gated[row_index, same_crop & feasible_classes[row_index]].sum()
             )
-            row_threshold = (
-                self.rice_exit_gate_threshold
-                if crop_id == 2 and self.rice_exit_gate_threshold is not None
-                else threshold
-            )
+            # Same exit-gate override as rice, applied independently to maize.
+            if crop_id == 1 and self.maize_exit_gate_threshold is not None:
+                row_threshold = self.maize_exit_gate_threshold
+            elif crop_id == 2 and self.rice_exit_gate_threshold is not None:
+                row_threshold = self.rice_exit_gate_threshold
+            else:
+                row_threshold = threshold
             if switch_probability < row_threshold and same_crop_feasible_mass > 0.0:
                 gated[row_index, ~same_crop] = 0.0
                 total = float(gated[row_index].sum())
