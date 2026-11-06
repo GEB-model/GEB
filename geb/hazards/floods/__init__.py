@@ -706,6 +706,7 @@ class Floods(Module):
             run_name: The name of the run to use for estimating return periods (e.g., "spinup").
 
         Raises:
+            ValueError: If the specified run_name does not exist in the model's output folder.
             ValueError: If no hydrograph is found for a node and return period.
         """
         # load model settings
@@ -715,7 +716,8 @@ class Floods(Module):
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         if isinstance(self.config["subbasins"], list):
             subbasins = subbasins[subbasins.index.isin(self.config["subbasins"])]
-
+            if subbasins.empty:
+                raise ValueError("No subbasins found for the specified IDs.")
         coastal = subbasins["is_coastal"].any()
 
         rivers = self.model.hydrology.routing.var.rivers
