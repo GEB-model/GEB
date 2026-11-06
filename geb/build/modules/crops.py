@@ -749,7 +749,7 @@ class Crops(BuildModelBase):
         Notes:
             The function performs the following steps:
             1. Fetches and processes crop data from FAO statistics if crop_prices is 'FAO_stat'.
-            2. Adjusts the data for countries with missing values using PPP conversion rates.
+            2. Fills crops without prices in a country with the per-year median over its trade region.
             3. Determines price variability and performs interpolation/extrapolation of crop prices.
             4. Formats the processed data into a nested dictionary structure.
         """
@@ -770,9 +770,13 @@ class Crops(BuildModelBase):
                 if ISO3 in TRADE_REGIONS
             }
 
-            all_ISO3_across_relevant_regions: set[str] = set(
-                relevant_trade_regions.keys()
-            )
+            # all countries in the trade regions of the study-area countries, so that
+            # missing crop prices can be filled from the whole trade region
+            all_ISO3_across_relevant_regions: set[str] = {
+                ISO3
+                for ISO3, trade_region in TRADE_REGIONS.items()
+                if trade_region in set(relevant_trade_regions.values())
+            }
 
             # Setup dataFrame for further data corrections
             donor_data: dict[str, pd.DataFrame] = {}
@@ -820,17 +824,11 @@ class Crops(BuildModelBase):
                 (slice(None), slice(self.start_date.year, self.end_date.year)), :
             ]
 
-            # here, also countries that are not in the trade regions (e.g. Kosovo) are included (in self.geom["regions"]) and found a donor for (in the setup_donor_countries function)
             data = donate_and_receive_crop_prices(
-                donor_data,
-                unique_regions,
-                TRADE_REGIONS,
-                self.data_catalog,
-                self.geom["global_countries"],
-                self.geom["regions"],
+                donor_data, unique_regions, TRADE_REGIONS
             )
 
-            # exand data to include all data empty rows from start to end year
+            # expand data to include all (empty) rows from start to end year
             data = data.reindex(
                 pd.MultiIndex.from_product(
                     [
@@ -945,7 +943,9 @@ class Crops(BuildModelBase):
                             and np.isnan(region_data[crop_name]).any()
                         ):
                             raise ValueError(
-                                f"Crop {crop_name} has NaN values in region {region_id} data."
+                                f"Crop {crop_name} has NaN values in region {region_id} ({region_iso3}) data. "
+                                "If it has no price at all, neither this country nor any country in "
+                                "its trade region has FAOSTAT prices for this crop in the model period."
                             )
                         region_dict[str(crop_id)] = region_data[crop_name].tolist()
                     # check if crop is in the crop calendar, if is raise an error because it must be
@@ -1068,7 +1068,10 @@ class Crops(BuildModelBase):
             changes = np.nanmean(
                 region_data[1:].to_numpy() / region_data[:-1].to_numpy(), axis=1
             )
-            changes = np.insert(changes, 0, np.nan)
+            # first year has no previous year; skip when the region has no price data at all,
+            # in which case the inflation rates below are used for every year
+            if len(region_data) > 0:
+                changes = np.insert(changes, 0, np.nan)
 
             for year, change in zip(region_data.index, changes, strict=True):
                 costs.at[(region_id, year), "_crop_price_inflation"] = change
@@ -2326,7 +2329,10 @@ class Crops(BuildModelBase):
                 crop_calendar_per_farmer, base_crops, resistant_crops
             )
 
-        assert crop_calendar_per_farmer[:, :, 3].max() == 0
+        assert (
+            crop_calendar_per_farmer.shape[0] == 0
+            or crop_calendar_per_farmer[:, :, 3].max() == 0
+        )
 
         check_crop_calendar(crop_calendar_per_farmer)
 

@@ -157,23 +157,22 @@ class Market(AgentBaseClass):
         ]
 
         for crop in range(self.var.production.shape[0]):
-            prod = production[crop]
-            if prod.sum() == 0:
+            # Years without production or income carry no price information (e.g. when only a
+            # few farmers grow the crop), so they are left out of the log-log regression.
+            has_price: np.ndarray = (production[crop] > 0) & (
+                total_farmer_income[crop] > 0
+            )
+            prod = production[crop][has_price]
+            # the slope is only identifiable with at least two different production values
+            if np.unique(prod).size < 2:
                 continue
-            zero_mask = prod == 0
-            if zero_mask.any():
-                print(
-                    f"Production of crop {crop} is 0 for {zero_mask.sum()} entries. "
-                    "If few farmers are cultivating the crop it may be expected behavior, "
-                    "otherwise check for errors in harvest/planting."
-                    "Setting these values to 1.."
-                )
-                prod[zero_mask] = 1
-            # Defining the independent variables (add a constant term for the intercept)
-            X = sm.add_constant(np.log(prod))
+
+            # Defining the independent variables; always add the intercept (statsmodels skips it
+            # by default when a column is constant)
+            X = sm.add_constant(np.log(prod), has_constant="add")
 
             # Defining the dependent variable
-            price = total_farmer_income[crop] / prod
+            price = total_farmer_income[crop][has_price] / prod
 
             y = np.log(price)
 
@@ -208,7 +207,21 @@ class Market(AgentBaseClass):
             A 2D numpy array of predicted crop prices for each region and crop,
             adjusted for inflation (USD/ton). Infilation is included based on the
             current year index.
+
+        Raises:
+            ValueError: If a crop produced last year has no estimated price model.
         """
+        produced_last_year: np.ndarray = self.var.production[:, self.year_index - 1] > 0
+        without_price_model: np.ndarray = produced_last_year & np.isnan(
+            self.var.parameters.data
+        ).any(axis=1)
+        if without_price_model.any():
+            raise ValueError(
+                f"No price model for crops {np.flatnonzero(without_price_model).tolist()}, which "
+                "were produced last year: the price model is estimated at the end of the spinup "
+                "from years with production and income, and these crops had fewer than 2 such "
+                "years with different production. Use a longer spinup or disable agents.market.dynamic_market."
+            )
         number_of_regions = self._crop_prices[1].shape[1]
 
         price_pred_per_region = np.full(

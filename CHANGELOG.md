@@ -1,8 +1,19 @@
 # dev
+- Fixed a build failure in `setup_region` (shape mismatch between MERIT Hydro flow direction and elevation) for some regions: merged MERIT Hydro tiles now get exact 3-arcsecond grid coordinates, so all MERIT Hydro variables are clipped to the same pixels.
+- Fixed spinup failing with "divide by zero encountered in log" in the crop market's price model when a crop has years without production: those years are now left out of the price regression instead of setting production to 1. With the dynamic market enabled, a crop that is grown but has no estimated price model now raises a clear error.
+- `geb init` no longer creates an `update.yml`, and the example `update.yml` is removed (it was getting out of date). `geb update` still works with an `update.yml` you write yourself, or with `-b build.yml::<method>`.
+- Crop prices: a crop without FAOSTAT prices in a country now gets the median price per year over all countries in its trade region (previously only countries inside the model region were considered). If no country in the trade region has prices for a crop that farmers grow, the build stops with a clear error. Countries that are not in the trade-region dataset now also raise a clear error, instead of using the prices of a "similar" country.
+- Crop prices: the model crop "oil palm" now uses the FAOSTAT farm-gate price of "oil palm fruit" instead of the price of processed "palm oil", matching the oil palm yields (fresh fruit). Rebuild crop prices (`setup_crop_prices`) to update existing models.
+- Updated hydromt-sfincs from 2.0.0rc3 to the official 2.0.0 release
+- At the start of every run or spinup (also when continuing from a checkpoint), the GEB version is written to `geb_version.txt` in the run's output folder, and, when GEB runs from a git checkout, the commit of the GEB source to `git_commit.txt`. The discharge evaluation dashboard shows both.
+- Models can now be built and run for regions without cultivated land or buildings (e.g. small dryland, desert or mountain basins). Such models get zero farmers and/or zero households instead of failing during the build.
+- Fixed `geb evaluate` failing with "ufunc 'isfinite' not supported" for models without any discharge stations.
+- Fixed a build failure in `setup_crop_prices` ("zip() argument 2 is longer than argument 1") for regions without any crop price data; general inflation rates are now used for those regions.
 - Removed use of `inplace=True` in pandas methods where it is deprecated as of pandas 3.1 (`rename`, `drop`, `set_index`, `reset_index`, `dropna`, `Series.fillna`), which caused deprecation warnings during model building.
 - Fixed a build failure in `setup_region` ("cannot align objects ... along y") for some regions, caused by tiny floating-point differences between the coordinates of the MERIT Hydro elevation and flow direction data.
 - Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
+- Added `cmip6_model` option to `setup_forcing` (default `gfdl_esm4`) and made it consistently available through the forcing build methods. CMIP6 cache files are now stored per model (`cmip6_combined_deltas_{model}.zarr`); previously cached CMIP6 files are no longer used and can be deleted.
 
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.

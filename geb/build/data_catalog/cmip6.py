@@ -20,6 +20,11 @@ mapping_variables_to_cdf = {
 
 available_scenarios = ["ssp1_1_9", "ssp1_2_6", "ssp2_4_5", "ssp3_7_0", "ssp5_8_5"]
 
+supported_models = [
+    "gfdl_esm4",
+    "access_cm2",
+]
+
 from ...workflows.io import (
     read_zarr,
     write_zarr,
@@ -55,20 +60,27 @@ class CMIP6(Adapter):
         years: list[str],
         bounds: tuple[float, float, float, float],
         variable: str,
+        cmip6_model: str,
         experiment: str = "historical",
-        model: str = "gfdl_esm4",
     ) -> dict[str, Any]:
-        """Construct the API call dictionary for GTSM data retrieval.
+        """Construct the API call dictionary for CMIP6 data retrieval.
 
         Args:
              years: A list of years to include in the request.
              bounds: A tuple containing the bounding coordinates (min_lon, min_lat, max_lon, max_lat).
              variable: The variable to retrieve (e.g., "near_surface_air_temperature" or "precipitation").
+             cmip6_model: The CMIP6 model to retrieve data from (e.g., "gfdl_esm4").
              experiment: The CMIP6 experiment to retrieve data for (e.g., "historical", "ssp5_8_5").
-             model: The CMIP6 model to retrieve data from (e.g., "gfdl_esm4").
+        Raises:
+            ValueError: If the specified CMIP6 model is not supported or tested.
         Returns:
              A dictionary containing the parameters for the CMIP6/CDS API call.
         """
+        if cmip6_model not in supported_models:
+            raise ValueError(
+                f"Unsupported/ untested CMIP6 model '{cmip6_model}'. Supported and tested models are: {supported_models}. If you want to use a different model, please ensure it is available in the CDS API and modify the code accordingly."
+            )
+
         # Add a buffer to the bounds to ensure we match the extent of the ERA5 data
         buffer: float = 3.0
         buffered_bounds: tuple[float, float, float, float] = (
@@ -88,7 +100,7 @@ class CMIP6(Adapter):
             "temporal_resolution": "monthly",
             "experiment": experiment,
             "variable": variable,
-            "model": model,
+            "model": cmip6_model,
             "year": years,
             "area": area,
         }
@@ -297,8 +309,9 @@ class CMIP6(Adapter):
         bounds: tuple[float, float, float, float],
         start_year: int,
         end_year: int,
-        ssp_rcp: int,
         representative_forcing_year: int,
+        ssp_rcp: int,
+        cmip6_model: str,
         url: str | None = None,
     ) -> CMIP6:
         """Fetch CMIP6 data and save it to the cache directory.
@@ -310,12 +323,14 @@ class CMIP6(Adapter):
             end_year: The end year for the data range.
             representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
             ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
-            url: Not used for CMIP6, included for compatibility with base class.
+            cmip6_model: The CMIP6 model to retrieve data from (e.g., "gfdl_esm4").
         Raises:
             ValueError: If the SSP-RCP is invalid or if the historical and future periods are not of equal length.
         Returns:
             The current instance of the CMIP6 adapter.
         """
+        # cache per model, so that switching model does not silently reuse deltas of another model
+        self.filename = f"cmip6_combined_deltas_{cmip6_model}.zarr"
         if self.path.exists():
             return self
 
@@ -334,21 +349,23 @@ class CMIP6(Adapter):
 
         # fetch both precipitation and near-surface air temperature for the historical period, since we'll need both to compute deltas
         for variable in ["precipitation", "near_surface_air_temperature"]:
-            historical_data_path = self.root / f"cmip6_historical_{variable}.zip"
+            historical_data_path = (
+                self.root / f"cmip6_{cmip6_model}_historical_{variable}.zip"
+            )
             if not historical_data_path.exists():
                 request = self.construct_request(
                     years=years_historical,
                     variable=variable,
                     bounds=bounds,
                     experiment="historical",
-                    model="gfdl_esm4",
+                    cmip6_model=cmip6_model,
                 )
                 self._retrieve(request, str(historical_data_path))
 
             # future data
             future_data_path = (
                 self.root
-                / f"cmip6_{ssp_scenario}_{variable}_{representative_forcing_year}.zip"
+                / f"cmip6_{cmip6_model}_{ssp_scenario}_{variable}_{representative_forcing_year}.zip"
             )
             if not future_data_path.exists():
                 request = self.construct_request(
@@ -356,7 +373,7 @@ class CMIP6(Adapter):
                     variable=variable,
                     bounds=bounds,
                     experiment=ssp_scenario,
-                    model="gfdl_esm4",
+                    cmip6_model=cmip6_model,
                 )
 
                 self._retrieve(request, str(future_data_path))

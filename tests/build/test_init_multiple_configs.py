@@ -20,13 +20,13 @@ def test_create_multi_basin_configs_uses_standard_config_file_names(
 
     assert (tmp_path / "model.yml").exists()
     assert (tmp_path / "build.yml").exists()
-    assert (tmp_path / "update.yml").exists()
+    # update.yml files are no longer generated
+    assert not (tmp_path / "update.yml").exists()
+    assert not (cluster_base_directory / "update.yml").exists()
 
     model_config: dict = read_params(cluster_base_directory / "model.yml")
     build_config: dict = read_params(cluster_base_directory / "build.yml")
-    update_config: dict = read_params(cluster_base_directory / "update.yml")
 
     assert model_config["inherits"] == "../../model.yml"
     assert build_config["inherits"] == "../../build.yml"
-    assert update_config["inherits"] == "../../update.yml"
     assert model_config["general"]["region"]["subbasin"] == [101, 102]
