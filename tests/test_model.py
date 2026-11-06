@@ -68,7 +68,6 @@ def test_init(clean_working_directory: bool) -> None:
         args: dict[str, Any] = {
             "config": "model.yml",
             "build_config": "build.yml",
-            "update_config": "update.yml",
             "working_directory": ".",
             "from_example": "geul",
         }
@@ -79,7 +78,8 @@ def test_init(clean_working_directory: bool) -> None:
 
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()
-        assert Path("update.yml").exists()
+        # geb init no longer creates update.yml (write one by hand for `geb update`)
+        assert not Path("update.yml").exists()
 
         # should raise an error if the folder already exists
         with pytest.raises(FileExistsError):
@@ -111,7 +111,6 @@ def test_init_coastal(clean_working_directory: bool) -> None:
         args: dict[str, Any] = {
             "config": "model.yml",
             "build_config": "build.yml",
-            "update_config": "update.yml",
             "working_directory": ".",
             "from_example": "geul",
             "basin_id": "23010758",
@@ -123,7 +122,8 @@ def test_init_coastal(clean_working_directory: bool) -> None:
 
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()
-        assert Path("update.yml").exists()
+        # geb init no longer creates update.yml (write one by hand for `geb update`)
+        assert not Path("update.yml").exists()
 
         # should raise an error if the folder already exists
         with pytest.raises(FileExistsError):
@@ -205,6 +205,8 @@ def test_update_with_file() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
         del args["continue_"]
+        # update.yml is written by the user (geb init does not create one)
+        Path("update.yml").write_text("setup_land_use_parameters: {}\n")
         args["build_config"] = Path("update.yml")
         update_fn(**args)
 
@@ -1235,12 +1237,13 @@ def test_set_and_clean(tmp_path: Path) -> None:
         init_fn(
             config="model.yml",
             build_config="build.yml",
-            update_config="update.yml",
             working_directory=Path("."),
             from_example="geul",
             basin_id="23011134",
             overwrite=True,
         )
+        # a user-written update.yml (geb init does not create one) must survive geb clean
+        Path("update.yml").write_text("setup_land_use_parameters: {}\n")
 
         generated_paths: list[Path] = [
             Path("cache"),
