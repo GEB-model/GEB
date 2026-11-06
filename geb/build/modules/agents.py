@@ -29,7 +29,11 @@ from ..workflows.conversions import (
     TRADE_REGIONS,
     setup_donor_countries,
 )
-from ..workflows.farmers import create_farm_distributions, create_farms
+from ..workflows.farmers import (
+    create_farm_distributions,
+    create_farmers_table,
+    create_farms,
+)
 from .base import BuildModelBase
 
 
@@ -1319,6 +1323,14 @@ class Agents(BuildModelBase):
 
             all_agents.append(region_agents)
 
+        if not all_agents:
+            # no cultivated land in any region (e.g. a small dryland or mountain basin)
+            self.logger.warning(
+                "No cultivated land in the region; no farmers are created."
+            )
+            all_agents.append(
+                create_farmers_table(np.array([], dtype=np.int32), region_id=-1)
+            )
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
@@ -1748,10 +1760,10 @@ class Agents(BuildModelBase):
                 buildings["occupancy"].str.contains("RES|UNK", na=False)
             ]
             if residential_buildings_model_region.empty:
+                # continue with zero households, so the outputs keep their usual columns and dtypes
                 self.logger.info(
                     f"No residential buildings found for GDL code: {GDL_code}"
                 )
-                continue
 
             GLOPOP_S_region, GLOPOP_GRID_region = self.data_catalog.fetch(
                 "glopop-sg"
@@ -2005,7 +2017,10 @@ class Agents(BuildModelBase):
 
         self.logger.info(f"Processing {n_farmers} farmers in chunks of {chunk_size}")
 
-        for i in tqdm(range(0, n_farmers, chunk_size), desc="Processing farmer chunks"):
+        # at least one (possibly empty) chunk, so zero farmers still give the usual columns
+        for i in tqdm(
+            range(0, max(n_farmers, 1), chunk_size), desc="Processing farmer chunks"
+        ):
             chunk_locations = locations.iloc[i : i + chunk_size]
             chunk_result = gpd.sjoin_nearest(chunk_locations, GDL_regions, how="left")
             chunks.append(chunk_result)
@@ -2269,7 +2284,7 @@ class Agents(BuildModelBase):
         n_farmers = self.array["agents/farmers/region_id"].size
 
         preferences_global = self.create_behavioural_parameters()
-        preferences_global.rename(
+        preferences_global = preferences_global.rename(
             columns={
                 "country": "Country",
                 "isocode": "ISO3",
@@ -2279,8 +2294,7 @@ class Agents(BuildModelBase):
                 "discount_std": "Discount_std",
                 "risktaking_losses_std": "Losses_std",
                 "risktaking_gains_std": "Gains_std",
-            },
-            inplace=True,
+            }
         )
 
         ISO3_codes_region: set[str] = set(self.geom["regions"]["ISO3"].unique())
@@ -2340,7 +2354,7 @@ class Agents(BuildModelBase):
                     "Discount_std",
                 ]
             ]
-            region_risk_aversion_data.reset_index(drop=True, inplace=True)
+            region_risk_aversion_data = region_risk_aversion_data.reset_index(drop=True)
             # Store pivoted data in dictionary with region_id as key
             donor_data[ISO3] = region_risk_aversion_data
 
@@ -2352,14 +2366,7 @@ class Agents(BuildModelBase):
 
         unique_regions = self.geom["regions"]
 
-        data = donate_and_receive_crop_prices(
-            donor_data,
-            unique_regions,
-            TRADE_REGIONS,
-            self.data_catalog,
-            self.geom["global_countries"],
-            self.geom["regions"],
-        )
+        data = donate_and_receive_crop_prices(donor_data, unique_regions, TRADE_REGIONS)
 
         # Map to corresponding region
         data_reset = data.reset_index(level="region_id")
@@ -2377,8 +2384,14 @@ class Agents(BuildModelBase):
         education_levels = self.array["agents/farmers/education_level"]
         age = self.array["agents/farmers/age_household_head"]
 
+        # both helpers also accept empty arrays (regions without farmers)
         def normalize(array: np.ndarray) -> np.ndarray:
+            if array.size == 0:
+                return array.astype(np.float64)
             return (array - np.min(array)) / (np.max(array) - np.min(array))
+
+        def std(array: np.ndarray) -> float:
+            return float(np.std(array)) if array.size > 0 else 1.0
 
         combined_deviation_risk_aversion = ((2 / 6) * normalize(education_levels)) + (
             (4 / 6) * normalize(age)
@@ -2393,12 +2406,12 @@ class Agents(BuildModelBase):
         # Initial gains_variation proportional to risk aversion
         gains_variation = combined_deviation_risk_aversion * z
 
-        current_std = np.std(gains_variation)
+        current_std = std(gains_variation)
         gains_variation = gains_variation * (gains_std / current_std)
 
         # Similarly for losses_variation
         losses_variation = combined_deviation_risk_aversion * z
-        current_std_losses = np.std(losses_variation)
+        current_std_losses = std(losses_variation)
         losses_variation = losses_variation * (losses_std / current_std_losses)
 
         # Add the generated noise to the original gains and losses arrays
@@ -2435,7 +2448,7 @@ class Agents(BuildModelBase):
         discount_rate_variation = discount_rate_variation_factor * z * -1
 
         # Adjust the variations to have the desired overall standard deviation
-        current_std = np.std(discount_rate_variation)
+        current_std = std(discount_rate_variation)
         discount_rate_variation = discount_rate_variation * (discount_std / current_std)
 
         # Apply the variations to the original discount rates and clip the values

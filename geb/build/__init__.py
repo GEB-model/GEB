@@ -50,6 +50,7 @@ from geb.workflows.raster import (
     create_temp_zarr,
     full_like,
     repeat_grid,
+    snap_to_grid,
 )
 
 from ..workflows.io import (
@@ -1347,7 +1348,6 @@ def create_multi_basin_configs(
     example_directory: Path = GEB_PACKAGE_DIR / "examples" / from_example
     example_model_config_path: Path = example_directory / "model.yml"
     example_build_config_path: Path = example_directory / "build.yml"
-    example_update_config_path: Path = example_directory / "update.yml"
     if not example_model_config_path.exists():
         raise FileNotFoundError(
             f"Example model.yml not found: {example_model_config_path}"
@@ -1356,14 +1356,9 @@ def create_multi_basin_configs(
         raise FileNotFoundError(
             f"Example build.yml not found: {example_build_config_path}"
         )
-    if not example_update_config_path.exists():
-        raise FileNotFoundError(
-            f"Example update.yml not found: {example_update_config_path}"
-        )
 
     top_level_config_path: Path = working_directory / "model.yml"
     top_level_build_config_path: Path = working_directory / "build.yml"
-    top_level_update_config_path: Path = working_directory / "update.yml"
 
     print("Creating build.yml in main init multiple directory...")
     top_level_build_config_path.write_text(
@@ -1376,12 +1371,6 @@ def create_multi_basin_configs(
     top_level_config_path.write_text(example_model_config_path.read_text())
 
     print(f"Created model.yml in {working_directory}")
-    print("Creating update.yml in init_multiple_dir directory...")
-    top_level_update_config_path.write_text(
-        f'inherits: "{{GEB_PACKAGE_DIR}}/examples/{from_example}/update.yml"\n'
-    )
-
-    print(f"Created update.yml in {working_directory}")
 
     print("Creating cluster directories and configuration files...")
     cluster_directories: list[Path] = []
@@ -1402,13 +1391,6 @@ def create_multi_basin_configs(
         base_build_config_path: Path = base_dir / "build.yml"
         base_build_config: dict[str, str] = {"inherits": relative_build_config}
         write_params(base_build_config, base_build_config_path)
-
-        relative_update_config: str = os.path.relpath(
-            top_level_update_config_path, base_dir
-        )
-        base_update_config_path: Path = base_dir / "update.yml"
-        base_update_config: dict[str, str] = {"inherits": relative_update_config}
-        write_params(base_update_config, base_update_config_path)
 
         relative_model_config: str = os.path.relpath(top_level_config_path, base_dir)
         base_model_config_path: Path = base_dir / "model.yml"
@@ -2162,6 +2144,9 @@ class GEBModel(
         )
 
         assert ldd_elevation.shape == ldd.shape == mask.shape
+        # Elevation and flow direction tiles can have coordinates that differ by
+        # floating-point noise, which makes the exact-join xr.where below fail.
+        ldd_elevation = snap_to_grid(ldd_elevation, ldd)
 
         ldd_elevation: xr.DataArray = xr.where(
             mask,

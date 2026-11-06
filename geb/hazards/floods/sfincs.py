@@ -538,8 +538,8 @@ class SFINCSRootModel:
 
             # must be performed BEFORE burning rivers.
             self.setup_river_outflow_boundary()
-
-        self.setup_boundary_observation_lines()
+            # setup boundary observation lines for inland basins.
+            self.setup_boundary_observation_lines()
 
         # We are only interested in flooding within the subbasins of interest.
         # This area of interest mask is used later to filter the flood maps.
@@ -694,8 +694,8 @@ class SFINCSRootModel:
                     manning_grid=sf.roughness.data["manning"],
                     rivers=rivers_to_burn,
                 )
-                sf.elevation.data["dep"] = burned_elv
-                sf.roughness.data["manning"] = burned_manning
+                sf.grid.data["dep"] = burned_elv
+                sf.grid.data["manning"] = burned_manning
 
         if not rivers_to_burn.empty:
             bed_elevation_grid: xr.DataArray = (
@@ -2225,6 +2225,12 @@ class SFINCSSimulation:
             raise ValueError("Some forcing locations are outside the active model area")
 
         nodes.index.name = None  # SFINCS expects the index to be unnamed
+        # SFINCS >= 2.5.0 splits src lines on whitespace and rejects more than 3 tokens per line,
+        # so names must not contain spaces (hydromt-sfincs 2.0.0 still defaults to "Point 001").
+        # TODO: remove once https://github.com/Deltares/hydromt_sfincs/pull/439 ("Point_001"
+        # default names) is merged and included in the hydromt-sfincs version we pin.
+        nodes = nodes.copy()
+        nodes["name"] = [f"point_{node_index}" for node_index in nodes.index]
         self.sfincs_model.discharge_points.create(
             locations=nodes, timeseries=timeseries, merge=True
         )
