@@ -669,6 +669,9 @@ class Floods(Module):
 
         # load the subbasin geometry for the model domain
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
+        if not self.config["subbasins"] == "auto":
+            subbasins = subbasins[subbasins.index.isin(self.config["subbasins"])]
+
         coastal = subbasins["is_coastal"].any()
 
         rivers = self.model.hydrology.routing.var.rivers
