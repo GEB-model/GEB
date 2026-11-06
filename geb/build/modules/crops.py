@@ -1337,27 +1337,43 @@ class Crops(BuildModelBase):
                         f"mirca_os_cropping_area_{year}_5-arcminute_{crop_name}_{irrigation_type}"
                     ).read()
 
-                    crop_map = crop_map.isel(
-                        get_window(
-                            crop_map.x,
-                            crop_map.y,
-                            self.bounds,
-                            buffer=reference_map_buffer,  # use the same buffer as was used for the reference map
-                            raise_on_buffer_out_of_bounds=False,
-                        )  # use a very large buffer so that we use don't get edge effects in the interpolation
-                    ).compute()
-
-                    # some maps are smaller than the reference, so we need to pad them
-                    # with np.nan values, so that they can be combined in one dataset.
-                    crop_map = pad_xy(
-                        crop_map,
-                        reference_crop_map.x[0].item(),
-                        reference_crop_map.y[0].item(),
-                        reference_crop_map.x[-1].item(),
-                        reference_crop_map.y[-1].item(),
-                        constant_values=np.nan,
+                    overlaps_model: bool = bool(
+                        crop_map.x[0] <= self.bounds[2]
+                        and crop_map.x[-1] >= self.bounds[0]
+                        and crop_map.y[-1] <= self.bounds[3]
+                        and crop_map.y[0] >= self.bounds[1]
                     )
-                    crop_map = snap_to_grid(crop_map, reference_crop_map)
+                    if not overlaps_model:
+                        # the map does not cover the model area at all (e.g. rainfed soybeans
+                        # starts at -120 degrees longitude): no data, as for missing crops
+                        crop_map = self.full_like(
+                            reference_crop_map, fill_value=np.nan, nodata=np.nan
+                        )
+                    else:
+                        crop_map = crop_map.isel(
+                            get_window(
+                                crop_map.x,
+                                crop_map.y,
+                                self.bounds,
+                                buffer=reference_map_buffer,  # use the same buffer as was used for the reference map
+                                # some MIRCA-OS maps cover a smaller extent than the model; they are
+                                # padded to the reference map below
+                                raise_on_out_of_bounds=False,
+                                raise_on_buffer_out_of_bounds=False,
+                            )  # use a very large buffer so that we use don't get edge effects in the interpolation
+                        ).compute()
+
+                        # some maps are smaller than the reference, so we need to pad them
+                        # with np.nan values, so that they can be combined in one dataset.
+                        crop_map = pad_xy(
+                            crop_map,
+                            reference_crop_map.x[0].item(),
+                            reference_crop_map.y[0].item(),
+                            reference_crop_map.x[-1].item(),
+                            reference_crop_map.y[-1].item(),
+                            constant_values=np.nan,
+                        )
+                        crop_map = snap_to_grid(crop_map, reference_crop_map)
 
                 crop_map = crop_map.assign_coords(crop=crop_id)
 

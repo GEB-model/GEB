@@ -1,4 +1,5 @@
 # dev
+- Fixed a build failure in `setup_farmer_crop_calendar` ("xmin must be greater than x[0]") for models outside the extent of a MIRCA-OS crop map (e.g. rainfed soybeans starts at -120 degrees longitude): such maps are now padded to the model area like other smaller maps.
 - Fixed a build failure in `setup_coastal_water_levels` for small coastal models without any GTSM station inside their bounds: the nearest offshore stations are now used, with a warning in the log.
 - Fixed a build failure in `setup_region` (shape mismatch between MERIT Hydro flow direction and elevation) for some regions: merged MERIT Hydro tiles now get exact 3-arcsecond grid coordinates, so all MERIT Hydro variables are clipped to the same pixels.
 - Fixed spinup failing with "divide by zero encountered in log" in the crop market's price model when a crop has years without production: those years are now left out of the price regression instead of setting production to 1. With the dynamic market enabled, a crop that is grown but has no estimated price model now raises a clear error.
