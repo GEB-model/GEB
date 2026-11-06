@@ -1372,7 +1372,14 @@ class MeritHydro(Adapter):
         da: xr.DataArray = merge.merge_arrays(das, nodata=self._source_nodata)
         if is_uint8:
             da = da.astype(np.uint8)
-        return da
+        # Coordinates from each variable's GeoTIFF transform differ by floating-point noise. Round
+        # them to the 3-arcsecond grid (multiples of half a pixel), so that all MERIT Hydro
+        # variables get identical coordinates and the same bbox selects the same pixels.
+        half_pixel_degrees: float = 1 / 2400
+        return da.assign_coords(
+            x=np.round(da.x.values / half_pixel_degrees) * half_pixel_degrees,
+            y=np.round(da.y.values / half_pixel_degrees) * half_pixel_degrees,
+        )
 
     def _format_missing_tiles_error(self, missing_names: set[str]) -> str:
         """Create a user-facing error for missing MERIT Hydro tiles.

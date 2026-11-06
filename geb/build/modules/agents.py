@@ -4,6 +4,7 @@ import difflib
 import unicodedata
 import warnings
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
 import geopandas as gpd
@@ -1572,11 +1573,11 @@ class Agents(BuildModelBase):
             Buildings with distance columns appended (meters).
         """
         rivers: gpd.GeoDataFrame = gpd.read_parquet(
-            "input" / self.files["geom"]["routing/rivers"]
+            Path("input") / self.files["geom"]["routing/rivers"]
         )[["geometry"]]
 
         coastline: gpd.GeoDataFrame = gpd.read_parquet(
-            "input" / self.files["geom"]["coastal/coastlines"]
+            Path("input") / self.files["geom"]["coastal/coastlines"]
         )[["geometry"]]
 
         region_centroid = self.region.union_all().centroid
@@ -1886,7 +1887,7 @@ class Agents(BuildModelBase):
         self.logger.info(f"Processing population: SSP{self.ssp}")
         climrisk = self.data_catalog.fetch("climrisk").read(
             region=self.region,
-            ssp=self.ssp,
+            ssp=self.ssp.replace("ssp", ""),
             rcp=None,
             damage_function=None,
             warming_percentile=None,
@@ -1899,7 +1900,7 @@ class Agents(BuildModelBase):
                 self.logger.info(f"Processing GDP for combination: SSP{self.ssp}")
                 climrisk = self.data_catalog.fetch("climrisk").read(
                     region=self.region,
-                    ssp=self.ssp,
+                    ssp=self.ssp.replace("ssp", ""),
                     rcp=None,
                     damage_function=function,
                     warming_percentile=None,
@@ -1914,7 +1915,7 @@ class Agents(BuildModelBase):
                     )
                     climrisk = self.data_catalog.fetch("climrisk").read(
                         region=self.region,
-                        ssp=self.ssp,
+                        ssp=self.ssp.replace("ssp", ""),
                         rcp=self.rcp,
                         damage_function=function,
                         warming_percentile=percentile,

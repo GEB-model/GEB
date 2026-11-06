@@ -840,7 +840,7 @@ class GEBModel(Module):
 
         n_timesteps = end_time.year - current_time.year + 1
 
-        checkpoint_path = self.get_checkpoint_path(
+        checkpoint_path: Path = self.get_checkpoint_path(
             self.run_start, run_name=self.config["general"]["spinup_name"]
         )
         if not checkpoint_path.exists():
