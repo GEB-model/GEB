@@ -272,6 +272,38 @@ class WaterDemandConfig(BaseModel):
     method: str = Field("default", description="Method for water demand calculation.")
 
 
+# CBA export configuration disabled; retained for possible future use.
+# class HouseholdCBAExportConfig(BaseModel):
+#     """Configuration for exporting a one-shot household cost-benefit analysis (CBA)."""
+#
+#     enabled: bool = Field(
+#         False,
+#         description="Whether to export a one-shot flood-proofing CBA table at spinup.",
+#     )
+#     return_period_years: float = Field(
+#         100.0, description="Return period used for the CBA export (years)."
+#     )
+#     assume_all_flood_proofed: bool = Field(
+#         True,
+#         description="If True, treat all households as flood-proofed for the export.",
+#     )
+#     loan_duration_years: int = Field(
+#         20, description="Loan duration used to annualize costs in the export (years)."
+#     )
+#     dynamic: bool = Field(
+#         False,
+#         description="If True, compute damages dynamically based on current flood maps.",
+#     )
+#     include_household_depth_m: bool = Field(
+#         True,
+#         description="Whether to include sampled flood depth at households (m) in the export.",
+#     )
+#     export_household_level: bool = Field(
+#         True,
+#         description="Whether to export household-level results (parquet) in addition to summary (csv).",
+#     )
+#
+#
 class HouseholdsConfig(BaseModel):
     """Configuration for households agent."""
 
@@ -285,6 +317,11 @@ class HouseholdsConfig(BaseModel):
     adjust_demand_factor: float = Field(
         1.0, description="Factor to adjust water demand."
     )
+# CBA export setting disabled; retained for possible future use.
+#     cba_export: HouseholdCBAExportConfig = Field(
+#         default_factory=HouseholdCBAExportConfig,
+#         description="Configuration for exporting a flood-proofing CBA table.",
+#     )
     expected_utility: ExpectedUtilityConfig = Field(
         default_factory=ExpectedUtilityConfig,
         description="Expected utility configuration.",

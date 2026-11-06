@@ -7,12 +7,13 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import zarr
+from pandas import DataFrame
 
 if TYPE_CHECKING:
     from geb.evaluate import Evaluate
@@ -44,7 +45,8 @@ class Agents:
         baseline_snapshot: str | None = None,
         map_realization: str | None = None,
     ) -> dict[str, Any]:
-        """Compares simulated household adaptation (dry- and wetproofing measures)
+        """Compares simulated household adaptation (dry- and wetproofing measures).
+
         with observed adoption rates. Reads saved simulation data
         and compares it against observed values from the configuration.
 
@@ -58,6 +60,12 @@ class Agents:
             - timestamps: list of datetime strings or indices
             - dryproofing_percentage: percentage of households with dryproofing
             - wetproofing_percentage: percentage of households with wetproofing
+
+            Flood adaptation is evaluated among households that have experienced
+            flooding by the flood snapshot. Wind adaptation remains evaluated
+            among LECZ households. Configure each target fraction for its
+            corresponding cohort; the balanced score weights both objectives
+            equally despite the different cohort sizes.
         """
         # Unused in this evaluator but accepted for compatibility with Evaluate.run
         _ = (
@@ -69,16 +77,22 @@ class Agents:
         print("Evaluating household adaptation...")
 
         settings = self._settings()  # this lines are different, why?
-        run_name = run_name or settings.get("run_name", "default")
+        run_name = run_name or settings.get("run_name", "catnat")
+
+        #NEW CODE
+        #Evaluate the final-state, per-hazard arguments
+        evaluation_snapshot = settings.get("evaluation_snapshot", "20240101")
+        flood_snapshot = flood_snapshot or settings.get("flood_snapshot") or evaluation_snapshot
+        wind_snapshot = wind_snapshot or settings.get("wind_snapshot") or evaluation_snapshot
 
         simulated_df = self._load_simulated_adaptation_data(
             run_name,
             flood_snapshot=flood_snapshot,
             wind_snapshot=wind_snapshot,
         )
-        observed_df, _ = self._load_simulated_adaptation_data(simulated_df)
+        observed_df, _ = self._load_observed_adaptation_data(simulated_df)
         aligned_sim, aligned_obs = self._align_datasets(simulated_df, observed_df)
-        ratios = self._calculated_adaptation_ratios(aligned_sim, aligned_obs)
+        ratios = self._calculate_adaptation_ratios(aligned_sim, aligned_obs)
 
         # This part is different NEED-CHECK
         map_realization = map_realization or settings.get("map_realization")
@@ -221,7 +235,7 @@ class Agents:
         run_name: str,
         flood_snapshot: str | None = None,
         wind_snapshot: str | None = None,
-    ) -> pd.DataFrame:
+    ) -> DataFrame:
         """Load saved simulation data on household adaptations from reporter output.
 
         Tries to load from reporter's zarr files.
@@ -244,13 +258,38 @@ class Agents:
         # Convert from dask array to DataFrame by aggregating per timestep
         #
         settings = self._settings()
-        cluster_dirs = [Path(p) for p in settings.get("cluster_base_dirs", [])]
-        if not cluster_dirs:
+        #cluster_dirs = [Path(p) for p in settings.get("cluster_base_dirs", [])]
+        base_dirs = {
+            Path(p).resolve().parent.name: Path(p).resolve()
+            for p in settings.get("cluster_base_dirs", [])
+        }
+        
+        run_dirs = {}
+        for p in settings.get("cluster_run_dirs", []):
+            path = Path(p).resolve()
+            cluster_id = path.parent.name if path.name == "base" else path.name
+            run_dirs[cluster_id] = path
+
+        print("DEBUG evaluator settings:", settings)
+        print("DEBUG base clusters:", sorted(base_dirs))
+        print("DEBUG run clusters:", sorted(run_dirs)
+        )
+        if not base_dirs:
             raise ValueError(
-                "Configure adaptation_evaluation.cluster_base_dirs with every cluster."
+                "Configure agent_settings.households.adaptation_evaluation.cluster_base_dirs."
             )
 
-        snapshots_by_cluster = self._snapshot_files(cluster_dirs, run_name)
+        if not run_dirs:
+            raise ValueError(
+                "cluster_base_dirs and cluster_run_dirs must contain matching cluster IDs."
+                f"Bases: {sorted(base_dirs)}; runs: {sorted(run_dirs)}"
+            )
+        
+        clusters = sorted(base_dirs)
+        ordered_base_dirs = [base_dirs[c] for c in clusters]
+        ordered_run_dirs = [run_dirs[c] for c in clusters]
+
+        snapshots_by_cluster = self._snapshot_files(ordered_run_dirs, run_name)
         common = sorted(set.intersection(*snapshots_by_cluster.values()))
         if not common:
             raise FileNotFoundError("No common household snapshots across clusters.")
@@ -260,22 +299,33 @@ class Agents:
         wind_snapshot = self._resolve_snapshot(
             "wind", wind_snapshot or settings.get("wind_snapshot"), settings, common
         )
-        lecz = self._load_lecz(cluster_dirs)
+        lecz = self._load_lecz(ordered_base_dirs)
 
         records: list[dict[str, Any]] = []
-        cluster_diagnostics: list[tuple[str, str, list[dict[str, Any]]]] = []
+        cluster_diagnostics = []
         for hazard, snapshot in (("flood", flood_snapshot), ("wind", wind_snapshot)):
+            cohort: Literal["flooded", "lecz"] = (
+                "flooded" if hazard == "flood" else "lecz"
+            )
             cluster_counts = self._aggregate_snapshot(
-                cluster_dirs, run_name, snapshot, lecz
+                ordered_run_dirs,
+                ordered_base_dirs,
+                run_name,
+                snapshot,
+                lecz,
+                cohort,
             )
             if hazard == "flood":
                 adapted_count = sum(row["flood_adapted"] for row in cluster_counts)
             else:
                 adapted_count = sum(row["wind_adapted"] for row in cluster_counts)
-            total_households = sum(row["lecz_households"] for row in cluster_counts)
+            total_households = sum(
+                row["evaluated_households"] for row in cluster_counts
+            )
             records.append(
                 {
                     "hazard": hazard,
+                    "cohort": cohort,
                     "time": pd.to_datetime(snapshot, format="%Y%m%d"),
                     "snapshot": snapshot,
                     "simulated_count": int(adapted_count),
@@ -285,15 +335,18 @@ class Agents:
             )
             cluster_diagnostics.append((snapshot, hazard, cluster_counts))
 
-            simulated = pd.DataFrame(records)
-            simulated.attrs["snapshots"] = {
-                "flood": flood_snapshot,
-                "wind": wind_snapshot,
-            }
-            simulated.attrs["cluster_diagnostics"] = cluster_diagnostics
-            return simulated
+        simulated = pd.DataFrame(records)
+        simulated.attrs["snapshots"] = {
+            "flood": flood_snapshot,
+            "wind": wind_snapshot,
+        }
+        simulated.attrs["cluster_diagnostics"] = cluster_diagnostics
+        return simulated
 
-    def _load_observed_adaptation_data(self) -> tuple[pd.DataFrame | None, int | None]:
+    def _load_observed_adaptation_data(
+        self,
+        simulated_df: DataFrame
+    ) -> tuple[pd.DataFrame, int | None]:
         """Load observed adaptation data from model configuration.
 
         The configuration should contain observed adaptation rates at specific
@@ -313,12 +366,11 @@ class Agents:
             [
                 {
                     "hazard": hazard,
-                    "time": pd.to_datetime(snapshot, format="%Y%m%d"),
+                    "time": pd.to_datetime(snapshots[hazard], format="%Y%m%d"),
                     "observed_fraction": target,
-                }
-            ]
+                }   
             for hazard, target in targets.items()
-            for snapshot in [snapshots[hazard]]
+            ]
         )
 
         return observed, None
@@ -350,8 +402,8 @@ class Agents:
         # return df, total_hh
 
     def _align_datasets(
-        self, simulated_df: pd.DataFrame, observed_df: pd.DataFrame
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        self, simulated_df: DataFrame, observed_df: DataFrame
+    ) -> tuple[DataFrame, DataFrame]:
         """Align simulated and observed datasets temporally using exact date matching.
 
         Only keeps dates that exist in both datasets (inner join).
@@ -401,7 +453,7 @@ class Agents:
         self,
         simulated_df: pd.DataFrame,
         observed_df: pd.DataFrame,
-        total_households: int,
+        total_households: int | None = None,
     ) -> pd.DataFrame:
         """Calculate ratio of simulated to observed adaptation.
 
@@ -449,19 +501,32 @@ class Agents:
         # numeric_cols = ratios_df.select_dtypes(include=[np.number]).columns
         # ratios_df[numeric_cols] = ratios_df[numeric_cols].round(2)
 
-        _ = total_householdsratios = simulated_df.copy()
+        #OLD VERSION
+        # _ = total_householdsratios = simulated_df.copy()
+        # ratios = simulated_df.copy()
+        # ratios["observed_fraction"] = observed_df["observed_fraction"].to_numpy()
+        # ratios["target_count"] = (
+        #     ratios["observed_fraction"] * ratios["total_households"]
+        # )
+        # ratios["fraction_error"] = (
+        #     ratios["simulated_count"] - ratios["target_count"]
+        # ).abs()
+        # ratios["count_error"] = (
+        #     ratios["simulated_count"] - ratios["target_count"]
+        # ).abs()
+        # ratios["score"] = 1.0 - ratios["fraction_error"]
+
+        #NEW CODE
+        # keep fraction-space diagnostics and a bounded score. 
+        # positive = overstimation, negative = underestimation
         ratios = simulated_df.copy()
         ratios["observed_fraction"] = observed_df["observed_fraction"].to_numpy()
-        ratios["target_count"] = (
-            ratios["observed_fraction"] * ratios["total_households"]
-        )
-        ratios["fraction_error"] = (
-            ratios["simulated_count"] - ratios["target_count"]
-        ).abs()
-        ratios["count_error"] = (
-            ratios["simulated_count"] - ratios["target_count"]
-        ).abs()
-        ratios["score"] = 1.0 - ratios["fraction_error"]
+        ratios["target_count"] = ratios["observed_fraction"] * ratios["total_households"]
+        ratios["fraction_difference"] = ratios["simulated_fraction"] - ratios["observed_fraction"]
+        ratios["fraction_error"] = ratios["fraction_difference"].abs()
+        ratios["count_error"] = (ratios["simulated_count"] - ratios["target_count"]).abs()
+        # Both fraction are constrained to [0,1], so this score is in [0, 1]
+        ratios["score"] = (1.0 - ratios["fraction_error"]).clip(0.0, 1.0)
 
         return ratios
 
@@ -538,14 +603,20 @@ class Agents:
         # }
         _ = ratio_columns
         metrics: dict[str, float | int] = {}
+        hazard_scores: list[float] = []
         for hazard in ("flood", "wind"):
             rows = ratios_df.loc[ratios_df["hazard"] == hazard]
             if rows.empty:
                 raise ValueError(f"No aligned {hazard} adaptation objective")
             error = float(rows["fraction_error"].mean())
+            score = float(rows["score"].mean())
             metrics[f"{hazard}_adaptation_objective"] = error
-            metrics[f"{hazard}_adaptation_score"] = 1.0 - error
+            metrics[f"{hazard}_adaptation_score"] = score
+            hazard_scores.append(score)
 
+        #NEW CODE
+        # Elink to calibration config, equal weight is given to flood and wind
+        metrics["balanced_ratio_score"] = float(np.mean(hazard_scores))
         return metrics
 
     def _calculate_summary_statistics(
@@ -610,17 +681,23 @@ class Agents:
             row = ratios_df.loc[ratios_df["hazard"] == hazard].iloc[0]
             result.update(
                 {
+                    f"{hazard}_evaluation_cohort": row["cohort"],
                     f"{hazard}_simulated_fraction": float(row["simulated_fraction"]),
                     f"{hazard}_target_fraction": float(row["observed_fraction"]),
                     f"{hazard}_simulated_count": int(row["simulated_count"]),
                     f"{hazard}_target_count": float(row["target_count"]),
-                    f"{hazard}_lecz_households": int(row["total_households"]),
+                    f"{hazard}_evaluated_households": int(row["total_households"]),
                     f"{hazard}_count_error": float(row["count_error"]),
+                    #f"{hazard}_snapshot": row["snapshot"],
+                    # NEW CODe: retian the direction of the fraction bias
+                    f"{hazard}_fraction_differen": float(row["fraction_difference"]),
+                    f"{hazard}_fraction_error": float(row["fraction_error"]),
+                    f"{hazard}_score": float(row["fraction_error"]),
                     f"{hazard}_snapshot": row["snapshot"],
                 }
             )
 
-        result["map_realizarion"] = self._settings().get("map_realizarion")
+        result["map_realization"] = self._settings().get("map_realization")
         return result
 
     def _settings(self) -> dict[str, Any]:
@@ -710,6 +787,8 @@ class Agents:
                 / run_name
                 / HOUSEHOLD_TABLE_REL_PATH
             )
+            #DEBUG
+            print(f"Scanning household snapshots: {parquet_dir}")
             if not parquet_dir.is_dir():
                 raise FileNotFoundError(
                     f"Household output directory does not exist: {parquet_dir}"
@@ -718,11 +797,12 @@ class Agents:
                 path.stem.removeprefix("household_data_")
                 for path in parquet_dir.glob("household_data_*.parquet")
             }
-        if not files:
-            raise FileNotFoundError(
-                f"No household snapshot parquet files found in {parquet_dir}"
-            )
-        found[cluster_dir] = files
+            if not files:
+                raise FileNotFoundError(
+                    f"No household snapshot parquet files found in {parquet_dir}"
+                )
+            found[cluster_dir] = files
+            print(f"Found snapshots in {parquet_dir}: {sorted(files)}")
         return found
 
     @staticmethod
@@ -747,13 +827,15 @@ class Agents:
     ##NEED-CHEK
     @staticmethod
     def _load_cluster_snapshot(
-        cluster_dir: Path,
+        run_dir: Path,
+        base_dir: Path,
         run_name: str,
         snapshot: str,
         lecz: gpd.GeoDataFrame,
+        cohort: Literal["flooded", "lecz"],
     ) -> pd.DataFrame:
         parquet_path = (
-            cluster_dir
+            run_dir
             / HOUSEHOLD_OUTPUT_REL_PATH
             / run_name
             / HOUSEHOLD_TABLE_REL_PATH
@@ -763,42 +845,65 @@ class Agents:
             raise FileNotFoundError(f"Snapshot not found: {parquet_path}")
         df = pd.read_parquet(parquet_path)
         required = {"flood_adaptation", "wind_adaptation"}
+        if cohort == "flooded":
+            required.add("ever_flooded")
         missing = required.difference(df.columns)
         if missing:
-            raise ValueError(f"{parquet_path} is missing columns: {sorted(missing)}")
+            message = f"{parquet_path} is missing columns: {sorted(missing)}"
+            if "ever_flooded" in missing:
+                message += "; rerun the simulation to save flood-experience status"
+            raise ValueError(message)
         if "household_id" not in df.columns:
             df = df.reset_index().rename(columns={"index": "household_id"})
         if df["household_id"].duplicated().any():
             raise ValueError(f"Duplicate household_id values in {parquet_path}")
 
-        household_ids = pd.to_numeric(df["household_id"], errors="raise").to_numpy(
-            dtype=np.int64
-        )
-        location_path = cluster_dir / HOUSEHOLD_LOCATION_REL_PATH
-        if not location_path.exists():
-            raise FileNotFoundError(f"Household locations not found: {location_path}")
-        location = np.asarray(zarr.open_array(str(location_path), mode="r")[:])
-        valid = (household_ids >= 0) & (household_ids < len(location))
-        if not valid.all():
-            raise IndexError(
-                f"Invalid household_id values in {parquet_path}; cannot map "
-                "all rows to location.zarr."
+        if cohort == "flooded":
+            experienced_flood = pd.to_numeric(
+                df["ever_flooded"], errors="coerce"
             )
+            if (
+                experienced_flood.isna().any()
+                or not experienced_flood.isin([0, 1]).all()
+            ):
+                raise ValueError(
+                    f"ever_flooded must contain only non-missing boolean values "
+                    f"in {parquet_path}."
+                )
+            selected = df.loc[experienced_flood.astype(bool)].copy()
+        elif cohort == "lecz":
+            household_ids = pd.to_numeric(
+                df["household_id"], errors="raise"
+            ).to_numpy(dtype=np.int64)
+            location_path = base_dir / HOUSEHOLD_LOCATION_REL_PATH
+            if not location_path.exists():
+                raise FileNotFoundError(
+                    f"Household locations not found: {location_path}"
+                )
+            location = np.asarray(zarr.open_array(str(location_path), mode="r")[:])
+            valid = (household_ids >= 0) & (household_ids < len(location))
+            if not valid.all():
+                raise IndexError(
+                    f"Invalid household_id values in {parquet_path}; cannot map "
+                    "all rows to location.zarr."
+                )
 
-        points = gpd.GeoDataFrame(
-            df.copy(),
-            geometry=gpd.points_from_xy(
-                location[household_ids, 0], location[household_ids, 1]
-            ),
-            crs="EPSG:4326",
-        )
-        points = points.to_crs(lecz.crs)
-        selected = gpd.sjoin(
-            points,
-            lecz[["geometry"]],
-            how="inner",
-            predicate="within",
-        ).drop(columns=["index_right"], errors="ignore")
+            points = gpd.GeoDataFrame(
+                df.copy(),
+                geometry=gpd.points_from_xy(
+                    location[household_ids, 0], location[household_ids, 1]
+                ),
+                crs="EPSG:4326",
+            )
+            points = points.to_crs(lecz.crs)
+            selected = gpd.sjoin(
+                points,
+                lecz[["geometry"]],
+                how="inner",
+                predicate="within",
+            ).drop(columns=["index_right"], errors="ignore")
+        else:
+            raise ValueError(f"Unsupported household evaluation cohort: {cohort}")
 
         for column in ("flood_adaptation", "wind_adaptation"):
             values = pd.to_numeric(selected[column], errors="coerce")
@@ -812,25 +917,105 @@ class Agents:
 
     def _aggregate_snapshot(
         self,
-        cluster_dirs: Sequence[Path],
+        run_dirs: Sequence[Path],
+        base_dirs: Sequence[Path],
         run_name: str,
         snapshot: str,
         lecz: gpd.GeoDataFrame,
+        cohort: Literal["flooded", "lecz"],
     ) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        for cluster_dir in cluster_dirs:
+        for run_dir, base_dir in zip(run_dirs, base_dirs):
             households = self._load_cluster_snapshot(
-                cluster_dir, run_name, snapshot, lecz
+                run_dir, base_dir, run_name, snapshot, lecz, cohort
             )
             records.append(
                 {
-                    "cluster": cluster_dir.name,
+                    "cluster": run_dir.name,
+                    "cohort": cohort,
                     "snapshot": snapshot,
-                    "lecz_households": int(len(households)),
+                    "evaluated_households": int(len(households)),
                     "flood_adapted": int(households["flood_adaptation"].sum()),
                     "wind_adapted": int(households["wind_adaptation"].sum()),
                 }
             )
-        if sum(row["lecz_households"] for row in records) == 0:
-            raise ValueError(f"No LECZ households found across clusters at {snapshot}.")
+        if sum(row["evaluated_households"] for row in records) == 0:
+            raise ValueError(f"No {cohort} households found across candidate clusters.")
         return records
+
+    @staticmethod
+    def _rate(records: list[dict[str, Any]], measure: str) -> float:
+        denominator = sum(row["evaluated_households"] for row in records)
+        numerator_key = (
+            "flood_adapted" if measure == "flood_adaptation" else "wind_adapted"
+        )
+        numerator = sum(row[numerator_key] for row in records)
+        return numerator / denominator
+
+    @classmethod
+    def _objective(
+        cls,
+        records: list[dict[str, Any]],
+        target_fraction: float,
+        measure: str,
+    ) -> dict[str, float | int]:
+        total_households = sum(row["evaluated_households"] for row in records)
+        if total_households <= 0:
+            raise ValueError("Cannot evaluate with zero households in the cohort.")
+        count_key = (
+            "flood_adapted" if measure == "flood_adaptation" else "wind_adapted"
+        )
+        simulated_count = sum(row[count_key] for row in records)
+        target_count = target_fraction * total_households
+        simulated_fraction = simulated_count / total_households
+        fraction_difference = simulated_fraction - target_fraction
+        fraction_error = abs(fraction_difference)
+        #Keep full precision in the return value for optimizers. 
+        #Diagnositcs in the CSV are inteded for inspection, not feeding back into scoring
+        #NEW CODE: consistent with fraction scoring, keep full precision in the return value for optimizers.
+        #Diagnositcs in the CSV are intended for inspection, not feeding back into scoring
+        return {
+            "simulated_count": int(simulated_count),
+            "target_count": float(target_count),
+            "total_households": int(total_households),
+            "simulated_fraction": float(simulated_fraction),
+            "fraction_error": float(fraction_error),
+            "count_error": float(abs(simulated_count - target_count)),
+            "score": float(1.0 - fraction_error),
+        }
+
+    def _save_diagnostics(
+        self,
+        result: dict[str, Any],
+        snapshots: list[tuple[str, str, list[dict[str, Any]]]],
+        run_name: str,
+    ) -> None:
+        output_dir = Path(self.evaluator. output_folder_evaluate) / "agents"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        rows: list[dict[str, Any]] = []
+        for snapshot, hazard, records in snapshots:
+            for record in records:
+                rows.append(
+                    {
+                        **record,
+                        "hazard": hazard,
+                        "map_realization": result.get("map_realization"),
+                    }
+                )
+            total_households = sum(r["evaluated_households"] for r in records)
+            rows.append(
+                {
+                    "cluster": "ALL_CLUSTERS",
+                    "snapshot": snapshot,
+                    "evaluated_households": total_households,
+                    "flood_adapted": sum(r["flood_adapted"] for r in records),
+                    "wind_adapted": sum(r["wind_adapted"] for r in records),
+                    "hazard": hazard,
+                    "map_realization": result.get("map_realization"),
+                }
+            )
+        pd.DataFrame(rows).to_csv(
+            output_dir / f"household_adaptation_objectives_{run_name}.csv",
+            index=False,
+        )
+

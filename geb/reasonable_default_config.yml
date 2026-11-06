@@ -1,10 +1,10 @@
 general:
   # model start time (YYYY-MM-DD).
-  start_time: 2000-01-01
+  start_time: 2020-01-01
   # model end time (YYYY-MM-DD).
-  end_time: 2024-12-30
+  end_time: 2023-12-31
   # start of the spinup time (YYYY-MM-DD).
-  spinup_time: 1960-01-01
+  spinup_time: 2019-01-01
   hydrological_year_start_month: 1
   input_folder: input/
   preprocessing_folder: preprocessing/
@@ -88,6 +88,15 @@ agent_settings:
     adapt: True # If True households adapt their houses based on random floods, like DYNAMO-M
     adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
     warning_response: false
+# CBA export settings disabled; retained for possible future use.
+#     cba_export:
+#       enabled: false
+#       return_period_years: 100
+#       assume_all_flood_proofed: true
+#       loan_duration_years: 20
+#       dynamic: false
+#       include_household_depth_m: true
+#       export_household_level: true
     water_demand:
       method: default
     adjust_demand_factor: 1  # multiplier to adjust water demand up or down. 1 = no adjustment, 0.5 = half demand, 2 = double demand
@@ -232,9 +241,9 @@ plantFATE:
   n_cells: 'all'
 
 calibration:
-  spinup_time: 1975-01-01
-  start_time: 1978-01-01
-  end_time: 1985-01-01
+  spinup_time: 2019-01-01
+  start_time: 2020-01-01
+  end_time: 2023-12-31
   path: calibration
   gpus: 0
   scenario: no-adaptation

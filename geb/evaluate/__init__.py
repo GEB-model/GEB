@@ -12,6 +12,7 @@ from .energy import Energy
 from .hydrodynamics import Hydrodynamics
 from .hydrology import Hydrology
 from .meteorological_forecasts import MeteorologicalForecasts
+from .agents import Agents
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -29,11 +30,13 @@ class Evaluate:
         "hydrodynamics": Hydrodynamics,
         "energy": Energy,
         "meteorological_forecasts": MeteorologicalForecasts,
+        "agents": Agents,
     }
 
     def __init__(self, model: GEBModel) -> None:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
+        self.agents = Agents(model, self)
         self.hydrology = Hydrology(model, self)
         self.hydrodynamics = Hydrodynamics(model, self)
         self.energy = Energy(model, self)
@@ -47,7 +50,7 @@ class Evaluate:
     def run(
         self,
         method: str,
-        run_name: str = "default",
+        run_name: str = "catnat",
         **kwargs: Any,
     ) -> Any:
         """Run a single evaluation method.

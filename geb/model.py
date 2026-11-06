@@ -21,6 +21,7 @@ from packaging.version import Version
 from geb import GEB_PACKAGE_DIR, __version__
 from geb.agents import Agents
 from geb.build.version_updates import get_and_maybe_do_version_updates
+from geb.config_schema import ReportConfigInternal
 from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
     generate_storm_surge_hydrographs,
@@ -819,7 +820,7 @@ class GEBModel(Module):
         )
 
         # if agent_type == "households":
-        #     hh = self.agents.households
+        # hh = self.agents.households
         #     hh.construct_income_distribution()
         #     hh.assign_household_attributes()
 
@@ -833,6 +834,16 @@ class GEBModel(Module):
             futures = bucket.save(path / f"{name}.var", executor)
             for future in futures:
                 future.result()
+
+    def refresh_agents(self, agent_type: str = "households") -> None:
+        """Refresh agent attributes.
+
+        This is a convenience alias for :meth:`refresh_agent_attributes`.
+
+        Args:
+            agent_type: Type of agent to refresh attributes for. Examples: "households", "crop_farmers", etc.
+        """
+        self.refresh_agent_attributes(agent_type=agent_type)
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
@@ -860,7 +871,15 @@ class GEBModel(Module):
         assert n_timesteps > 0, "End time is before or identical to start time"
 
         # turn off any reporting for the ABM
+        report_config = self.config.get("report")
+        internal_report_config = (
+            report_config.get("_config") if isinstance(report_config, dict) else None
+        )
+        internal_report_config = ReportConfigInternal.model_validate(
+            internal_report_config or {}
+        ).model_dump()
         self.config["report"] = {
+            "_config": internal_report_config,
             "hydrology.routing": {
                 "discharge_daily": {
                     "varname": "grid.var.discharge_m3_s",

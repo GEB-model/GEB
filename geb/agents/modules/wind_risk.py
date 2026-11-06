@@ -1,5 +1,4 @@
 """This module contains the WindRiskModule, which calculates the wind risk for each agent based on the wind speed and the vulnerability of the agent."""
-from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -11,9 +10,9 @@ import xarray as xr
 
 from geb.workflows.io import read_params, read_table
 from geb.workflows.raster import sample_from_map
-
 from ...workflows.damage_scanner import VectorScannerMultiCurves #VectorScanner, VectorScannerMultiCurves
 #from ..workflows.helpers import from_landuse_raster_to_polygon
+# from __future__ import annotations
 
 if TYPE_CHECKING:
     from geb.agents.households import Households
@@ -21,10 +20,11 @@ if TYPE_CHECKING:
 
 class WindRiskModule:
     """Module responsible for loading and managing wind risk data for the households in the model."""
+    
     def __init__(self, model: GEBModel, households: Households) -> None:
         """Initialize the WindRiskModule with the model and households, and load all necessary data.
          
-          Args:
+        Args:
             model (GEBModel): The GEBModel instance to which this module belongs.
             households (Agents): The Agents instance representing the households in the model.
         """
@@ -44,7 +44,6 @@ class WindRiskModule:
         self.households.windstorm_return_periods = np.array(
             self.model.config["hazards"]["windstorm"]["return_periods"]
         )
-
 
         windstorm_maps = {}
         windstorm_path = (Path(self.model.config["general"]["output_folder"])/ "spinup"/"wind_maps")
@@ -74,8 +73,7 @@ class WindRiskModule:
             self.households.buildings["maximum_damage_m2"] = self.households.var.max_dam_buildings_structure
 
     def load_windstorm_damage_curve(self) -> None:
-        """Load windstorm damage curves from CLIMADA"""
-
+        """Load windstorm damage curves from CLIMADA."""
         self.households.wind_buildings_structure_curve = read_table(
             self.households.model.files["table"][
                 "damage_model/windstorm/buildings/residential/curve"
@@ -97,7 +95,7 @@ class WindRiskModule:
         )
 
     def calculate_building_wind_damages(
-        self, verbose: bool = True, export_building_damages: bool = False
+        self, verbose: bool = True, export_building_damages: bool = False, building_damage_cache_dir: Path | str | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the wind damages for the households in the model.
         
@@ -108,7 +106,8 @@ class WindRiskModule:
             verbose: Verbosity flag.
             export_building_damages: Whether to export the building damages to parquet files.
         Returns:
-            Tuple[np.ndarray, np.nadarray]: A tuple containing the damage arrays for unprotected and protected buildings."""
+            Tuple[np.ndarray, np.nadarray]: A tuple containing the damage arrays for unprotected and protected buildings.
+        """
         damages_unprotected_w = np.zeros(
             (self.households.windstorm_return_periods.size, self.households.n), np.float32
         )
@@ -369,13 +368,25 @@ class WindRiskModule:
                 "damages_wind_shutters": damage_buildings["damages_structure_wind_shutters"].to_numpy(),
             })
 
-            if export_building_damages:
-                fn_export = self.households.model.output_folder / "building_wind_damages"
-                fn_export.mkdir(parents=True, exist_ok=True)
-                out.to_parquet(
-                    fn_export / f"building_wind_damages_rp{rp}_{self.households.model.current_time.year}.parquet"
-                )
+            # if export_building_damages:
+            #     fn_export = self.households.model.output_folder / "building_wind_damages"
+            #     fn_export.mkdir(parents=True, exist_ok=True)
+            #     out.to_parquet(
+            #         fn_export / f"building_wind_damages_rp{rp}_{self.households.model.current_time.year}.parquet"
+            #     )
             
+            #code for exporting(savefile)
+            if export_building_damages:
+                if building_damage_cache_dir is None:
+                    raise ValueError("building_damage_cache_dir is required for export")
+
+                cache_dir = Path(building_damage_cache_dir)
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                out.to_parquet(
+                    cache_dir / f"wind_rp{int(rp)}.parquet",
+                    index=False,
+                )
+
             damages_do_not_adapt_lecz, damages_adapt_lecz = (
                 self.households.assign_wdamages_to_agents(agent_df, out)
             )
@@ -398,7 +409,17 @@ class WindRiskModule:
             damages_adapt: np.ndarray,
             adapted: np.ndarray,
     ) -> np.ndarray:
-        """Calculate the Expected Annual Damages (EAD) based on the damages for different return periods."""
+        """Calculate the Expected Annual Damages (EAD) based on the damages for different return periods.
+        
+        Args:
+            damages_do_not_adapt: Damage of non-adapted households
+            damages_adapt: Damage of adapted households
+            adapted: Households that have adapted
+        
+        Returns:
+            Expected Annual damage in usd dollars per year.
+
+        """
         # Copy baseline damages
         all_damages = damages_do_not_adapt.copy()
         
@@ -419,7 +440,11 @@ class WindRiskModule:
 
     @staticmethod
     def reproject_to_utm(hazard: xr.DataArray) -> xr.DataArray:
-        """Reproject the hazard raster to a metric (UTM) CRS."""
+        """Reproject the hazard raster to a metric (UTM) CRS.
+
+        Returns:
+            Hazard map reprojected.
+        """
         if not hazard.rio.crs.is_geographic:
             return hazard
         bounds = hazard.rio.bounds()
@@ -450,33 +475,84 @@ class WindRiskModule:
 
         return np.array(max_winds)
     
-    def return_period_windstorm(self) -> np.ndarray:
-        """Simulate a windstorm event based on return periods and determine which households are affected.
+    # def return_period_windstorm(self) -> np.ndarray:
+    #     """Simulate a windstorm event based on return periods and determine which households are affected.
 
-        Returns:
-            Array of indices of affected households.
-        """
-        #draw a single random number
-        p_random = np.random.random()
-        # Work with a locally sorted copy of return periods to ensure correct event selection
-        return_periods_arr = np.asarray(self.households.windstorm_return_periods, dtype=float)
-        sort_idx = np.argsort(return_periods_arr)  # ascending order
-        sorted_return_periods = return_periods_arr[sort_idx]
-        probabilities = 1.0 / sorted_return_periods
+    #     Returns:
+    #         Array of indices of affected households.
+    #     """
+    #     #draw a single random number
+    #     p_random = np.random.random()
+    #     # Work with a locally sorted copy of return periods to ensure correct event selection
+    #     return_periods_arr = np.asarray(self.households.windstorm_return_periods, dtype=float)
+    #     sort_idx = np.argsort(return_periods_arr)  # ascending order
+    #     sorted_return_periods = return_periods_arr[sort_idx]
+    #     probabilities = 1.0 / sorted_return_periods
 
-        if p_random >= probabilities.max():
-            return np.array([], dtype=int)
+    #     if p_random >= probabilities.max():
+    #         return np.array([], dtype=int)
         
-        # find the event corresponding to the random draw
-        event_idx = np.searchsorted(probabilities[::-1], p_random)
-        event_idx = len(probabilities) - 1 - event_idx
-        event = sorted_return_periods[event_idx]
-        self.model.logger.info(
-            "Return period windstorm event: %s years (p=%.4f, random draw=%.4f)",
-            event,
-            probabilities[event_idx],
-            p_random,
-        )
+    #     # find the event corresponding to the random draw
+    #     event_idx = np.searchsorted(probabilities[::-1], p_random)
+    #     event_idx = len(probabilities) - 1 - event_idx
+    #     event = sorted_return_periods[event_idx]
+    #     self.model.logger.info(
+    #         "Return period windstorm event: %s years (p=%.4f, random draw=%.4f)",
+    #         event,
+    #         probabilities[event_idx],
+    #         p_random,
+    #     )
+
+    #     windstorm_map: xr.DataArray = self.households.windstorm_maps[event]
+
+    #     # cache household coordinates in windstorm_map CRS (Nx2 numpy array)
+    #     if not hasattr(self, "_household_xy_wind"):
+    #         import pyproj
+
+    #         x, y = np.array(self.households.buildings.x), np.array(self.households.buildings.y)
+    #         transformer = pyproj.Transformer.from_crs(
+    #             "EPSG:4326", windstorm_map.rio.crs, always_xy=True
+    #         )
+    #         self._building_xy_wind = np.array(transformer.transform(x, y)).T
+
+    #     # sample windstorm map using clipped coordinates
+    #     sampled_values = sample_from_map(
+    #         array=windstorm_map.values,
+    #         coords=self._building_xy_wind,
+    #         gt=windstorm_map.rio.transform(recalc=True).to_gdal(),
+    #         out_of_bounds_value=np.nan,
+    #     )
+
+    #     # Use a wind speed threshold to determine affected households — must match
+    #     # the wind_threshold_ms used in wind_risk.py for damage prefiltering
+    #     minimum_wind_speed_ms = float(
+    #         self.model.config.get("hazards", {})
+    #         .get("windstorm", {})
+    #         .get("wind_threshold_ms", 20.0)
+    #     )
+    #     windstorm_building_indices = np.where(sampled_values > minimum_wind_speed_ms)[0]
+    #     #get building IDs of affected buildings
+    #     windstorm_building_ids = self.households.buildings.loc[
+    #         windstorm_building_indices, "id"
+    #     ].values.astype(int)
+
+    #     #get indices of households located in affected buildings
+    #     windstorm_household_indices = np.where(
+    #         np.isin(self.households.var.building_id_of_household.data, windstorm_building_ids)
+    #     )[0]
+
+    #     return windstorm_household_indices
+
+    def return_period_windstorm(self) -> np.ndarray:
+
+        forced_date = pd.Timestamp("2022-01-01")
+        current_time = pd.Timestamp(self.model.current_time)
+
+        if current_time != forced_date:
+            return np.array([], dtype=int)
+
+        event = 50
+        self.model.logger.info("Forcing return period windstorm event: %s years", event)
 
         windstorm_map: xr.DataArray = self.households.windstorm_maps[event]
 
@@ -511,7 +587,7 @@ class WindRiskModule:
             windstorm_building_indices, "id"
         ].values.astype(int)
 
-        #get indices of households located in affected buildings
+    #     #get indices of households located in affected buildings
         windstorm_household_indices = np.where(
             np.isin(self.households.var.building_id_of_household.data, windstorm_building_ids)
         )[0]
