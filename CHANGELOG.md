@@ -14,6 +14,7 @@
 - Fixed a build failure in `setup_region` ("cannot align objects ... along y") for some regions, caused by tiny floating-point differences between the coordinates of the MERIT Hydro elevation and flow direction data.
 - Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
+- Allow SSP and RCP to be configured independently, infer standard defaults when either is omitted, and raise errors when a downstream climate-data identifier does not support the selected RCP. The separation between climate forcing scenario and socioeconomic scenario will also come in handy when we start using the new CMIP7 climate forcing scenarios.
 - Added `cmip6_model` option to `setup_forcing` (default `gfdl_esm4`) and made it consistently available through the forcing build methods. CMIP6 cache files are now stored per model (`cmip6_combined_deltas_{model}.zarr`); previously cached CMIP6 files are no longer used and can be deleted.
 
 # v1.0.0b37
@@ -27,7 +28,6 @@
 - Save model version in store metadata (checkpoint.json) and verify model version compatibility on loading, warning if spinup needs to be rerun.
 - Various improvements to dashboard.
 - SFINCS is now run with a native binary by default (`/scistor/ivm/GEB/sfincs/bin/sfincs`, or `sfincs-gpu` when a GPU is detected). Apptainer and Docker remain available by setting the `SFINCS_RUNTIME` environment variable to `apptainer` or `docker`.
-- Now set ssp-rcp for climate change projection based on model ssp setting.
 - Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.
 
 # v1.0.0b36
