@@ -1,4 +1,6 @@
 # dev
+- Fixed a build failure in `setup_coastal_water_levels` for small coastal models without any GTSM station inside their bounds: the nearest offshore stations are now used, with a warning in the log.
+- Fixed a build failure in `setup_region` (shape mismatch between MERIT Hydro flow direction and elevation) for some regions: merged MERIT Hydro tiles now get exact 3-arcsecond grid coordinates, so all MERIT Hydro variables are clipped to the same pixels.
 - Fixed spinup failing with "divide by zero encountered in log" in the crop market's price model when a crop has years without production: those years are now left out of the price regression instead of setting production to 1. With the dynamic market enabled, a crop that is grown but has no estimated price model now raises a clear error.
 - `geb init` no longer creates an `update.yml`, and the example `update.yml` is removed (it was getting out of date). `geb update` still works with an `update.yml` you write yourself, or with `-b build.yml::<method>`.
 - Crop prices: a crop without FAOSTAT prices in a country now gets the median price per year over all countries in its trade region (previously only countries inside the model region were considered). If no country in the trade region has prices for a crop that farmers grow, the build stops with a clear error. Countries that are not in the trade-region dataset now also raise a clear error, instead of using the prices of a "similar" country.
@@ -13,6 +15,7 @@
 - Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
 - Allow SSP and RCP to be configured independently, infer standard defaults when either is omitted, and raise errors when a downstream climate-data identifier does not support the selected RCP. The separation between climate forcing scenario and socioeconomic scenario will also come in handy when we start using the new CMIP7 climate forcing scenarios.
+- Added `cmip6_model` option to `setup_forcing` (default `gfdl_esm4`) and made it consistently available through the forcing build methods. CMIP6 cache files are now stored per model (`cmip6_combined_deltas_{model}.zarr`); previously cached CMIP6 files are no longer used and can be deleted.
 
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.

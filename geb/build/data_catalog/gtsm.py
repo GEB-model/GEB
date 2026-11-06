@@ -417,7 +417,42 @@ class GTSM_timeseries(Adapter):
         )
 
         if station_locations.empty:
-            return xr.DataArray(), station_locations
+            # GTSM stations are offshore points, so small coastal models can have none inside
+            # their bounds: use the stations nearest to the model instead
+            all_stations: gpd.GeoDataFrame = read_geom(variable_station_locations_file)
+            # distance from each station to the model bounding box (degrees)
+            # longitude gap, also across the antimeridian (stations shifted by -360, 0, +360)
+            station_x: np.ndarray = all_stations.geometry.x.to_numpy()
+            dx: np.ndarray = np.min(
+                [
+                    np.maximum.reduce(
+                        [
+                            model_bounds[0] - (station_x + shift),
+                            (station_x + shift) - model_bounds[2],
+                            np.zeros(len(station_x)),
+                        ]
+                    )
+                    for shift in (-360.0, 0.0, 360.0)
+                ],
+                axis=0,
+            )
+            dy: np.ndarray = np.maximum.reduce(
+                [
+                    model_bounds[1] - all_stations.geometry.y,
+                    all_stations.geometry.y - model_bounds[3],
+                    np.zeros(len(all_stations)),
+                ]
+            )
+            distance_degrees: np.ndarray = np.hypot(dx, dy)
+            nearest_distance_degrees: float = float(distance_degrees.min())
+            station_locations = all_stations[
+                distance_degrees <= nearest_distance_degrees + 0.1
+            ]
+            self.logger.warning(
+                f"No GTSM stations ({variable}) within the model bounds; using the "
+                f"{len(station_locations)} nearest station(s), {nearest_distance_degrees:.2f} "
+                "degrees or more from the model."
+            )
 
         variable_dir: Path = self._variable_dir(variable)
         zarr_paths: list[Path] = [
