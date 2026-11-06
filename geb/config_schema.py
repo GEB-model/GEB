@@ -256,6 +256,16 @@ class RetentionBasinsConfig(BaseModel):
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
 
+    interflow_peak_hours: float = Field(
+        0.0,
+        ge=0.0,
+        allow_inf_nan=False,
+        description=(
+            "Peak travel time of the triangular interflow response (hours). "
+            "Zero delivers interflow immediately; positive values require a fresh spinup."
+        ),
+    )
+
     algorithm: Literal["accuflux", "kinematic_wave"] = Field(
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",

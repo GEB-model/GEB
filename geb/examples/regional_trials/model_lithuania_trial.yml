@@ -1,0 +1,16 @@
+# Copy beside Europe_003/model.yml, then run a NEW spinup with this file.
+# Retains the region, input paths, dates and reports from your regional model.
+inherits: model.yml
+
+general:
+  output_folder: output_lithuania_trial
+  simulation_root: simulation_root_lithuania_trial
+  preprocessing_folder: preprocessing_lithuania_trial
+
+hydrology:
+  routing:
+    interflow_peak_hours: 48.0 # Peak of a triangular response, not a fixed 48-hour shift.
+
+parameters:
+  interflow_multiplier: 3000.0 # Catchment-calibrated; transfer to Europe_003 is a test.
+  crop_factor_multiplier: 1.25 # Vegetation demand factor; not extra irrigation equipment.

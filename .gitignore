@@ -15,6 +15,7 @@ geb/examples/*/*
 !geb/examples/*/model.yml
 !geb/examples/*/update.yml
 !geb/examples/*/data
+!geb/examples/regional_trials/model_lithuania_trial.yml
 .snakemake
 **.code-workspace
 libmf6.so

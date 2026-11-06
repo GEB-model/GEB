@@ -47,23 +47,18 @@ The Green-Ampt method[@green1911studies] conceptualizes infiltration as a sharp 
 
 The driving force for water movement is a combination of gravity and the matric suction (capillary forces) at the wetting front. Initially, when the wetting front is shallow, the suction gradient is high, leading to rapid infiltration. As the front moves deeper (increasing $L$), the suction gradient decreases, and the infiltration rate asymptotically approaches the saturated hydraulic conductivity ($K_{sat}$). If rainfall intensity exceeds this capacity, the excess water generates surface runoff.
 
-The model determines the maximum infiltration capacity ($f_{cap}$) for the current timestep using the explicit Green-Ampt approximation[@sadeghi2024simple]. This avoids the need for iterative solutions or sub-stepping typically required for the implicit Green-Ampt formulation.
+The model advances cumulative infiltration with one consistent integrated Green-Ampt equation. Given the current cumulative infiltration $F$ (meters), the potential increment $\Delta F$ solves
 
-The cumulative infiltration $I(t)$ is calculated as:
+$$
+\Delta F-A\ln\left(1+\frac{\Delta F}{F+A}\right)=K_{sat}\Delta t,
+\qquad A=\psi_f\Delta\theta.
+$$
 
-$$ I(t) = K_{sat} t \left( 0.70635 + 0.32415 \sqrt{1 + 9.43456 \frac{S^2}{K_{sat}^2 t}} \right) $$
+Here $K_{sat}$ is saturated conductivity (meters per second), $\Delta t$ is the substep duration (seconds), and $A$ is the capillary storage length (meters). A safeguarded Newton iteration solves for the nonnegative increment in double precision; the increment is returned in the soil model's single precision. With zero capillary storage the increment is $K_{sat}\Delta t$; zero conductivity or duration gives zero infiltration capacity.
 
-Where:
-* $I(t)$ is the cumulative infiltration [$L$].
-* $K_{sat}$ is the saturated hydraulic conductivity [$L/T$].
-* $S^2 = 2 K_{sat} \psi_f \Delta \theta$ is the square of sorptivity [$L^2/T$][@philip1969theory].
-* $\psi_f$ is the wetting front suction head [$L$].
-* $\Delta \theta$ is the moisture deficit [$ - $].
-* $t$ is the time since the start of the infiltration event [$T$].
+Using the same equation throughout avoids a numerical inconsistency between an exact inverse and an approximate forward cumulative solution. That inconsistency could produce a negative raw increment, which was clipped to zero even when positive infiltration capacity remained. The numerical increment is a capacity: actual infiltration remains limited by surface water and available soil pore space. It does not add water by itself.
 
-The model tracks the wetting front depth ($L$). At the beginning of each timestep, the "effective time" ($t_{eff}$) corresponding to the current wetting front is calculated by inverting the standard Green-Ampt equation (exact analytical inversion). The potential cumulative infiltration at $t_{eff} + \Delta t$ is then calculated using the explicit formula above. The difference determines the maximum infiltration capacity for the timestep.
-
-$$f_{cap} = I(t_{eff} + \Delta t) - I(t_{eff})$$
+Rerun spinup when comparing the corrected infiltration with older output. Previously calibrated parameters can have compensated for the old numerical behavior.
 
 ### Spatial Variability of Infiltration
 

@@ -10,6 +10,7 @@ from .energy import (
     apply_rain_heat_advection,
     get_temperature_and_frozen_fraction_from_enthalpy_scalar,
 )
+from .incremental_infiltration import calculate_green_ampt_increment_m
 
 
 @njit(cache=True, inline="always")
@@ -629,7 +630,7 @@ def infiltration(
 ]:
     """Simulates vertical transport of water in the soil for a single cell.
 
-    Uses an explicit Green-Ampt approximation (Salvucci, 1994) combined with the
+    Uses consistently integrated Green-Ampt increments combined with the
     PDM variable infiltration capacity curve and depression storage spillover runoff.
 
     The function uses `wetting_front_suction_head_m` which is a state variable
@@ -906,40 +907,14 @@ def infiltration(
                 saturated_hydraulic_conductivity_m_per_s[i],
             )
 
-        # Calculate effective time since start of infiltration event
-        # If wetting_front_depth is negligible, we start at t=0
-        if wetting_front_depth_m == np.float32(0.0):
-            effective_seconds_since_start_infiltration: np.float32 = np.float32(0.0)
-        else:
-            effective_seconds_since_start_infiltration: np.float32 = (
-                calculate_green_ampt_time_from_infiltration(
-                    current_cumulative_infiltration,
-                    saturated_conductivity_of_most_restrictive_layer,
-                    wetting_front_suction_head_m,
-                    wetting_front_moisture_deficit,
-                )
-            )
-
-        # Calculate potential cumulative infiltration at end of substep
-        # We advance time by substep_time_s
-        seconds_since_start_of_infiltration: np.float32 = (
-            effective_seconds_since_start_infiltration + substep_time_s
-        )
-
-        potential_cumulative_infiltration = (
-            calculate_green_ampt_potential_cumulative_infiltration(
-                seconds_since_start_of_infiltration,
-                saturated_conductivity_of_most_restrictive_layer,
-                wetting_front_suction_head_m,
-                wetting_front_moisture_deficit,
-                adjust_for_coarse_soils=False,
-            )
-        )
-
-        # Determine infiltration capacity for this substep
-        infiltration_capacity_m_step: np.float32 = max(
-            np.float32(0.0),
-            potential_cumulative_infiltration - current_cumulative_infiltration,
+        # Mixing an exact inverse with an approximate cumulative solution can
+        # yield a negative increment and suppress infiltration in a wet event.
+        infiltration_capacity_m_step: np.float32 = calculate_green_ampt_increment_m(
+            current_cumulative_infiltration,
+            saturated_conductivity_of_most_restrictive_layer,
+            wetting_front_suction_head_m,
+            wetting_front_moisture_deficit,
+            substep_time_s,
         )
         infiltration_capacity_m_step *= liquid_fraction_top_layer
 

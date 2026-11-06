@@ -1,5 +1,6 @@
 """Module for concentrating runoff from different sources."""
 
+from math import ceil
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -258,14 +259,43 @@ class RunoffConcentrator(Module):
             model: The GEB model instance.
             hydrology: The hydrology module instance.
             lag_time_hours: Buffer capacity duration in hours (default 72).
-        """
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the buffer is shorter than one day or the interflow peak
+                is negative or nonfinite.
+        """  # noqa: DOC202 - Project instructions require an explicit Returns section.
         super().__init__(model)
         self.hydrology: Hydrology = hydrology
 
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
-        self.lag_time_hours: int = lag_time_hours
+        if lag_time_hours < 24:
+            raise ValueError("The runoff buffer must hold at least 24 hours.")
+        self.interflow_peak_hours: float = float(
+            self.model.config["hydrology"]["routing"]["interflow_peak_hours"]
+        )
+        if not np.isfinite(self.interflow_peak_hours) or self.interflow_peak_hours < 0:
+            raise ValueError(
+                "The interflow peak must be finite and nonnegative (hours)."
+            )
+        # Include the entire response to rain/interflow in the day's final hour.
+        # Round to days so a 48-hour peak uses the tested seven-day buffer.
+        response_support_hours: int = ceil((8.0 / 3.0) * self.interflow_peak_hours)
+        required_buffer_hours: int = 24 * ceil((response_support_hours + 24) / 24)
+        self.lag_time_hours: int = max(lag_time_hours, required_buffer_hours)
+        self.interflow_weights: TwoDArrayFloat32 | None = None
+        if self.interflow_peak_hours > 0:
+            self.interflow_weights = np.repeat(
+                triangular_weights(self.interflow_peak_hours, self.lag_time_hours)[
+                    :, None
+                ],
+                self.grid.var.cell_area.size,
+                axis=1,
+            )
         self.concentration_factor: float = float(
             self.model.config["parameters"]["runoff_concentration_factor"]
         )
@@ -336,15 +366,19 @@ class RunoffConcentrator(Module):
         baseflow_m: ArrayFloat32,
         runoff_m: TwoDArrayFloat32,
     ) -> TwoDArrayFloat32:
-        """Concentrate surface runoff using slope-dependent triangular weighting.
+        """Concentrate surface runoff and optionally delay interflow conservatively.
 
         Args:
-            runoff_m: 2D array with shape (24, n_cells) containing sub-daily surface runoff.
-            interflow_m: 2D array with shape (24, n_cells) containing sub-daily interflow.
-            baseflow_m: 1D array with shape (n_cells,) containing daily baseflow.
+            runoff_m: Hourly surface-runoff increments (meters), shape (24, n_cells).
+            interflow_m: Hourly interflow increments (meters), shape (24, n_cells).
+            baseflow_m: Daily baseflow depth (meters), shape (n_cells,).
 
         Returns:
-            2D array with shape (24, n_cells) representing the runoff concentrated outflow.
+            Hourly outflow increments (meters), shape (24, n_cells).
+
+        Raises:
+            ValueError: If checkpoint buffer dimensions differ from the configured
+                response; rerun spinup with the current configuration.
         """
         assert (runoff_m >= 0).all()
         assert (interflow_m >= 0).all()
@@ -358,11 +392,28 @@ class RunoffConcentrator(Module):
 
         daily_hours: int = runoff_m.shape[0]
 
+        if (
+            self.grid.var.overland_flow_buffer.shape[0] != self.lag_time_hours
+            or self.grid.var.overland_flow_buffer_weights.shape[0]
+            != self.lag_time_hours
+        ):
+            raise ValueError(
+                "Runoff-concentration checkpoint buffer does not match the configured "
+                "travel time. Rerun spinup with the current configuration."
+            )
+
         if __debug__:
             buffer_prev_m: TwoDArrayFloat32 = self.grid.var.overland_flow_buffer.copy()
 
         # Apply cell-specific slope-dependent triangular weighting to runoff inflow
         self._apply_triangular(runoff_m, self.grid.var.overland_flow_buffer_weights)
+
+        interflow_to_add_m: TwoDArrayFloat32 = interflow_m
+        if self.interflow_peak_hours > 0:
+            assert self.interflow_weights is not None
+            # This buffer is already included in basin water storage/checkpoints.
+            self._apply_triangular(interflow_m, self.interflow_weights)
+            interflow_to_add_m = np.zeros_like(interflow_m)
 
         # Outflow is the first 24 buffer steps (the current day)
         outflow_runoff_m: TwoDArrayFloat32 = self.grid.var.overland_flow_buffer[
@@ -373,7 +424,7 @@ class RunoffConcentrator(Module):
 
         # Baseflow is distributed evenly across the day
         total_outflow_m: TwoDArrayFloat32 = (
-            outflow_runoff_m + baseflow_per_hour + interflow_m
+            outflow_runoff_m + baseflow_per_hour + interflow_to_add_m
         )
 
         # Advance buffer by one day (24 hours) to discard today's flow and prepare for tomorrow

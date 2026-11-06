@@ -72,6 +72,7 @@ hydrology:
     release_time_days: 10.0 # Starting value in days.
     vertical_conductivity_multiplier: 10.0 # Multiplier for vertical hydraulic conductivity in karst soils.
   routing:
+    interflow_peak_hours: 0.0 # Hours; zero preserves immediate interflow delivery.
     max_threads: null
     fix_river_geometry_after_spinup: true
     retention_basins:

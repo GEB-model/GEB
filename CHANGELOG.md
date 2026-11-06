@@ -1,4 +1,6 @@
 # dev
+- Fix Green-Ampt infiltration increments by consistently integrating the same equation instead of subtracting an approximate forward solution from an exact inverse; rerun spinup when comparing with older simulations.
+- Add optional `hydrology.routing.interflow_peak_hours` (hours, default `0.0`) to delay interflow in the accounted runoff buffer, with complete late-day response storage and checkpoint compatibility checks. Include a separate-output Europe_003 trial overlay for the Guntauninkai-calibrated settings; these parameters are not new regional defaults.
 - Bound floodplain temporary arrays to row blocks and load only the required DEM window, reducing peak memory without changing floodplain profiles.
 - Fail immediately on HTTP 401/403 downloads and allow cached FathomDEM archives without a download token.
 - Propagate failed automatic migrations and reject input versions newer than the running code, preventing silent version-marker downgrades.
