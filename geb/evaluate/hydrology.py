@@ -78,6 +78,8 @@ class Hydrology:
             evaluation_folder=self.evaluate_discharge_output_folder,
             run_output_folder=run_output_folder,
             geometry_files=self.model.files["geom"],
+            elevation_path=self.model.files["other"].get("DEM/fathomdem"),
+            karst_path=self.model.files["grid"].get("groundwater/karst_fraction"),
             table_files=self.model.files["table"],
             minimum_upstream_area_km2=self.model.config["hydrology"]["evaluation"][
                 "discharge"

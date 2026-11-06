@@ -627,6 +627,8 @@ def evaluate_discharge(
             run_output_folder=run_output_folder,
             run_name=run_name,
             completion_date=read_run_completion_time(run_output_folder),
+            elevation_path=self.model.files["other"].get("DEM/fathomdem"),
+            karst_path=self.model.files["grid"].get("groundwater/karst_fraction"),
         )
         self.model.logger.info("Discharge dashboard created: %s", dashboard_path)
 
