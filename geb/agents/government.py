@@ -9,13 +9,35 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from geb.hydrology.landcovers import FOREST
+from geb.geb_types import (
+    ArrayBool,
+    ArrayFloat32,
+    ArrayInt32,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
+)
+from geb.hydrology.landcovers import (
+    ALL_LAND_COVER_TYPES,
+    FOREST,
+    OPEN_WATER,
+    SEALED,
+)
+from geb.hydrology.landsurface.water import (
+    get_bubbling_pressure_m_positive,
+    get_pore_size_index_brakensiek,
+    get_soil_moisture_at_pressure,
+    kv_wosten,
+    thetar_brakensiek,
+    thetas_toth,
+)
 from geb.workflows.io import read_geom
 
 from .general import AgentBaseClass
 
 if TYPE_CHECKING:
     from geb.agents import Agents
+    from geb.hydrology import Hydrology
+    from geb.hydrology.HRUs import HRUVariables
     from geb.model import GEBModel
 
 logger = logging.getLogger(__name__)
@@ -164,19 +186,21 @@ class Government(AgentBaseClass):
     def prepare_modified_soil_maps_for_forest(self) -> None:
         """Plant forest: update soil properties in memory and remove displaced farmers.
 
-        Loads the forest restoration potential at grid scale, applies a threshold
-        to identify suitable HRUs, copies mean soil property values from existing forest
-        HRUs to suitable HRUs, saves a figure, and removes farmers from converted areas.
-        The threshold is read from the config key ``forest_restoration_potential_threshold``
-        and defaults to 0.5.
+        HRUs with a forest restoration potential of at least
+        ``forest_restoration_potential_threshold`` become forest, except sealed,
+        open water and existing forest HRUs. Their soil organic carbon and bulk
+        density are adjusted towards the existing forest in the basin, and the soil
+        hydraulic properties are recalculated.
 
-        When ``increment_fraction`` is set, the model automatically determines which
-        chunk to plant based on current land use. Suitable HRUs are sorted by potential
-        value (highest first); those already classified as FOREST (from previous years
-        or the initial state) are skipped, and the next
-        ``increment_fraction * remaining`` HRUs are planted. Calling the function again
-        the following year therefore plants the next batch automatically — compatible
-        with the annual adaptation pathway that calls this on every January 1st.
+        When ``increment_fraction`` is set, only that fraction of the remaining
+        suitable HRUs is planted, highest potential first. Each call plants the
+        next batch.
+
+        Soil hydraulic properties are calculated using the existing soil
+        functions into temporary arrays with shape (HRUs, soil layers), so
+        conversions can be rejected before the model's soil arrays are updated.
+        Vertical conductivity (m/s) uses the same vertical and karst multipliers
+        as model initialization.
 
         Raises:
             ValueError: If ``increment_fraction`` is not in (0, 1].
@@ -196,7 +220,27 @@ class Government(AgentBaseClass):
             self.model.files["grid"]["landsurface/forest_restoration_potential_ratio"]
         )
         suitability_grid = forest_potential >= threshold
-        suitability_HRU = hydrology.to_HRU(data=suitability_grid).astype(bool)
+        suitability_HRU = hydrology.to_HRU(data=suitability_grid)
+
+        # Sealed (built-up) and open water are not realistic reforestation
+        # targets -- exclude them from eligibility regardless of what the
+        # forest restoration potential grid says for that pixel. Existing
+        # forest is excluded too, so its own soil is not overwritten with the
+        # basin forest mean.
+        land_use_type = hydrology.HRU.var.land_use_type
+        excluded_by_land_use = suitability_HRU & np.isin(
+            land_use_type, [SEALED, OPEN_WATER, FOREST]
+        )
+        self.model.logger.info(
+            "Reforestation eligibility: excluded %d sealed (built-up), %d "
+            "open water and %d already-forest HRUs that were otherwise "
+            "potential-suitable (threshold %.2f).",
+            int((excluded_by_land_use & (land_use_type == SEALED)).sum()),
+            int((excluded_by_land_use & (land_use_type == OPEN_WATER)).sum()),
+            int((excluded_by_land_use & (land_use_type == FOREST)).sum()),
+            threshold,
+        )
+        suitability_HRU = suitability_HRU & ~excluded_by_land_use
 
         if increment_fraction is not None:
             if not (0.0 < increment_fraction <= 1.0):
@@ -256,40 +300,283 @@ class Government(AgentBaseClass):
 
         land_use_type_before = hydrology.HRU.var.land_use_type.copy()
 
-        forest_mask = hydrology.HRU.var.land_use_type == FOREST
-        for prop in (
-            "water_content_saturated_m",
-            "water_content_field_capacity_m",
-            "water_content_wilting_point_m",
-            "water_content_residual_m",
-            "horizontal_saturated_hydraulic_conductivity_m_per_s",
-            "vertical_saturated_hydraulic_conductivity_m_per_s",
-            "bubbling_pressure_m_positive",
-            "lambda_pore_size_distribution",
-            "solid_heat_capacity_J_per_m2_K",
-        ):
-            arr = getattr(hydrology.HRU.var, prop)
-            forest_mean = arr[forest_mask, :].mean(axis=0)
-            arr[suitability_HRU, :] = forest_mean[np.newaxis, :]
+        if not suitability_HRU.any():
+            self.model.logger.info(
+                "Reforestation: no eligible HRUs, no planting applied."
+            )
+            return
 
-        water_sat = hydrology.HRU.var.water_content_saturated_m
-        water_res = hydrology.HRU.var.water_content_residual_m
-        wc = hydrology.HRU.var.water_content_m
-
-        # Case 1: wc > new saturation — route excess to topwater (water conserved).
-        excess = np.maximum(0.0, wc[suitability_HRU, :] - water_sat[suitability_HRU, :])
-        wc[suitability_HRU, :] -= excess
-        hydrology.HRU.var.topwater_m[suitability_HRU] += excess.sum(axis=1)
-
-        # Case 2: wc < new residual — raise wc to residual, sourcing from topwater (water conserved).
-        deficit = np.maximum(
-            0.0, water_res[suitability_HRU, :] - wc[suitability_HRU, :]
+        # Update soil organic carbon and bulk density, then recalculate the soil
+        # hydraulic properties from them. Sand, silt and clay stay the same.
+        forest_mean_soil_organic_carbon: ArrayFloat32 = (
+            self._compute_forest_mean_soil_organic_carbon(land_use_type_before)
         )
-        wc[suitability_HRU, :] += deficit
-        topwater = hydrology.HRU.var.topwater_m[suitability_HRU]
-        drawn = np.minimum(deficit.sum(axis=1), topwater)
-        hydrology.HRU.var.topwater_m[suitability_HRU] -= drawn
+        bulk_density_ratio: TwoDArrayFloat32 = self._compute_bulk_density_ratios(
+            land_use_type_before
+        )
+        selected_land_use: ArrayInt32 = land_use_type_before[suitability_HRU]
 
+        soil_organic_carbon: TwoDArrayFloat32 = (
+            hydrology.HRU.var.soil_organic_carbon_percentage
+        )
+        bulk_density: TwoDArrayFloat32 = hydrology.HRU.var.bulk_density_kg_per_dm3
+
+        # Soil organic carbon: the basin forest mean per soil layer, but never
+        # below the HRU's original value.
+        soil_organic_carbon_after: TwoDArrayFloat32 = np.maximum(
+            forest_mean_soil_organic_carbon[np.newaxis, :],
+            soil_organic_carbon[suitability_HRU, :],
+        )
+
+        # Bulk density: the HRU's original value scaled by the measured forest to
+        # previous-land-use ratio for its soil layer, bounded per layer by the
+        # lowest and highest bulk density already present in the basin. The
+        # bound keeps converted soils inside the range the pedotransfer
+        # functions already handle at initialization (a very high bulk density
+        # gives a negative saturated water content in thetas_toth).
+        bulk_density_scaled: TwoDArrayFloat32 = (
+            bulk_density[suitability_HRU, :] * bulk_density_ratio[selected_land_use, :]
+        )
+        bulk_density_after: TwoDArrayFloat32 = np.clip(
+            bulk_density_scaled,
+            bulk_density.min(axis=0, keepdims=True),
+            bulk_density.max(axis=0, keepdims=True),
+        )
+        n_bulk_density_bounded = int((bulk_density_after != bulk_density_scaled).sum())
+        if n_bulk_density_bounded > 0:
+            self.model.logger.warning(
+                "Reforestation: bulk density of %d HRU-layers was bounded to the "
+                "basin range for its soil layer.",
+                n_bulk_density_bounded,
+            )
+
+        # Recalculate the soil hydraulic properties from the new soil organic
+        # carbon and bulk density, using the unchanged sand/silt/clay.
+        is_top_soil_subset: TwoDArrayBool = np.zeros_like(
+            soil_organic_carbon_after, dtype=bool
+        )
+        is_top_soil_subset[:, :3] = True
+        sand_percentage: TwoDArrayFloat32 = hydrology.HRU.var.sand_percentage[
+            suitability_HRU, :
+        ]
+        silt_percentage: TwoDArrayFloat32 = hydrology.HRU.var.silt_percentage[
+            suitability_HRU, :
+        ]
+        clay_percentage: TwoDArrayFloat32 = hydrology.HRU.var.clay_percentage[
+            suitability_HRU, :
+        ]
+        soil_layer_height_m: TwoDArrayFloat32 = hydrology.HRU.var.soil_layer_height_m[
+            suitability_HRU, :
+        ]
+
+        saturated_water_fraction: TwoDArrayFloat32 = thetas_toth(
+            organic_carbon_percentage=soil_organic_carbon_after,
+            bulk_density_kg_per_dm3=bulk_density_after,
+            is_top_soil=is_top_soil_subset,
+            clay=clay_percentage,
+            silt=silt_percentage,
+        )
+        residual_water_fraction: TwoDArrayFloat32 = thetar_brakensiek(
+            sand=sand_percentage,
+            clay=clay_percentage,
+            thetas=saturated_water_fraction,
+        )
+        bubbling_pressure_m_positive: TwoDArrayFloat32 = (
+            get_bubbling_pressure_m_positive(
+                clay=clay_percentage,
+                sand=sand_percentage,
+                thetas=saturated_water_fraction,
+            )
+        )
+        lambda_pore_size_distribution: TwoDArrayFloat32 = (
+            get_pore_size_index_brakensiek(
+                sand=sand_percentage,
+                thetas=saturated_water_fraction,
+                clay=clay_percentage,
+            )
+        )
+        field_capacity_water_fraction: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
+            np.float32(-1.0),  # Field capacity at a pressure head of -1 m.
+            bubbling_pressure_m_positive,
+            saturated_water_fraction,
+            residual_water_fraction,
+            lambda_pore_size_distribution,
+        )
+        wilting_point_water_fraction: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
+            np.float32(-(10**2.2)),  # Wilting point at pF 4.2, converted to meters.
+            bubbling_pressure_m_positive,
+            saturated_water_fraction,
+            residual_water_fraction,
+            lambda_pore_size_distribution,
+        )
+
+        # Match the model's water storage units (m) before checking conservation.
+        saturated: TwoDArrayFloat32 = saturated_water_fraction * soil_layer_height_m
+        field_capacity: TwoDArrayFloat32 = (
+            field_capacity_water_fraction * soil_layer_height_m
+        )
+        wilting_point: TwoDArrayFloat32 = (
+            wilting_point_water_fraction * soil_layer_height_m
+        )
+        residual: TwoDArrayFloat32 = residual_water_fraction * soil_layer_height_m
+
+        assert (residual > 0).all()
+        assert (wilting_point > residual).all()
+        assert (field_capacity > wilting_point).all()
+        assert (saturated > field_capacity).all()
+        assert (saturated < soil_layer_height_m).all()
+
+        horizontal_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = (
+            kv_wosten(
+                silt=silt_percentage,
+                clay=clay_percentage,
+                bulk_density_kg_per_dm3=bulk_density_after,
+                organic_carbon_percentage=soil_organic_carbon_after,
+                is_topsoil=is_top_soil_subset,
+            )
+            * self.model.config["parameters"][
+                "saturated_hydraulic_conductivity_multiplier"
+            ]
+        )
+
+        # Reapply the model-start factors to the recalculated horizontal conductivity.
+        karst_presence_hru: ArrayFloat32 = (
+            hydrology.to_HRU(data=hydrology.karst.karst_fraction)[suitability_HRU]
+            > np.float32(0.0)
+        ).astype(np.float32) * (
+            (selected_land_use != SEALED) & (selected_land_use != OPEN_WATER)
+        )
+        karst_vertical_multiplier: ArrayFloat32 = (
+            np.float32(1.0)
+            + (
+                np.float32(
+                    self.model.config["hydrology"]["karst"][
+                        "vertical_conductivity_multiplier"
+                    ]
+                )
+                - np.float32(1.0)
+            )
+            * karst_presence_hru
+        )
+        vertical_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = (
+            horizontal_saturated_hydraulic_conductivity_m_per_s
+            * np.float32(
+                self.model.config["parameters"][
+                    "vertical_saturated_hydraulic_conductivity_multiplier"
+                ]
+            )
+            * karst_vertical_multiplier[:, np.newaxis]
+        )
+
+        # Soil water: the new saturated and residual water contents may no
+        # longer bracket each HRU's current water content. Indexing with the HRU
+        # mask returns copies, so this can be checked before anything is written.
+        cell_area = hydrology.HRU.var.cell_area[suitability_HRU]
+        water_content: TwoDArrayFloat32 = hydrology.HRU.var.water_content_m[
+            suitability_HRU, :
+        ]
+        topwater = hydrology.HRU.var.topwater_m[suitability_HRU]
+
+        # Water above the new saturation is routed to topwater (water conserved).
+        excess: TwoDArrayFloat32 = np.maximum(0.0, water_content - saturated)
+        water_content -= excess
+        topwater += excess.sum(axis=1)
+
+        # Water below the new residual is raised to the residual, paid for
+        # first from topwater, then from whatever surplus above residual the
+        # same HRU holds in its other layers.
+        deficit_per_layer: TwoDArrayFloat32 = np.maximum(0.0, residual - water_content)
+        water_content += deficit_per_layer
+        outstanding: ArrayFloat32 = deficit_per_layer.sum(axis=1)
+
+        from_topwater = np.minimum(outstanding, topwater)
+        topwater -= from_topwater
+        outstanding -= from_topwater
+
+        surplus_per_layer: TwoDArrayFloat32 = np.maximum(0.0, water_content - residual)
+        total_surplus: ArrayFloat32 = surplus_per_layer.sum(axis=1)
+        from_other_layers = np.minimum(outstanding, total_surplus)
+        # Take it out of the surplus layers in proportion to how much each holds.
+        share: TwoDArrayFloat32 = np.divide(
+            surplus_per_layer,
+            total_surplus[:, np.newaxis],
+            out=np.zeros_like(surplus_per_layer),
+            where=total_surplus[:, np.newaxis] > 0,
+        )
+        water_content -= share * from_other_layers[:, np.newaxis]
+        outstanding -= from_other_layers
+
+        # HRUs that cannot pay for their new residual water content from
+        # topwater or their other layers would need water created out of
+        # nothing. They are not converted (this round); everything about them
+        # stays as it was.
+        funded = outstanding <= 0.0
+        n_unfunded = int((~funded).sum())
+        if n_unfunded > 0:
+            self.model.logger.warning(
+                "Reforestation: %d HRUs not converted because they hold too "
+                "little water to reach the new residual water content of forest "
+                "soil.",
+                n_unfunded,
+            )
+        converted_indices = np.flatnonzero(suitability_HRU)[funded]
+        suitability_HRU = np.zeros_like(suitability_HRU)
+        suitability_HRU[converted_indices] = True
+        if not suitability_HRU.any():
+            self.model.logger.info("Reforestation: no HRUs converted, soil unchanged.")
+            return
+
+        mean_before = self._mean_soil_properties(suitability_HRU)
+
+        # Write the funded HRUs to the model.
+        soil_organic_carbon[suitability_HRU, :] = soil_organic_carbon_after[funded, :]
+        bulk_density[suitability_HRU, :] = bulk_density_after[funded, :]
+        hydrology.HRU.var.water_content_saturated_m[suitability_HRU, :] = saturated[
+            funded, :
+        ]
+        hydrology.HRU.var.water_content_field_capacity_m[suitability_HRU, :] = (
+            field_capacity[funded, :]
+        )
+        hydrology.HRU.var.water_content_wilting_point_m[suitability_HRU, :] = (
+            wilting_point[funded, :]
+        )
+        hydrology.HRU.var.water_content_residual_m[suitability_HRU, :] = residual[
+            funded, :
+        ]
+        hydrology.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s[
+            suitability_HRU, :
+        ] = horizontal_saturated_hydraulic_conductivity_m_per_s[funded, :]
+        hydrology.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s[
+            suitability_HRU, :
+        ] = vertical_saturated_hydraulic_conductivity_m_per_s[funded, :]
+        hydrology.HRU.var.bubbling_pressure_m_positive[suitability_HRU, :] = (
+            bubbling_pressure_m_positive[funded, :]
+        )
+        hydrology.HRU.var.lambda_pore_size_distribution[suitability_HRU, :] = (
+            lambda_pore_size_distribution[funded, :]
+        )
+        hydrology.HRU.var.water_content_m[suitability_HRU, :] = water_content[funded, :]
+        hydrology.HRU.var.topwater_m[suitability_HRU] = topwater[funded]
+        # Soil thermal properties (solid heat capacity, solid thermal
+        # conductivity and the saturated unfrozen/frozen conductivities) are
+        # deliberately left alone. They are not soil hydraulic properties, so
+        # they keep the values calculated at model initialization.
+
+        self._log_soil_change_summary(
+            n_converted=int(suitability_HRU.sum()),
+            mean_before=mean_before,
+            mean_after=self._mean_soil_properties(suitability_HRU),
+        )
+
+        cell_area = cell_area[funded]
+        self.model.logger.info(
+            "Reforestation soil water adjustment: %.4f m3 routed from soil to "
+            "topwater, %.4f m3 drawn from topwater and %.4f m3 from surplus in "
+            "other layers to reach the new residual water content.",
+            float((excess.sum(axis=1)[funded] * cell_area).sum()),
+            float((from_topwater[funded] * cell_area).sum()),
+            float((from_other_layers[funded] * cell_area).sum()),
+        )
         self.remove_farmers_from_converted_forest_areas(suitability_HRU)
 
         # Explicitly mark all planted HRUs as FOREST so that future calls to
@@ -302,6 +589,182 @@ class Government(AgentBaseClass):
         self._save_forest_planting_figure(
             land_use_type_before, suitability_HRU, output_folder, threshold
         )
+
+    def _mean_soil_properties(
+        self, suitability_HRU: ArrayBool
+    ) -> dict[str, np.ndarray]:
+        """Average each soil property that reforestation changes, per soil layer.
+
+        Args:
+            suitability_HRU: Boolean mask selecting rows in the (HRUs, layers)
+                soil arrays.
+
+        Returns:
+            The area-weighted mean per soil layer of each property, keyed by
+            property name. Each result has shape (N_SOIL_LAYERS,) and retains
+            the units of its source property (percent, kg/dm3, m, m/s, or
+            dimensionless).
+        """
+        var: HRUVariables = self.model.hydrology.HRU.var
+        properties: dict[str, TwoDArrayFloat32] = {
+            "soil_organic_carbon_percentage": var.soil_organic_carbon_percentage,
+            "bulk_density_kg_per_dm3": var.bulk_density_kg_per_dm3,
+            "water_content_saturated_m": var.water_content_saturated_m,
+            "water_content_field_capacity_m": var.water_content_field_capacity_m,
+            "water_content_wilting_point_m": var.water_content_wilting_point_m,
+            "water_content_residual_m": var.water_content_residual_m,
+            "horizontal_saturated_hydraulic_conductivity_m_per_s": (
+                var.horizontal_saturated_hydraulic_conductivity_m_per_s
+            ),
+            "vertical_saturated_hydraulic_conductivity_m_per_s": (
+                var.vertical_saturated_hydraulic_conductivity_m_per_s
+            ),
+            "bubbling_pressure_m_positive": var.bubbling_pressure_m_positive,
+            "lambda_pore_size_distribution": var.lambda_pore_size_distribution,
+        }
+        weights: ArrayFloat32 = var.cell_area[suitability_HRU]
+        return {
+            name: np.average(values[suitability_HRU, :], axis=0, weights=weights)
+            for name, values in properties.items()
+        }
+
+    def _log_soil_change_summary(
+        self,
+        n_converted: int,
+        mean_before: dict[str, np.ndarray],
+        mean_after: dict[str, np.ndarray],
+    ) -> None:
+        """Log the mean of each soil property before and after reforestation.
+
+        Args:
+            n_converted: Number of converted HRUs.
+            mean_before: Mean per soil layer of each property before the change,
+                from :meth:`_mean_soil_properties`.
+            mean_after: Mean per soil layer of each property after the change.
+        """
+        self.model.logger.info(
+            "Reforestation soil change summary over %d converted HRUs "
+            "(area-weighted mean per soil layer, before -> after):",
+            n_converted,
+        )
+        for name, before in mean_before.items():
+            after = mean_after[name]
+            relative_change = np.divide(
+                after - before,
+                before,
+                out=np.zeros_like(before),
+                where=before != 0,
+            )
+            self.model.logger.info(
+                "  %-40s before %s -> after %s (%s %%)",
+                name,
+                np.array2string(before, precision=5, suppress_small=False),
+                np.array2string(after, precision=5, suppress_small=False),
+                np.array2string(relative_change * 100, precision=1),
+            )
+
+    def _compute_forest_mean_soil_organic_carbon(
+        self, land_use_type: ArrayInt32
+    ) -> ArrayFloat32:
+        """Measure the area-weighted mean organic carbon over existing forest, per layer.
+
+        Converted HRUs get this basin forest mean, floored so it never
+        decreases an HRU's original value. See
+        :meth:`prepare_modified_soil_maps_for_forest`.
+
+        Args:
+            land_use_type: Land use type per HRU, as it is just before conversion.
+
+        Returns:
+            Float32 array of shape (N_SOIL_LAYERS,): the forest mean organic
+            carbon content per layer (percent).
+
+        Raises:
+            ValueError: If there are no HRUs currently under forest.
+        """
+        hydrology: Hydrology = self.model.hydrology
+        area: ArrayFloat32 = hydrology.HRU.var.cell_area
+        soil_organic_carbon: TwoDArrayFloat32 = (
+            hydrology.HRU.var.soil_organic_carbon_percentage
+        )
+
+        forest_mask: ArrayBool = land_use_type == FOREST
+        if not forest_mask.any():
+            raise ValueError(
+                "Reforestation requires at least one HRU currently under "
+                "forest to measure the basin forest soil from, but none were "
+                "found."
+            )
+        return np.average(
+            soil_organic_carbon[forest_mask, :], axis=0, weights=area[forest_mask]
+        ).astype(np.float32)
+
+    def _compute_bulk_density_ratios(
+        self, land_use_type: ArrayInt32
+    ) -> TwoDArrayFloat32:
+        """Measure how forest bulk density differs from each other land use, per soil layer.
+
+        For every soil layer and every land use type, the ratio between the
+        area-weighted mean bulk density over HRUs currently under forest and
+        the area-weighted mean over HRUs currently under that land use is
+        computed. Converting an HRU to forest then multiplies its own bulk
+        density by the ratio for its layer and its previous land use, so the
+        HRU keeps its own soil signal instead of being replaced by a catchment
+        average.
+
+        Deriving the ratios from the model's own soil maps means no change
+        factor is hard-coded, and the ratios are specific to the basin being
+        modelled.
+
+        Land use types with no HRUs, and layers whose mean is zero, get a ratio
+        of 1.0 (no change), since there is nothing to measure a change against.
+        At least one forest HRU must exist; this is checked by
+        :meth:`_compute_forest_mean_soil_organic_carbon`, which is called first.
+
+        Args:
+            land_use_type: Land use type per HRU, as it is just before conversion.
+
+        Returns:
+            Dimensionless bulk density ratio with shape
+            (len(ALL_LAND_COVER_TYPES), N_SOIL_LAYERS), indexable by land use
+            type, e.g. ``ratio[GRASSLAND_LIKE, :]``.
+        """
+        hydrology: Hydrology = self.model.hydrology
+        area: ArrayFloat32 = hydrology.HRU.var.cell_area
+        bulk_density: TwoDArrayFloat32 = hydrology.HRU.var.bulk_density_kg_per_dm3
+
+        n_layers: int = bulk_density.shape[1]
+        bulk_density_ratio: TwoDArrayFloat32 = np.ones(
+            (len(ALL_LAND_COVER_TYPES), n_layers), dtype=np.float32
+        )
+
+        forest_mask: ArrayBool = land_use_type == FOREST
+        forest_bulk_density: ArrayFloat32 = np.average(
+            bulk_density[forest_mask, :], axis=0, weights=area[forest_mask]
+        )
+
+        for source_land_use in ALL_LAND_COVER_TYPES:
+            source_mask: ArrayBool = land_use_type == source_land_use
+            if not source_mask.any():
+                continue
+            source_bulk_density: ArrayFloat32 = np.average(
+                bulk_density[source_mask, :], axis=0, weights=area[source_mask]
+            )
+            bulk_density_ratio[source_land_use, :] = np.divide(
+                forest_bulk_density,
+                source_bulk_density,
+                out=np.ones_like(forest_bulk_density),
+                where=source_bulk_density > 0,
+            )
+            self.model.logger.info(
+                "Reforestation bulk density ratio from land use %d (%d HRUs): "
+                "per layer %s.",
+                source_land_use,
+                int(source_mask.sum()),
+                np.round(bulk_density_ratio[source_land_use, :], 3).tolist(),
+            )
+
+        return bulk_density_ratio
 
     def _save_forest_planting_figure(
         self,

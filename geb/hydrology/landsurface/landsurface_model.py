@@ -1905,6 +1905,8 @@ class LandSurface(Module):
         organic_carbon_percentage = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"],
         )
+        # Retain soil carbon for reforestation; pedotransfer uses a copy below.
+        self.HRU.var.soil_organic_carbon_percentage = organic_carbon_percentage
         self.HRU.var.bulk_density_kg_per_dm3 = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"],
         )

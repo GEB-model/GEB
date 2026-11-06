@@ -2458,6 +2458,8 @@ class CropFarmers(AgentBaseClass):
 
     def plant(self) -> None:
         """Determines when and what crop should be planted, mainly through calling the :meth:`agents.farmers.Farmers.plant_numba`. Then converts the array to cupy array if model is running with GPU."""
+        if self.var.n == 0:
+            return
         if self.cultivation_costs[0] is None:
             cultivation_cost = self.cultivation_costs[1]
         else:
@@ -4890,6 +4892,8 @@ class CropFarmers(AgentBaseClass):
             ValueError: When farmers don't have a yield probability relation yet.
         """
         if not self.model.simulate_hydrology:
+            return
+        if self.var.n == 0:
             return
 
         timer = TimingModule("crop_farmers")
