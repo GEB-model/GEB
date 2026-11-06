@@ -414,7 +414,9 @@ class Households(AgentBaseClass):
         self.var.adaptation_cost_scaler = self.model.config["agent_settings"][
             "households"
         ]["adaptation_cost_scaler"]
-        self.model.logger.debug(f"adaptation_cost_scaler: {self.var.adaptation_cost_scaler}")
+        self.model.logger.debug(
+            f"adaptation_cost_scaler: {self.var.adaptation_cost_scaler}"
+        )
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
