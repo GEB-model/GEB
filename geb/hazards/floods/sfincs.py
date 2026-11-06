@@ -915,6 +915,48 @@ class SFINCSRootModel:
             outflow_gdf = gpd.GeoDataFrame({"geometry": [outflow_point]}, crs=self.crs)
             write_geom(outflow_gdf, self.path / "debug_outflow_point.geoparquet")
 
+        def move_outflow_point_into_mask(
+            river: LineString, outflow_point: Point
+        ) -> Point:
+            """Move an outflow point upstream along the river until it lies in an active grid cell.
+
+            The area boundary is a vector outline, while the mask is a raster in which a cell is
+            active when its centre lies in the area. A point on the boundary can therefore be up to
+            half a cell outside the mask, so the point is moved upstream in steps of half a cell.
+
+            Args:
+                river: The river geometry, ending at (or extended to) the outflow point.
+                outflow_point: The outflow point on the area boundary.
+
+            Returns:
+                The outflow point, moved upstream into the first active grid cell.
+
+            Raises:
+                ValueError: If no active grid cell is found within 5 grid cells upstream.
+            """
+            transform = self.mask.rio.transform().to_gdal()
+            step: float = 0.5 * abs(self.mask.rio.resolution()[0])
+            distance_along_river: float = line_locate_point(river, outflow_point)
+            point: Point = outflow_point
+            for n_steps in range(11):
+                # never below 0: shapely counts negative distances from the downstream end
+                distance: float = max(distance_along_river - n_steps * step, 0.0)
+                if n_steps > 0:
+                    point = river.interpolate(distance)
+                col, row = coord_to_pixel((point.x, point.y), transform)
+                if (
+                    0 <= row < self.mask.shape[0]
+                    and 0 <= col < self.mask.shape[1]
+                    and self.mask.values[row, col]
+                ):
+                    return point
+                if distance == 0.0:  # reached the upstream end of the river
+                    break
+            export_diagnostics(point)
+            raise ValueError(
+                "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
+            )
+
         boundary = area.union_all().boundary
         if not (
             self.active_rivers["is_downstream_outflow"]
@@ -953,39 +995,7 @@ class SFINCSRootModel:
                         "Calculated outflow point is not a single point. Please check the river geometries and subbasins boundary."
                     )
 
-                outflow_col, outflow_row = coord_to_pixel(
-                    (outflow_point.x, outflow_point.y),
-                    self.mask.rio.transform().to_gdal(),
-                )
-
-                # due to floating point precision, the intersection point
-                # may be just outside the model grid. We therefore check if the
-                # point is outside the grid, and if so, move it 1 m upstream along the river
-                if not self.mask.values[outflow_row, outflow_col]:
-                    # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
-                    outflow_point: Point | MultiPoint | GeometryCollection = (
-                        river.interpolate(
-                            line_locate_point(river, outflow_point)
-                            - (0.000008983 if self.is_geographic else 1.0)
-                        )
-                    )
-                    if not isinstance(outflow_point, Point):
-                        # if the intersection is not a single point, select the most upstream point
-                        outflow_point: Point = select_most_upstream_point(
-                            river, outflow_point
-                        )
-
-                    outflow_col, outflow_row = coord_to_pixel(
-                        (outflow_point.x, outflow_point.y),
-                        self.mask.rio.transform().to_gdal(),
-                    )
-
-                    # if still outside the grid, raise error for boundary rivers
-                    if not self.mask.values[outflow_row, outflow_col]:
-                        export_diagnostics(outflow_point)
-                        raise ValueError(
-                            "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
-                        )
+                outflow_point = move_outflow_point_into_mask(river, outflow_point)
 
                 self.rivers.at[river_idx, "outflow_elevation"] = 0
                 self.rivers.at[river_idx, "outflow_point_xy"] = np.array(
@@ -1038,45 +1048,7 @@ class SFINCSRootModel:
                         river, outflow_point
                     )
 
-                outflow_col, outflow_row = coord_to_pixel(
-                    (outflow_point.x, outflow_point.y),
-                    self.mask.rio.transform().to_gdal(),
-                )
-
-                # due to floating point precision, the intersection point
-                # may be just outside the model grid. We therefore check if the
-                # point is outside the grid, and if so, move it 1 m upstream along the river
-                if (
-                    not (
-                        0 <= outflow_row < self.mask.shape[0]
-                        and 0 <= outflow_col < self.mask.shape[1]
-                    )
-                    or not self.mask.values[outflow_row, outflow_col]
-                ):
-                    # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
-                    outflow_point: Point | MultiPoint | GeometryCollection = (
-                        river.interpolate(
-                            line_locate_point(river, outflow_point)
-                            - (0.000008983 if self.is_geographic else 1.0)
-                        )
-                    )
-                    if not isinstance(outflow_point, Point):
-                        # if the intersection is not a single point, select the most upstream point
-                        outflow_point: Point = select_most_upstream_point(
-                            river, outflow_point
-                        )
-
-                    outflow_col, outflow_row = coord_to_pixel(
-                        (outflow_point.x, outflow_point.y),
-                        self.mask.rio.transform().to_gdal(),
-                    )
-
-                    # if still outside the grid, raise error for boundary rivers
-                    if not self.mask.values[outflow_row, outflow_col]:
-                        export_diagnostics(outflow_point)
-                        raise ValueError(
-                            "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
-                        )
+                outflow_point = move_outflow_point_into_mask(river, outflow_point)
 
                 self.rivers.at[river_idx, "outflow_point_xy"] = np.array(
                     [
