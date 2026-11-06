@@ -2553,7 +2553,7 @@ class GEBModel(
         ssp: str | None = None,
         rcp: str | None = None,
     ) -> None:
-        """Sets the SSP (socioeconomic scenario) and RCP (climate forcing) name for the model.
+        """Sets the SSP (socioeconomic scenario) and RCP (climate forcing) name for the model. If only either ssp or rcp are defined, the other scenario will be inferred from one of the standard scenario combinations.
 
         Args:
             ssp: The SSP name. Supported SSPs are: ssp1, ssp2, ssp3, ssp4, ssp5. Some data might not be available for all SSPs.
@@ -2575,7 +2575,7 @@ class GEBModel(
 
     @property
     def ssp(self) -> str:
-        """Return the configured SSP, or infer its default from the RCP.
+        """Return the configured SSP, or infer its default from the RCP. RCP can also be inferred from the configured SSP, see rcp().
 
         Raises:
             ValueError: If the RCP has no default SSP and no SSP was explicitly set.
@@ -2608,7 +2608,7 @@ class GEBModel(
 
     @property
     def rcp(self) -> str:
-        """Return the configured RCP, or infer its default from the SSP.
+        """Return the configured RCP, or infer its default from the SSP. SSP can also be inferred from the configured RCP, see ssp().
 
         Raises:
             ValueError: If the SSP has no default RCP and no RCP was explicitly set.
