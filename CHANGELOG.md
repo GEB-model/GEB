@@ -13,6 +13,7 @@
 - Fixed a build failure in `setup_region` ("cannot align objects ... along y") for some regions, caused by tiny floating-point differences between the coordinates of the MERIT Hydro elevation and flow direction data.
 - Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
+- Added `cmip6_model` option to `setup_forcing` (default `gfdl_esm4`) and made it consistently available through the forcing build methods. CMIP6 cache files are now stored per model (`cmip6_combined_deltas_{model}.zarr`); previously cached CMIP6 files are no longer used and can be deleted.
 
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.
