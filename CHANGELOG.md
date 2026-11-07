@@ -1,4 +1,5 @@
 # dev
+- Fixed river widths (and river IDs) missing in the routing network being filled from a small tributary instead of the main stem at confluences. This could give a river reach a much smaller width than the reaches up- and downstream of it, creating a bottleneck in SFINCS flood maps. Rebuild `setup_hydrography` (and everything depending on it) to apply this to existing models.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
 - Added the optional `hazards.floods.representative_year` setting for sea-level-rise forcing in return-period maps; `null` uses the current model year.
 
