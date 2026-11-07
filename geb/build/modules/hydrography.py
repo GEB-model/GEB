@@ -753,6 +753,10 @@ def propagate_downstream(
 ) -> npt.NDArray:
     """Propagates values downstream along flow paths ordered from upstream to downstream.
 
+    Only cells that are missing in the input are filled. When multiple upstream cells
+    drain into the same missing cell (a confluence), the value of the upstream cell with
+    the largest upstream area (the main stem) is used, not that of a smaller tributary.
+
     Args:
         data: Input 1D or 2D array containing values to propagate.
         idxs_ds: 1D or 2D array of downstream linear indices.
@@ -775,6 +779,9 @@ def propagate_downstream(
     if indices.size > 0:
         sorted_indices = indices[np.argsort(flat_ua[indices])]
         is_nan_val = isinstance(missing_val, float) and np.isnan(missing_val)
+        originally_missing = (
+            np.isnan(flat_data) if is_nan_val else flat_data == missing_val
+        )
 
         for idx in sorted_indices:
             ds_idx = flat_ds[idx]
@@ -783,12 +790,12 @@ def propagate_downstream(
                     continue
 
                 val = flat_data[idx]
-                ds_val = flat_data[ds_idx]
-
                 val_valid = not np.isnan(val) if is_nan_val else val != missing_val
-                ds_missing = np.isnan(ds_val) if is_nan_val else ds_val == missing_val
 
-                if val_valid and ds_missing:
+                # Cells are visited from small to large upstream area, so for a missing
+                # downstream cell the last (largest) valid upstream cell overwrites the
+                # earlier (smaller) ones. Cells with input data are never overwritten.
+                if val_valid and originally_missing[ds_idx]:
                     flat_data[ds_idx] = val
 
     return flat_data.reshape(data.shape)

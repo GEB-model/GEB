@@ -1,4 +1,5 @@
 # dev
+- Fixed river widths (and river IDs) missing in the routing network being filled from a small tributary instead of the main stem at confluences. This could give a river reach a much smaller width than the reaches up- and downstream of it, creating a bottleneck in SFINCS flood maps. Rebuild `setup_hydrography` (and everything depending on it) to apply this to existing models.
 - Fixed a build failure in `setup_coastal_water_levels` for small coastal models without any GTSM station inside their bounds: the nearest offshore stations are now used, with a warning in the log.
 - Fixed a build failure in `setup_region` (shape mismatch between MERIT Hydro flow direction and elevation) for some regions: merged MERIT Hydro tiles now get exact 3-arcsecond grid coordinates, so all MERIT Hydro variables are clipped to the same pixels.
 - Fixed spinup failing with "divide by zero encountered in log" in the crop market's price model when a crop has years without production: those years are now left out of the price regression instead of setting production to 1. With the dynamic market enabled, a crop that is grown but has no estimated price model now raises a clear error.
