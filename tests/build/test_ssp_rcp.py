@@ -86,14 +86,14 @@ def test_rcp_inference_raises_when_ssp_has_no_default(model: GEBModel) -> None:
 @pytest.mark.parametrize("ssp", ["invalid", "ssp6"])
 def test_set_ssp_rejects_unsupported_ssp(model: GEBModel, ssp: str) -> None:
     """Reject unsupported SSP values."""
-    with pytest.raises(AssertionError, match="not supported"):
+    with pytest.raises(ValueError, match="not supported"):
         model.set_ssp(ssp=ssp, rcp="70")
 
 
 @pytest.mark.parametrize("rcp", ["invalid", "100"])
 def test_set_ssp_rejects_unsupported_rcp(model: GEBModel, rcp: str) -> None:
     """Reject unsupported RCP values."""
-    with pytest.raises(AssertionError, match="not supported"):
+    with pytest.raises(ValueError, match="not supported"):
         model.set_ssp(ssp="ssp3", rcp=rcp)
 
 

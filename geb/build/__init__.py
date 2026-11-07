@@ -2553,23 +2553,29 @@ class GEBModel(
         ssp: str | None = None,
         rcp: str | None = None,
     ) -> None:
-        """Sets the SSP (socioeconomic scenario) and RCP (climate forcing) name for the model.
+        """Sets the SSP (socioeconomic scenario) and RCP (climate forcing) name for the model. If only either ssp or rcp are defined, the other scenario will be inferred from one of the standard scenario combinations.
 
         Args:
             ssp: The SSP name. Supported SSPs are: ssp1, ssp2, ssp3, ssp4, ssp5. Some data might not be available for all SSPs.
             rcp: The RCP name. Supported RCPs are: 19, 26, 34, 45, 60, 70, 85. Some data might not be available for all RCPs.
+        Raises:
+            ValueError: If the SSP or RCP value is not supported.
         """
-        assert ssp in ["ssp1", "ssp2", "ssp3", "ssp4", "ssp5", None], (
-            f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp2, ssp3, ssp4, ssp5."
-        )
-        assert rcp in ["19", "26", "34", "45", "60", "70", "85", None], (
-            f"RCP {rcp} not supported. Supported RCPs are: 19, 26, 34, 45, 60, 70, 85."
-        )
+        if ssp not in ["ssp1", "ssp2", "ssp3", "ssp4", "ssp5", None]:
+            raise ValueError(
+                f"SSP {ssp} not supported. Supported SSPs are: "
+                "ssp1, ssp2, ssp3, ssp4, ssp5."
+            )
+        if rcp not in ["19", "26", "34", "45", "60", "70", "85", None]:
+            raise ValueError(
+                f"RCP {rcp} not supported. Supported RCPs are: "
+                "19, 26, 34, 45, 60, 70, 85."
+            )
         self.set_params({"ssp": ssp, "rcp": rcp}, name="ssp")
 
     @property
     def ssp(self) -> str:
-        """Return the configured SSP, or infer its default from the RCP.
+        """Return the configured SSP, or infer its default from the RCP. RCP can also be inferred from the configured SSP, see rcp().
 
         Raises:
             ValueError: If the RCP has no default SSP and no SSP was explicitly set.
@@ -2602,7 +2608,7 @@ class GEBModel(
 
     @property
     def rcp(self) -> str:
-        """Return the configured RCP, or infer its default from the SSP.
+        """Return the configured RCP, or infer its default from the SSP. SSP can also be inferred from the configured RCP, see ssp().
 
         Raises:
             ValueError: If the SSP has no default RCP and no RCP was explicitly set.
