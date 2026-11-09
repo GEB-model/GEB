@@ -476,6 +476,12 @@ def test_update_monetary_variables_respects_projection_flags(
         current_time=datetime(2021, 1, 1),
         logger=logging.getLogger("test"),
         config={"agent_settings": {"climrisk": climrisk_config}},
+        files={
+            "other": {
+                "ssp_maps/GDP": tmp_path / "GDP.zarr",
+                "ssp_maps/POP": tmp_path / "POP.zarr",
+            }
+        },
     )
     households.var = SimpleNamespace(
         income=np.array([100.0]),
