@@ -410,13 +410,6 @@ class Households(AgentBaseClass):
         )
         self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
 
-        # Load adaptation and relocation cost scaler
-        self.var.adaptation_cost_scaler = self.model.config["agent_settings"][
-            "households"
-        ]["adaptation_cost_scaler"]
-        self.model.logger.debug(
-            f"adaptation_cost_scaler: {self.var.adaptation_cost_scaler}"
-        )
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
@@ -517,6 +510,11 @@ class Households(AgentBaseClass):
         )
 
         self.assign_income_category(self.var.income)
+
+        # Load adaptation and relocation cost scaler
+        self.var.adaptation_cost_scaler = self.model.config["agent_settings"][
+            "households"
+        ]["adaptation_cost_scaler"]
 
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
         adaptation_costs = np.full(
@@ -1132,10 +1130,13 @@ class Households(AgentBaseClass):
             )
         )
 
+        # Load GDP projection
         if hasattr(self.var, "factor_change"):
             GDP_i_t = self.var.factor_change
         else:
             GDP_i_t = 1
+        damages_do_not_adapt *= GDP_i_t # scaled by change in gdp from base to current year
+        damages_adapt *= GDP_i_t # scaled by change in gdp from base to current year
         # calculate expected utilities
         if (
             self.config["dry_floodproofing"]
@@ -1150,8 +1151,7 @@ class Households(AgentBaseClass):
                 household_distance_to_coastline_m=self.household_distance_to_coastline_m,
                 household_distance_to_river_m=self.household_distance_to_river_m,
                 risk_perception=self.var.risk_perception.data,
-                expected_damages_adapt=damages_adapt
-                * GDP_i_t,  # scaled by change in gdp from base to current year
+                expected_damages_adapt=damages_adapt,
                 adaptation_costs=self.var.adaptation_costs.data
                 * GDP_i_t,  # scaled by change in gdp from base to current year
                 time_adapted=self.var.time_adapted.data,
@@ -1173,8 +1173,7 @@ class Households(AgentBaseClass):
             household_distance_to_coastline_m=self.household_distance_to_coastline_m,
             household_distance_to_river_m=self.household_distance_to_river_m,
             risk_perception=self.var.risk_perception.data,
-            expected_damages=damages_do_not_adapt
-            * GDP_i_t,  # scaled by change in gdp from base to current year
+            expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
             T=15,
@@ -1647,20 +1646,13 @@ class Households(AgentBaseClass):
                         f"CLIMRISK: Damage function for income and wealth projections: {damage_function}p{warming_percentile}"
                     )
                     gdp_damages_map_name: str = (
-                        f"{damage_function}_p{warming_percentile}.zarr"
+                        f"{damage_function}_p{warming_percentile}"
                     )
                 else:
                     self.model.logger.info(
                         f"CLIMRISK: Damage function for income and wealth projections: no damages"
                     )
-                    gdp_damages_map_name: str = f"GDP.zarr"
-
-                gdp_damages_map_path: Path = (
-                    self.model.input_folder
-                    / "other"
-                    / "ssp_maps"
-                    / gdp_damages_map_name
-                )
+                    gdp_damages_map_name: str = f"GDP"
 
                 # Pending: Load as DynamicArray into the var Bucket
                 # flood_map in line 635 is also an xarray and it
@@ -1668,24 +1660,20 @@ class Households(AgentBaseClass):
                 # implementation should probably be set for both maps
                 try:
                     gdp_damages_map: xr.DataArray = xr.open_dataarray(
-                        gdp_damages_map_path
+                        self.model.files["other"][f"ssp_maps/{gdp_damages_map_name}"]
                     )
                 except FileNotFoundError as e:
                     raise ValueError(
-                        f"Requested file {gdp_damages_map_name} has not been built. "
+                        f"Requested file {gdp_damages_map_name}.zarr has not been built. "
                         + f"Please build the model again passing the "
                         + f"requested data to 'setup_climrisk'."
                     ) from e
 
-                population_map_name: str = f"POP.zarr"
-                population_map_path: Path = (
-                    self.model.input_folder / "other" / "ssp_maps" / population_map_name
-                )
                 try:
-                    population_map: xr.Dataset = xr.open_dataarray(population_map_path)
+                    population_map: xr.Dataset = xr.open_dataarray(self.model.files["other"][f"ssp_maps/POP"])
                 except FileNotFoundError as e:
                     raise ValueError(
-                        f"Requested file {population_map_name} has not been built. "
+                        f"Requested file POP.zarr has not been built. "
                         + f"Please build the model again using 'setup_climrisk'."
                     ) from e
 
@@ -1717,15 +1705,11 @@ class Households(AgentBaseClass):
                 self.model.logger.info(
                     f"CLIMRISK: Damage function ammenity value, adaptation and relocation costs projection: no damages"
                 )
-                gdp_map_name: str = f"GDP.zarr"
-                gdp_map_path: Path = (
-                    self.model.input_folder / "other" / "ssp_maps" / gdp_map_name
-                )
                 try:
-                    gdp_map: xr.DataArray = xr.open_dataarray(gdp_map_path)
+                    gdp_map: xr.DataArray = xr.open_dataarray(self.model.files["other"][f"ssp_maps/GDP"])
                 except FileNotFoundError as e:
                     raise ValueError(
-                        f"Requested file {gdp_map_name} has not been built. "
+                        f"Requested file GDP.zarr has not been built. "
                         + f"Please build the model again passing the "
                         + f"requested data to 'setup_climrisk'."
                     ) from e
