@@ -221,7 +221,7 @@ class LandSurface(BuildModelBase):
 
         DEM_raster: xr.DataArray
         delta_dtm_raster: xr.DataArray | None = None
-        
+
         for DEM in DEMs:
             if DEM["name"] == "fathomdem":
                 DEM_raster = fathomdem
