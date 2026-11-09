@@ -97,7 +97,7 @@ class WindRiskModule:
         )
 
     def calculate_building_wind_damages(
-        self, verbose: bool = True, export_building_damages: bool = False
+        self, verbose: bool = True, export_building_damages: bool = False, building_damage_cache_dir: Path | str | None = None
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the wind damages for the households in the model.
         
@@ -137,7 +137,7 @@ class WindRiskModule:
         # buildings = self.households.buildings[mask]
 
         #LECZ version
-        lecz_mask = self.households.var.in_lecz.data == 1
+        lecz_mask = self.households.var.in_lecz.data[: self.households.n] == 1
         # lecz_config = self.model.config.get("agent_settings", {}).get("households",{})
         # only_lecz_buildings = bool(lecz_config.get("debug_damage_stats", True))
         lecz_building_ids = np.unique(
@@ -150,6 +150,48 @@ class WindRiskModule:
                     self.households.var.building_id_of_household.data[: self.households.n][lecz_mask]
             }
         )
+
+        rps = list(self.households.windstorm_return_periods)
+        if not rps:
+            return damages_unprotected_w, damages_adapt_w 
+
+        #Calibration load
+        if building_damage_cache_dir is not None and not export_building_damages:
+            cache_dir = Path(building_damage_cache_dir)
+
+            for i, rp in enumerate(rps):
+                cache_file = cache_dir / f"wind_rp{int(rp)}.parquet"
+                if not cache_file.is_file():
+                    raise FileNotFoundError(
+                        f"Precomputed winddamage file not found: {cache_file}"
+                    )
+
+                cached = pd.read_parquet(cache_file)
+                required = {"id", "damages_unprotected", "damages_wind_shutters"}
+                missing = required.difference(cached.columns)
+                if missing:
+                    raise ValueError(
+                        f"{cache_file} is missing required columns: {sorted(missing)}"
+                    )
+                
+                no_adapt_lecz, adapt_lecz = (
+                    self.households.assign_wdamages_to_agents(
+                        agent_df,
+                        cached[
+                            ["id", "damages_unprotected", "damages_wind_shutters"]
+                        ],
+                    )
+                )
+                damages_unprotected_w[i, lecz_mask] = no_adapt_lecz
+                damages_adapt_w[i, lecz_mask] = adapt_lecz
+
+                if verbose:
+                    print(
+                        f"Loaded cached wind damages for return period "
+                        f"{rp} from {cache_file}"
+                    )
+            
+            return damages_unprotected_w, damages_adapt_w
 
         if "n_occupants" in self.households.buildings.columns:
             mask = self.households.buildings["n_occupants"] > 0
@@ -194,7 +236,7 @@ class WindRiskModule:
             .get("wind_threshold_ms", 20.0)
         )
 
-        rps = list(self.households.windstorm_return_periods)
+        # rps = list(self.households.windstorm_return_periods)
         if len(rps) == 0:
             return damages_unprotected_w, damages_adapt_w
     
@@ -270,6 +312,24 @@ class WindRiskModule:
             union_ids = np.unique(np.concatenate(all_exposed)) if all_exposed else np.array([], dtype=int)
 
             if union_ids.size == 0:
+                if export_building_damages:
+                    if building_damage_cache_dir is None:
+                        raise ValueError("building_damage_cache_dir is required for export")
+
+                    cache_dir = Path(building_damage_cache_dir)
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    for rp in rps:
+                        empty = pd.DataFrame(
+                            columns = [
+                                "id",
+                                "damages_unprotected",
+                                "damages_wind_shutters",
+                            ]
+                        )
+                        empty.to_parquet(
+                            cache_dir / f"wind_rp{int(rp)}.parquet",
+                            index=False,
+                        )
                 if verbose:
                     for i, rp in enumerate(rps):
                         print(f"Wind Damages rp{rp}: 0 million (no exposed buildings)")
@@ -331,6 +391,16 @@ class WindRiskModule:
                 damages_unprotected_w[i], damages_adapt_w[i] = (
                     self.households.assign_wdamages_to_agents(agent_df, empty)
                 )
+                if export_building_damages:
+                    if building_damage_cache_dir is None:
+                        raise ValueError("building_damage_cahce_dir is required for export")
+
+                    cache_dir = Path(building_damage_cache_dir)
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    empty.to_parquet(
+                        cache_dir / f"wind_rp{int(rp)}.parquet",
+                        index=False,
+                    )
                 if verbose:
                     print(f"Wind Damages rp{rp}: 0 million (no exposed buildings)")
                     print(f"Wind Damages adapt rp{rp}: 0 million (no exposed buildings)")
@@ -369,13 +439,26 @@ class WindRiskModule:
                 "damages_wind_shutters": damage_buildings["damages_structure_wind_shutters"].to_numpy(),
             })
 
-            if export_building_damages:
-                fn_export = self.households.model.output_folder / "building_wind_damages"
-                fn_export.mkdir(parents=True, exist_ok=True)
-                out.to_parquet(
-                    fn_export / f"building_wind_damages_rp{rp}_{self.households.model.current_time.year}.parquet"
-                )
+            # if export_building_damages:
+            #     fn_export = self.households.model.output_folder / "building_wind_damages"
+            #     fn_export.mkdir(parents=True, exist_ok=True)
+            #     out.to_parquet(
+            #         fn_export / f"building_wind_damages_rp{rp}_{self.households.model.current_time.year}.parquet"
+            #     )
             
+            # export / save file
+            if export_building_damages:
+                if building_damage_cache_dir is None:
+                    raise ValueError("building_damage_cache_dir is required for export")
+
+                cache_dir = Path(building_damage_cache_dir)
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                out.to_parquet(
+                    cache_dir / f"wind_rp{int(rp)}.parquet",
+                    index=False,
+                )
+            #end export / save file
+
             damages_do_not_adapt_lecz, damages_adapt_lecz = (
                 self.households.assign_wdamages_to_agents(agent_df, out)
             )

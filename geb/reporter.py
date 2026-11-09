@@ -864,11 +864,32 @@ class Reporter:
             ValueError: If the variable type is not recognized.
         """
         self.model = model
-        #print(self.model.config["report"])
-        self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
+        #print( "DEBUG report config:", repr(self.model.config.get("report")))
+        #self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
 
-        self.variables_to_report = copy.deepcopy(self.model.config["report"])
-        del self.variables_to_report["_config"]
+        #self.variables_to_report = copy.deepcopy(self.model.config["report"])
+        #del self.variables_to_report["_config"]
+
+        #for single cluster
+        report_config = self.model.config.get("report")
+        if not isinstance(report_config, dict):
+            report_config = {}
+            self.model.config["report"] = report_config
+
+        internal_config = report_config.get("_config")
+        if not isinstance(internal_config, dict):
+            internal_config = {}
+
+        if internal_config.get("compression_level") is None:
+            internal_config["compression_level"] = 9
+        if internal_config.get("chunk_target_size_bytes") is None:
+            internal_config["chunk_target_size_bytes"] = 100_000_000
+
+        self.config: dict[str, int] = internal_config.copy()
+        report_config["_config"] = internal_config
+
+        self.variables_to_report = copy.deepcopy(report_config)
+        self.variables_to_report.pop("_config", None)
 
         # #MY ADDITION
         report_cfg = self.model.config.get("report")

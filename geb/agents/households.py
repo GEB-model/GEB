@@ -2050,9 +2050,15 @@ class Households(AgentBaseClass):
         
         # Activate Flood damages and risk perceptions
         if adapt_flood:
+            cache_dir = self.config.get("adaptation_evaluation", {}).get(
+                "building_damage_cache_dir"
+            )
             self.update_risk_perceptions()
             damages_do_not_adapt, damages_adapt = (
-                self.flood_risk_module.calculate_building_flood_damages()
+                self.flood_risk_module.calculate_building_flood_damages(
+                    export_building_damages = False,
+                    building_damage_cache_dir = cache_dir,
+                )
             )
             #NC-OnlyOneHazard
             flood_return_periods = np.asarray(self.return_periods, dtype=np.float32)
@@ -2065,8 +2071,14 @@ class Households(AgentBaseClass):
 
         # Activate Wind damages and risk perceptions
         if adapt_wind:
+            cache_dir = self.config.get("adaptation_evaluation", {}).get(
+                "building_damage_cache_dir"
+            ) #for calibration
             damages_unprotected_w, damages_adapt_w = (
-                self.wind_risk_module.calculate_building_wind_damages()
+                self.wind_risk_module.calculate_building_wind_damages(
+                    export_building_damages = False,
+                    building_damage_cache_dir = cache_dir,
+                )
             )
             
             self._last_damages_unprotected_w = damages_unprotected_w

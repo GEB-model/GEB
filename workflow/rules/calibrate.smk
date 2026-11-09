@@ -151,6 +151,7 @@ def run_command(cmd: str, log_path: str, error_msg: str = "GEB command failed") 
 
     return process.stdout
 
+
 rule init_base:
     output: touch("base_init.done")
     log: "logs/snakemake_base_init.log"
@@ -171,7 +172,8 @@ rule build_base:
         run_command("geb build --continue", log[0], "Failed to build base model")
 
 rule generate_initial_parameters:
-    input: "input/build_complete.txt"
+    #input: "input/build_complete.txt"
+    input: "cluster_004/base/input/build_complete.txt" #for single cluster
     output: "calibration/generation_0_{0}_population.yml".format(CALIBRATION_TRACK)
     message: "Generating initial DEAP population for {CALIBRATION_TRACK}..."
     run:
@@ -221,7 +223,8 @@ rule generate_individual_parameters:
 rule init_individual:
     input:
         params=RUNS_DIR + "/{gen}_{ind}/parameters.yml",
-        base_build="input/build_complete.txt"
+        #base_build="input/build_complete.txt"
+        base_build = "cluster_004/base/input/build_complete.txt" #for single cluster
     output: touch(RUNS_DIR + "/{gen}_{ind}/init.done")
     log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_init.log"
     run:
@@ -232,15 +235,124 @@ rule init_individual:
         with open(run_dir / "build.yml", "w") as f: f.write("# Empty build config\n")
         with open(run_dir / "update.yml", "w") as f: f.write("# Empty update config\n")
 
+#rule alter_individual:
+#    input: RUNS_DIR + "/{gen}_{ind}/init.done"
+#    output: RUNS_DIR + "/{gen}_{ind}/input/build_complete.txt"
+#    log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_alter.log"
+#    run:
+#        print(get_progress_message(wildcards, "Altering model configuration"))
+#        run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
+#        #cmd = f"geb alter --from-model ../../../. -wd {run_dir}"
+#        base_model = (Path.cwd() / "cluster_004" / "base").resolve() #for single cluster
+#        cmd = f"geb alter --from-model {base_model} -wd {run_dir}"
+#        run_command(cmd, log[0], f"Failed to alter model {wildcards.gen}_{wildcards.ind}")
+#        model_file = run_dir / "model.yml"
+#        candidate_config = yaml.safe_load(model_file.read_text()) or {}
+#
+#        households = (
+#            candidate_config
+#            .setdefault("agent_settings", {})
+#            .setdefault("households", {})
+#        )
+#        adaptation_eval = households.setdefault("adaptation_evaluation", {})
+#
+#
+#        #for single cluster
+#        base_model = Path(
+#            "/scistor/ivm/nxu279/GEB/models/France_large_scale/cluster_004/base"
+#        ).resolve()
+#
+#        adaptation_eval["clusters"] = [str(base_model)]
+#        adaptation_eval["cluster_base_dirs"] = [str(base_model)]
+#        adaptation_eval["cluster_run_dirs"] = [str(run_dir.resolve())]
+#        adaptation_eval["building_damage_cache_dir"] = str(
+#            base_model / "output" / "spinup" / "building_damage"
+#        )
+#        #base_dirs = adaptation_eval.get("clusters")
+#        #if not base_dirs:
+#        #    raise ValueError("No cluster base directories found in adaptation_evaluation.clusters")
+
+        
+
+#        model_file.write_text(yaml.safe_dump(candidate_config, sort_keys=False))
+
 rule alter_individual:
     input: RUNS_DIR + "/{gen}_{ind}/init.done"
     output: RUNS_DIR + "/{gen}_{ind}/input/build_complete.txt"
     log: RUNS_DIR + "/{gen}_{ind}/logs/snakemake_alter.log"
     run:
         print(get_progress_message(wildcards, "Altering model configuration"))
+
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
-        cmd = f"geb alter --from-model ../../../. -wd {run_dir}"
-        run_command(cmd, log[0], f"Failed to alter model {wildcards.gen}_{wildcards.ind}")
+        base_model = (Path.cwd() / "cluster_004" / "base").resolve()
+
+        cmd = f"geb alter --from-model {base_model} -wd {run_dir}"
+        run_command(
+            cmd,
+            log[0],
+            f"Failed to alter model {wildcards.gen}_{wildcards.ind}",
+        )
+
+        spinup_output = run_dir / "output" / "spinup"
+        spinup_output.mkdir(parents=True, exist_ok=True)
+
+        for hazard in ("flood", "wind"):
+            source = base_model / "output" / f"{hazard}_maps"
+            destination = spinup_output / f"{hazard}_maps"
+
+            if not source.is_dir():
+                raise FileNotFoundError(f"Base {hazard} maps not found: {source}")
+
+            if destination.is_symlink():
+                destination.unlink()
+            elif destination.exists():
+                raise FileExistsError(
+                    f"Expected {destination} to be absent or a symlink; "
+                    "it already exists as a non-symlink."
+                )
+
+            destination.symlink_to(source.resolve(), target_is_directory=True)        
+
+        model_file = run_dir / "model.yml"
+        candidate_config = yaml.safe_load(model_file.read_text()) or {}
+
+        households = (
+            candidate_config
+            .setdefault("agent_settings", {})
+            .setdefault("households", {})
+        )
+        adaptation_eval = households.setdefault("adaptation_evaluation", {})
+
+        adaptation_eval["clusters"] = [str(base_model)]
+        adaptation_eval["cluster_base_dirs"] = [str(base_model)]
+        adaptation_eval["cluster_run_dirs"] = [str(run_dir.resolve())]
+        adaptation_eval["building_damage_cache_dir"] = str(
+            base_model / "output" / "spinup" / "building_damage"
+        )
+
+        report_config = candidate_config.setdefault("report", {})
+        if not isinstance(report_config, dict):
+            report_config = {}
+            candidate_config["report"] = report_config
+
+        internal_config = report_config.get("_config")
+        if not isinstance(internal_config, dict):
+            internal_config = {}
+
+        report_config["_config"] = {
+            "compression_level": (
+                internal_config.get("compression_level")
+                if internal_config.get("compression_level") is not None
+                else 9
+            ),
+            "chunk_target_size_bytes": (
+                internal_config.get("chunk_target_size_bytes")
+                if internal_config.get("chunk_target_size_bytes") is not None
+                else 100_000_000
+            ),
+        }
+
+        model_file.write_text(yaml.safe_dump(candidate_config, sort_keys=False))
 
 rule set_individual_parameters:
     input:
@@ -260,10 +372,19 @@ rule set_individual_parameters:
         datetime_args = "general.spinup_time={0} general.start_time={1} general.end_time={2}".format(
             CALIBRATION_CONFIG["spinup_time"], CALIBRATION_CONFIG["start_time"], CALIBRATION_CONFIG["end_time"]
         )
-        
-        cmd = "geb set -c model.yml --working-directory {0} {1} {2} report=null report._discharge_stations+=true".format(
-            run_dir, param_args, datetime_args
-        )
+
+        #for single cluster run
+        cmd = (
+            "geb set -c model.yml --working-directory {0} {1} {2} "
+            "report._discharge_stations=true"
+        ).format(run_dir, param_args, datetime_args)
+        #for single cluster run
+
+        #cmd = "geb set -c model.yml --working-directory {0} {1} {2} report=null report._discharge_stations+=true".format(
+        #    run_dir, param_args, datetime_args
+        #)
+
+
         run_command(cmd, log[0], f"Failed to set parameters for {wildcards.gen}_{wildcards.ind}")
 
 rule spinup_individual:
@@ -282,7 +403,7 @@ rule run_individual:
     run:
         print(get_progress_message(wildcards, "Performing run"))
         run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
-        run_command(f"geb run -wd {run_dir}", log[0], f"Main run failed for {wildcards.gen}_{wildcards.ind}")
+        run_command(f"geb run-yearly -wd {run_dir}", log[0], f"Main run failed for {wildcards.gen}_{wildcards.ind}")
         shutil.rmtree(run_dir / "simulation_root")
 
 rule evaluate_individual:
