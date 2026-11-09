@@ -93,14 +93,6 @@ class LandSurface(BuildModelBase):
                 "fill_depressions": False,
             },
             {
-                "name": "delta_dtm",
-                "zmax": 29.999999,
-                "zmin": 0.001,
-                "merge_method": "last",
-                "fill_depressions": False,
-                "coastal_only": True,
-            },
-            {
                 "name": "gebco",
                 "zmax": 0.0,
                 "fill_depressions": False,
@@ -111,7 +103,7 @@ class LandSurface(BuildModelBase):
         """Sets up the elevation data for the model.
 
         Configuration parameters:
-            name: The name of the DEM to use. Supported names are 'fathomdem', 'delta_dtm', 'gebco'. If it is not supported,
+            name: The name of the DEM to use. Supported names are 'fathomdem', 'gebco'. If it is not supported,
                 the path must be set.
             path: The path to the DEM file. Only required if the name is not supported.
             zmin: The minimum elevation where to use the DEM. Elevations below this value will be set to NaN.
@@ -134,7 +126,6 @@ class LandSurface(BuildModelBase):
             ValueError: If the DEMs are not provided as a list of dictionaries.
             ValueError: If CRS is missing or invalid in a custom DEM.
             ValueError: If nodata value is missing in a custom DEM.
-            ValueError: If DeltaDTM DEM is not provided when coastal subbasins are present.
             ValueError: If a custom DEM CRS is not a valid EPSG code or CRS string.
         """
         DEMs = copy.deepcopy(DEMs)
@@ -149,13 +140,13 @@ class LandSurface(BuildModelBase):
             self.geom["routing/subbasins"].union_all().buffer(0.2)
         )
 
-        if self.geom["routing/subbasins"]["is_coastal"].any():
-            # deltaDTM must be present if coastal DEMs are used
-            if not any(DEM.get("name", "") == "delta_dtm" for DEM in DEMs):
-                raise ValueError(
-                    "DeltaDTM DEM must be provided when coastal DEMs are used."
-                )
+        # Fetch fathomdem early since it's needed for coastal LECZ mask fallback
+        fathomdem: xr.DataArray = self.data_catalog.fetch(
+            "fathomdem",
+            mask=potential_flood_area_with_buffer,
+        ).read(mask=potential_flood_area_with_buffer)
 
+        if self.geom["routing/subbasins"]["is_coastal"].any():
             coastlines = self.geom["coastal/coastlines"]
 
             # coastlines is a very complex geometry that can cause issues with clipping and masking operations
@@ -191,27 +182,25 @@ class LandSurface(BuildModelBase):
                 coastlines_with_buffer
             )
 
-            delta_dtm: xr.DataArray = self.data_catalog.fetch(
-                "delta_dtm",
-                mask=potential_flood_area_with_buffer,
-            ).read(mask=potential_flood_area_with_buffer)
+            # Create low elevation coastal zone mask from delta_dtm if available, otherwise from fathomdem
+            if any(DEM.get("name", "") == "delta_dtm" for DEM in DEMs):
+                delta_dtm: xr.DataArray = self.data_catalog.fetch(
+                    "delta_dtm",
+                    mask=potential_flood_area_with_buffer,
+                ).read(mask=potential_flood_area_with_buffer)
+                low_elevation_coastal_zone = delta_dtm < 10
+            else:
+                low_elevation_coastal_zone = fathomdem < 10
 
-            # Create low elevation coastal zone mask based on DeltaDTM
-            low_elevation_coastal_zone = delta_dtm < 10
             low_elevation_coastal_zone = low_elevation_coastal_zone.astype(np.float32)
             self.set_other(
                 low_elevation_coastal_zone,
                 name="landsurface/low_elevation_coastal_zone",
-            )  # Maybe remove this
+            )
 
         else:
             # Remove coastal DEMs if no coastal subbasins are present
             DEMs = [DEM for DEM in DEMs if not DEM.get("coastal_only", False)]
-
-        fathomdem: xr.DataArray = self.data_catalog.fetch(
-            "fathomdem",
-            mask=potential_flood_area_with_buffer,
-        ).read(mask=potential_flood_area_with_buffer)
 
         potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
             geometry=[potential_flood_area_with_buffer], crs=4326
@@ -231,12 +220,19 @@ class LandSurface(BuildModelBase):
         )
 
         DEM_raster: xr.DataArray
+        delta_dtm_raster: xr.DataArray | None = None
+        
         for DEM in DEMs:
             if DEM["name"] == "fathomdem":
                 DEM_raster = fathomdem
 
             elif DEM["name"] == "delta_dtm":
-                DEM_raster: xr.DataArray = delta_dtm
+                if delta_dtm_raster is None:
+                    delta_dtm_raster: xr.DataArray = self.data_catalog.fetch(
+                        "delta_dtm",
+                        mask=potential_flood_area_with_buffer,
+                    ).read(mask=potential_flood_area_with_buffer)
+                DEM_raster = delta_dtm_raster
 
             elif DEM["name"] == "gebco":
                 DEM_raster: xr.DataArray = self.data_catalog.fetch("gebco").read()
