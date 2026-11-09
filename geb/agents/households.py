@@ -1135,8 +1135,10 @@ class Households(AgentBaseClass):
             GDP_i_t = self.var.factor_change
         else:
             GDP_i_t = 1
-        damages_do_not_adapt *= GDP_i_t # scaled by change in gdp from base to current year
-        damages_adapt *= GDP_i_t # scaled by change in gdp from base to current year
+        damages_do_not_adapt *= (
+            GDP_i_t  # scaled by change in gdp from base to current year
+        )
+        damages_adapt *= GDP_i_t  # scaled by change in gdp from base to current year
         # calculate expected utilities
         if (
             self.config["dry_floodproofing"]
@@ -1670,7 +1672,9 @@ class Households(AgentBaseClass):
                     ) from e
 
                 try:
-                    population_map: xr.Dataset = xr.open_dataarray(self.model.files["other"][f"ssp_maps/POP"])
+                    population_map: xr.Dataset = xr.open_dataarray(
+                        self.model.files["other"][f"ssp_maps/POP"]
+                    )
                 except FileNotFoundError as e:
                     raise ValueError(
                         f"Requested file POP.zarr has not been built. "
@@ -1706,7 +1710,9 @@ class Households(AgentBaseClass):
                     f"CLIMRISK: Damage function ammenity value, adaptation and relocation costs projection: no damages"
                 )
                 try:
-                    gdp_map: xr.DataArray = xr.open_dataarray(self.model.files["other"][f"ssp_maps/GDP"])
+                    gdp_map: xr.DataArray = xr.open_dataarray(
+                        self.model.files["other"][f"ssp_maps/GDP"]
+                    )
                 except FileNotFoundError as e:
                     raise ValueError(
                         f"Requested file GDP.zarr has not been built. "
