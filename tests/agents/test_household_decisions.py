@@ -465,9 +465,8 @@ def test_update_monetary_variables_respects_projection_flags(
         "project_costs": project_costs,
         "country_wide": True,
         "ssp": "2",
+        "damage_function": "GDP",
     }
-    if project_income:
-        climrisk_config["damage_function"] = "GDP"
 
     households = Households.__new__(Households)
     households.start_adaptation_year = 2020

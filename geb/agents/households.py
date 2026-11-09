@@ -1607,70 +1607,57 @@ class Households(AgentBaseClass):
             self.model.logger.info(
                 "CLIMRISK: Initializing SSP socioeconomic projections"
             )
-
-            if project_income:
-                self.model.logger.info(
-                    "CLIMRISK: Loading household income and wealth projections"
+            required_settings = {
+                "damage_function",
+            }
+            missing_settings = required_settings.difference(climrisk_config)
+            if missing_settings:
+                missing = ", ".join(sorted(missing_settings))
+                raise ValueError(
+                    f"Missing required settings in 'agent_settings.climrisk': {missing}."
                 )
-                required_settings = {
-                    "damage_function",
-                }
+            if climrisk_config["damage_function"] != "GDP":
+                required_settings = {"warming_percentile"}
                 missing_settings = required_settings.difference(climrisk_config)
                 if missing_settings:
                     missing = ", ".join(sorted(missing_settings))
                     raise ValueError(
                         f"Missing required settings in 'agent_settings.climrisk': {missing}."
                     )
-                if climrisk_config["damage_function"] != "GDP":
-                    required_settings = {"warming_percentile"}
-                    missing_settings = required_settings.difference(climrisk_config)
-                    if missing_settings:
-                        missing = ", ".join(sorted(missing_settings))
-                        raise ValueError(
-                            f"Missing required settings in 'agent_settings.climrisk': {missing}."
-                        )
-                damage_function: str = self.model.config["agent_settings"]["climrisk"][
-                    "damage_function"
-                ]
-                if damage_function not in ["GDP", "K", "KU", "KPU", "RU", "RPU"]:
+            damage_function: str = self.model.config["agent_settings"]["climrisk"][
+                "damage_function"
+            ]
+            if damage_function not in ["GDP", "K", "KU", "KPU", "RU", "RPU"]:
+                raise ValueError(
+                    f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}."
+                )
+            if damage_function != "GDP":
+                warming_percentile: str = self.model.config["agent_settings"][
+                    "climrisk"
+                ]["warming_percentile"]
+                if warming_percentile not in ["10", "50", "90"]:
                     raise ValueError(
-                        f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}."
+                        f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}."
                     )
-                if damage_function != "GDP":
-                    warming_percentile: str = self.model.config["agent_settings"][
-                        "climrisk"
-                    ]["warming_percentile"]
-                    if warming_percentile not in ["10", "50", "90"]:
-                        raise ValueError(
-                            f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}."
-                        )
-                    self.model.logger.info(
-                        f"CLIMRISK: Damage function for income and wealth projections: {damage_function}p{warming_percentile}"
-                    )
-                    gdp_damages_map_name: str = (
-                        f"{damage_function}_p{warming_percentile}"
-                    )
-                else:
-                    self.model.logger.info(
-                        f"CLIMRISK: Damage function for income and wealth projections: no damages"
-                    )
-                    gdp_damages_map_name: str = f"GDP"
+                self.model.logger.info(
+                    f"CLIMRISK: Damage function: {damage_function}p{warming_percentile}"
+                )
+                gdp_damages_map_name: str = f"{damage_function}_p{warming_percentile}"
+            else:
+                self.model.logger.info(f"CLIMRISK: Damage function: no damages")
+                gdp_damages_map_name: str = f"GDP"
 
-                # Pending: Load as DynamicArray into the var Bucket
-                # flood_map in line 635 is also an xarray and it
-                # is currently not loaded into the var bucket, an
-                # implementation should probably be set for both maps
-                try:
-                    gdp_damages_map: xr.DataArray = xr.open_dataarray(
-                        self.model.files["other"][f"ssp_maps/{gdp_damages_map_name}"]
-                    )
-                except FileNotFoundError as e:
-                    raise ValueError(
-                        f"Requested file {gdp_damages_map_name}.zarr has not been built. "
-                        + f"Please build the model again passing the "
-                        + f"requested data to 'setup_climrisk'."
-                    ) from e
-
+            try:
+                gdp_damages_map: xr.DataArray = xr.open_dataarray(
+                    self.model.files["other"][f"ssp_maps/{gdp_damages_map_name}"]
+                )
+            except FileNotFoundError as e:
+                raise ValueError(
+                    f"Requested file {gdp_damages_map_name}.zarr has not been built. "
+                    + f"Please build the model again passing the "
+                    + f"requested data to 'setup_climrisk'."
+                ) from e
+            if project_income:
                 try:
                     population_map: xr.Dataset = xr.open_dataarray(
                         self.model.files["other"][f"ssp_maps/POP"]
@@ -1703,27 +1690,10 @@ class Households(AgentBaseClass):
                 )
 
             if project_costs:
-                self.model.logger.info(
-                    "CLIMRISK: Loading scenario for ammenity value, adaptation and relocation costs projection"
-                )
-                self.model.logger.info(
-                    f"CLIMRISK: Damage function ammenity value, adaptation and relocation costs projection: no damages"
-                )
-                try:
-                    gdp_map: xr.DataArray = xr.open_dataarray(
-                        self.model.files["other"][f"ssp_maps/GDP"]
-                    )
-                except FileNotFoundError as e:
-                    raise ValueError(
-                        f"Requested file GDP.zarr has not been built. "
-                        + f"Please build the model again passing the "
-                        + f"requested data to 'setup_climrisk'."
-                    ) from e
-
                 # For damages and costs, we use a country-level GDP-based factor change.
-                self.factor_change = gdp_map.sum(["lon", "lat"]) / gdp_map.sel(
-                    {"year": base_year}
-                ).sum(["lon", "lat"])
+                self.factor_change = gdp_damages_map.sum(
+                    ["lon", "lat"]
+                ) / gdp_damages_map.sel({"year": base_year}).sum(["lon", "lat"])
 
             self._ssp_maps_initialized = True
 
