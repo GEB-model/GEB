@@ -422,7 +422,7 @@ rule evaluate_individual:
 
         for target_name, target_info in targets.items():
             method, metric_key, weight = target_info["method"], target_info["metric"], float(target_info["weight"])
-            cmd = "geb evaluate {0} -wd {1} --create_plots false".format(method, run_dir)
+            cmd = "geb evaluate {0} -wd {1}".format(method, run_dir)
             stdout = run_command(cmd, log[0], "Eval failed for {0}".format(target_name))
 
             try:
