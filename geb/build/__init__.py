@@ -2569,22 +2569,6 @@ class GEBModel(
         return self.params["ssp"]["ssp"] if "ssp" in self.params else "ssp3"
 
     @property
-    def ISIMIP_ssp(self) -> str:
-        """Returns the ISIMIP SSP name.
-
-        Raises:
-            ValueError: If the SSP is not supported.
-        """
-        if self.ssp == "ssp1":
-            return "ssp126"
-        elif self.ssp == "ssp3":
-            return "ssp370"
-        elif self.ssp == "ssp5":
-            return "ssp585"
-        else:
-            raise ValueError(f"SSP {self.ssp} not supported.")
-
-    @property
     def ssp_rcp(self) -> int:
         """Returns the SSP-RCP identifier.
 

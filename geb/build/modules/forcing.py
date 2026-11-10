@@ -1938,8 +1938,8 @@ class Forcing(BuildModelBase):
     @build_method(depends_on=["set_ssp", "set_time_range"], required=True)
     def setup_CO2_concentration(self) -> None:
         """Aquires the CO2 concentration data for the specified SSP in ppm."""
-        df: pd.DataFrame = self.data_catalog.fetch("isimip_co2").read(
-            scenario=self.ISIMIP_ssp
+        df: pd.DataFrame = self.data_catalog.fetch("input4mips").read(
+            scenario=f"ssp{self.ssp_rcp}"
         )
         df: pd.DataFrame = df[
             (df.index >= self.start_date.year) & (df.index <= self.end_date.year)

@@ -40,7 +40,7 @@ from .grdc_caravan import GRDCCaravan
 from .grow import GROW
 from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
-from .isimip import ISIMIPCO2
+from .input4mips import INPUT4MIPS
 from .lisflood import LISFLOOD
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
@@ -81,15 +81,17 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://www.gloh2o.org/mswep/",
         },
     },
-    "isimip_co2": {
-        "adapter": ISIMIPCO2(),
-        "url": "https://files.isimip.org",
+    "input4mips": {
+        "adapter": INPUT4MIPS(),
+        "url": "https://esgf-node.ornl.gov/thredds/fileServer/user_pub_work/input4MIPs/",
         "source": {
-            "name": "ISIMIP CO2",
-            "author": "Matthias Büchner, Christopher P.O. Reyer",
-            "url": "https://data.isimip.org",
+            "name": "input4MIPS",
+            "author": "Malte Meinshausen, Elisabeth Vogel",
+            "year": "2016",
+            "url": "https://metagrid.esgf-west.org/search/input4mips/",
             "license": "CC BY-SA 4.0",
-            "paper_doi": "10.1007/s10584-011-0156-z",
+            "data_doi": "10.22033/ESGF/input4MIPs.10453",
+            "institution": "Earth System Grid Federation",
         },
     },
     "era5": {

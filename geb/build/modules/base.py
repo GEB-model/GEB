@@ -254,12 +254,6 @@ class BuildModelBase(ABC):
 
     @property
     @abstractmethod
-    def ISIMIP_ssp(self) -> str:
-        """Abstract method to get ISIMIP SSP scenario."""
-        pass
-
-    @property
-    @abstractmethod
     def ssp(self) -> str:
         """Abstract method to get SSP scenario."""
         pass
