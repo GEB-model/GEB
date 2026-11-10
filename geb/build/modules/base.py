@@ -257,3 +257,9 @@ class BuildModelBase(ABC):
     def ssp(self) -> str:
         """Abstract method to get SSP scenario."""
         pass
+
+    @property
+    @abstractmethod
+    def rcp(self) -> str:
+        """Abstract method to get RCP scenario."""
+        pass
