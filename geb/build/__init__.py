@@ -2593,8 +2593,11 @@ class GEBModel(
             return "ssp3"
 
         default_ssps = {
+            "19": "ssp1",
             "26": "ssp1",
+            "34": "ssp4",
             "45": "ssp2",
+            "60": "ssp4",
             "70": "ssp3",
             "85": "ssp5",
         }
@@ -2629,6 +2632,7 @@ class GEBModel(
             "ssp1": "26",
             "ssp2": "45",
             "ssp3": "70",
+            "ssp4": "34",
             "ssp5": "85",
         }
         try:
@@ -2662,6 +2666,8 @@ class GEBModel(
         Raises:
             ValueError: If the SSP-RCP is not supported.
         """
+        if self.rcp == "19":
+            return 119
         if self.rcp == "26":
             return 126
         elif self.rcp == "34":
