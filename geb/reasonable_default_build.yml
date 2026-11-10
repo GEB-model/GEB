@@ -6,8 +6,6 @@ set_time_range:
   end_date: 2024-12-31
 
 set_ssp:
-  # ssp: 'ssp3' # Shared Socioeconomic Pathway. If not set and RCP is set, SSP will be set to the standard SSP-RCP combination. If none are set, it will default to SSP3-7.0
-  # rcp: '70' # Representative Concentration Pathway. If not set and SSP is set, RCP will be set to the standard SSP-RCP combination. If none are set, it will default to SSP3-7.0
 
 setup_coastlines:
 
