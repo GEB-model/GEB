@@ -2664,12 +2664,14 @@ class GEBModel(
         """
         if self.rcp == "26":
             return 126
-        elif self.rcp == "45":
-            return 245
-        elif self.rcp == "70":
-            return 370
         elif self.rcp == "34":
             return 434
+        elif self.rcp == "45":
+            return 245
+        elif self.rcp == "60":
+            return 460
+        elif self.rcp == "70":
+            return 370
         elif self.rcp == "85":
             return 585
         else:
