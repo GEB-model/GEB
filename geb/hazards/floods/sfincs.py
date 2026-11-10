@@ -1255,7 +1255,7 @@ class SFINCSRootModel:
         )
 
     def get_flood_plain(
-        self, maximum_height_above_nearest_drainage_m: float = 10.0
+        self, maximum_height_above_nearest_drainage_m: float = 12.0
     ) -> gpd.GeoDataFrame:
         """Returns the flood plain grid of the SFINCS model.
 
