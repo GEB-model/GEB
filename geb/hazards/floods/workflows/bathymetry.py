@@ -647,7 +647,8 @@ def calculate_river_bed_points(
     Args:
         elevation_grid: Elevation DataArray with CRS and transform (meters). Cells
             without data are filled with the nearest valid value, because river nodes
-            may be located at the edge of the model domain.
+            may be located at the edge of the model domain. Elevations below sea level
+            (e.g. bathymetry in coastal lagoons) are set to 0 m.
         rivers: GeoDataFrame containing river geometries and attributes, with the
             columns `width`, `depth`, `downstream_ID`, `manning` and
             `topological_stream_order`.
@@ -674,6 +675,11 @@ def calculate_river_bed_points(
             invalid, return_distances=False, return_indices=True
         )
         elevation_grid.values = elevation_grid.values[tuple(nearest_valid_indices)]
+
+    # In coastal areas (lagoons, estuaries, sea) the DEM contains bathymetry. The water
+    # surface of a river that flows there cannot be below sea level, so the terrain is
+    # not allowed to go below sea level when deriving the river bed levels.
+    elevation_grid.values = np.maximum(elevation_grid.values, np.float32(0.0))
 
     river_network, _, _ = _calculate_river_profiles(elevation_grid, rivers)
 

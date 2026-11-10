@@ -428,3 +428,38 @@ def test_minimum_river_width_ensures_connected_channel() -> None:
     )
     assert widened["width"].tolist() == pytest.approx([30.0 * np.sqrt(2.0), 100.0])
     assert rivers["width"].tolist() == [3.0, 100.0]
+
+
+def test_river_bed_points_in_area_below_sea_level() -> None:
+    """Rivers passing through terrain below sea level (coastal bathymetry) do not raise and have a bed relative to sea level."""
+    x = np.arange(0.5, 2000, 10.0)
+    y = np.arange(1999.5, 0, -10.0)
+    # land that drops to -7 m bathymetry in the downstream half of the domain
+    elevation = xr.DataArray(
+        np.broadcast_to(np.where(x < 1000, 5.0, -7.0), (len(y), len(x)))
+        .astype(np.float32)
+        .copy(),
+        coords={"y": y, "x": x},
+        dims=("y", "x"),
+    ).rio.write_crs(32631)
+
+    rivers = gpd.GeoDataFrame(
+        {
+            "width": [20.0, 20.0],
+            "depth": [4.0, 4.0],
+            "manning": [0.03, 0.03],
+            "downstream_ID": [1, 999],
+            "topological_stream_order": [0, 1],
+        },
+        geometry=[
+            LineString([(100, 1000), (1000, 1000)]),
+            LineString([(1000, 1000), (1900, 1000)]),
+        ],
+        crs=32631,
+    )
+
+    points = calculate_river_bed_points(elevation, rivers)
+
+    assert np.isfinite(points["rivbed"]).all()
+    # the water surface is at sea level where the terrain is below sea level
+    assert points["rivbed"].min() == pytest.approx(-4.0, abs=0.1)
