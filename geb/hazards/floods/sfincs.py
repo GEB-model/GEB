@@ -44,6 +44,7 @@ from geb.geb_types import (
 from geb.hazards.event import Event
 from geb.hazards.floods.workflows.bathymetry import (
     burn_rivers,
+    calculate_river_bed_points,
     enforce_minimum_river_width_for_connectivity,
     skip_subgrid_tiles_without_river_bed_levels,
 )
@@ -70,7 +71,7 @@ from geb.workflows.raster import (
     rasterize_like,
 )
 
-from .workflows.outflow import create_outflow_in_mask
+from .workflows.outflow import create_outflow_in_mask, get_outflow_water_level
 from .workflows.utils import (
     create_hourly_hydrograph,
     create_hydrograph_from_discharge_shape,
@@ -643,6 +644,9 @@ class SFINCSRootModel:
                 crs=self.crs,
             )
 
+        # keep the terrain before burning rivers to set the outflow water levels later
+        terrain_elevation: xr.DataArray = sf.elevation.data["dep"].copy()
+
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
         # including mannings roughness.
@@ -660,6 +664,28 @@ class SFINCSRootModel:
                     is_geographic=crs.is_geographic,
                 )
 
+            river_to_burn: dict[str, gpd.GeoDataFrame] | None = None
+            if not rivers_to_burn.empty:
+                river_to_burn = {
+                    "centerlines": rivers_to_burn.rename(
+                        columns={"width": "rivwth", "depth": "rivdph"}
+                    )
+                }
+                # Calculate the river bed levels ourselves (monotonically decreasing
+                # downstream, with a continuous depth across rivers) rather than
+                # letting hydromt-sfincs derive them per river from the local bank
+                # elevation and depth. That can give steps and uphill bed slopes,
+                # especially at the outflow, where rivers of different depths meet.
+                # This requires the river network attributes, which custom rivers
+                # to burn may not have.
+                if {"downstream_ID", "topological_stream_order"}.issubset(
+                    rivers_to_burn.columns
+                ):
+                    river_to_burn["point_zb"] = calculate_river_bed_points(
+                        elevation_grid=terrain_elevation,
+                        rivers=rivers_to_burn,
+                    )
+
             with (
                 np.errstate(invalid="ignore"),
                 skip_subgrid_tiles_without_river_bed_levels(),
@@ -671,15 +697,7 @@ class SFINCSRootModel:
                             "manning": mannings.to_dataset(name="manning"),
                         }
                     ],
-                    river_list=[
-                        {
-                            "centerlines": rivers_to_burn.rename(
-                                columns={"width": "rivwth", "depth": "rivdph"}
-                            )
-                        }
-                    ]
-                    if not rivers_to_burn.empty
-                    else [],
+                    river_list=[river_to_burn] if river_to_burn is not None else [],
                     write_dep_tif=True,
                     write_man_tif=True,
                     nr_subgrid_pixels=grid_size_multiplier,
@@ -726,7 +744,14 @@ class SFINCSRootModel:
                     self.mask.rio.transform().to_gdal(),
                 )
                 self.rivers.at[river_idx, "outflow_elevation"] = (
-                    bed_elevation_grid[outflow_row, outflow_col].item() + river["depth"]
+                    get_outflow_water_level(
+                        terrain_elevation=terrain_elevation.values,
+                        row=outflow_row,
+                        col=outflow_col,
+                        bed_elevation=bed_elevation_grid[
+                            outflow_row, outflow_col
+                        ].item(),
+                    )
                 )
 
         # Clean up NaN values in the mask before writing to prevent SFINCS crashes

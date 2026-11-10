@@ -7,8 +7,10 @@ from typing import Any, Callable
 import geopandas as gpd
 import hydromt_sfincs.workflows.bathymetry as hydromt_sfincs_bathymetry
 import numpy as np
+import pandas as pd
 import xarray as xr
 from rasterio.features import rasterize
+from scipy.ndimage import distance_transform_edt
 from scipy.spatial import cKDTree  # ty: ignore[unresolved-import]
 from shapely.ops import transform as shapely_transform
 
@@ -553,42 +555,43 @@ def _burn(
     return elevation_grid, out_mannings
 
 
-def burn_rivers(
+def _calculate_river_profiles(
     elevation_grid: xr.DataArray,
-    manning_grid: xr.DataArray,
     rivers: gpd.GeoDataFrame,
-) -> tuple[xr.DataArray, xr.DataArray]:
-    """Burns river networks into a Digital Elevation Model (DEM).
+) -> tuple[
+    list[dict],
+    Callable[[np.ndarray | float, np.ndarray | float], tuple[np.ndarray, np.ndarray]],
+    Callable[[np.ndarray | float, np.ndarray | float], tuple[np.ndarray, np.ndarray]],
+]:
+    """Calculates hydrologically consistent bed elevation profiles for all rivers.
 
-    This workflow modifies the terrain elevation and roughness grids to
-    explicitly include river channels, ensuring they are hydrologically
-    consistent (i.e., they always flow downhill).
+    Rivers are processed from headwaters to outlets. At every junction the bed is set
+    from the local terrain minus the deepest incident river, and the bed is forced to
+    decrease in the downstream direction. The depth is interpolated along each river
+    between its start and end junction, so the depth is continuous across rivers.
 
     Args:
         elevation_grid: Elevation DataArray with CRS and transform (meters).
-        manning_grid: Manning's n DataArray with CRS and transform (s/m^(1/3)).
         rivers: GeoDataFrame containing river geometries and attributes.
 
     Returns:
         Tuple containing:
-            - Modified elevation DataArray with rivers burned in (meters).
-            - Modified Manning's n DataArray with river roughness values (s/m^(1/3)).
+            - List of river segment dictionaries, with the bed profile in `target_z`.
+            - Function to convert coordinates to meters.
+            - Function to convert meters back to coordinates.
     """
-    _validate_inputs(elevation_grid, manning_grid, rivers)
-
     # Sort rivers by topological stream order to ensure headwaters are processed before outlets.
     rivers: gpd.GeoDataFrame = rivers.sort_values(
         "topological_stream_order", ascending=True
     )  # ty:ignore[invalid-assignment]
 
-    out_elevation = elevation_grid.copy()
-    transform = out_elevation.rio.transform()
-    shape = out_elevation.shape
-    is_geo = out_elevation.rio.crs.is_geographic
+    transform = elevation_grid.rio.transform()
+    shape = elevation_grid.shape
+    is_geo = elevation_grid.rio.crs.is_geographic
 
     x_orig, y_orig = (
-        float(out_elevation.coords["x"].mean()),
-        float(out_elevation.coords["y"].mean()),
+        float(elevation_grid.coords["x"].mean()),
+        float(elevation_grid.coords["y"].mean()),
     )
 
     # Conversion factors for geographic coordinates to meters.
@@ -612,7 +615,7 @@ def burn_rivers(
 
     # Create river network and node registry
     river_network, node_registry = _initialize_network_and_nodes(
-        rivers, out_elevation, transform, shape, is_geo, sampling_dist, to_m
+        rivers, elevation_grid, transform, shape, is_geo, sampling_dist, to_m
     )
 
     # Use the sorted order from the GeoDataFrame throughout the workflow.
@@ -623,8 +626,114 @@ def burn_rivers(
 
     # Interpolate the bed elevation for every point along the river segments.
     _interpolate_longitudinal_profiles(
-        river_network, ordered_indices, node_registry, transform, shape, out_elevation
+        river_network, ordered_indices, node_registry, transform, shape, elevation_grid
     )
+
+    return river_network, to_m, to_deg
+
+
+def calculate_river_bed_points(
+    elevation_grid: xr.DataArray,
+    rivers: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """Calculates river bed elevations at points along the rivers.
+
+    The points can be passed to hydromt-sfincs (as `point_zb`) when burning rivers into
+    the subgrid. hydromt-sfincs then interpolates between these points instead of
+    deriving the bed from the local bank elevation and the depth of each river, which
+    can result in steps and uphill bed slopes where the depth differs between
+    consecutive rivers.
+
+    Args:
+        elevation_grid: Elevation DataArray with CRS and transform (meters). Cells
+            without data are filled with the nearest valid value, because river nodes
+            may be located at the edge of the model domain.
+        rivers: GeoDataFrame containing river geometries and attributes, with the
+            columns `width`, `depth`, `downstream_ID`, `manning` and
+            `topological_stream_order`.
+
+    Returns:
+        GeoDataFrame with points and the columns `rivbed` (bed elevation in meters)
+        and `manning` (Manning's n of the river in s/m^(1/3)).
+
+    Raises:
+        ValueError: If `rivers` is empty or its CRS does not match the elevation grid.
+    """
+    if rivers.empty:
+        raise ValueError("Input 'rivers' GeoDataFrame is empty.")
+    if rivers.crs != elevation_grid.rio.crs:
+        raise ValueError(
+            f"Spatial CRS mismatch! Rivers layer uses ({rivers.crs}) "
+            f"but DEM layer uses ({elevation_grid.rio.crs}). Please reproject."
+        )
+
+    elevation_grid = elevation_grid.copy()
+    invalid: np.ndarray = ~np.isfinite(elevation_grid.values)
+    if invalid.any():
+        nearest_valid_indices = distance_transform_edt(
+            invalid, return_distances=False, return_indices=True
+        )
+        elevation_grid.values = elevation_grid.values[tuple(nearest_valid_indices)]
+
+    river_network, _, _ = _calculate_river_profiles(elevation_grid, rivers)
+
+    points = gpd.GeoDataFrame(
+        {
+            "rivbed": np.concatenate([river["target_z"] for river in river_network]),
+            "manning": np.concatenate(
+                [
+                    np.full(len(river["xs"]), river["manning"], dtype=np.float32)
+                    for river in river_network
+                ]
+            ),
+        },
+        geometry=gpd.points_from_xy(
+            np.concatenate([river["xs"] for river in river_network]),
+            np.concatenate([river["ys"] for river in river_network]),
+        ),
+        crs=rivers.crs,
+    )
+
+    # Rivers share their junction nodes (with equal bed elevations). Drop the duplicate
+    # points because they break the interpolation along the merged river lines.
+    points = points[
+        ~pd.DataFrame(
+            {"x": points.geometry.x.round(9), "y": points.geometry.y.round(9)}
+        )
+        .duplicated()
+        .values
+    ]
+    return points.reset_index(drop=True)
+
+
+def burn_rivers(
+    elevation_grid: xr.DataArray,
+    manning_grid: xr.DataArray,
+    rivers: gpd.GeoDataFrame,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Burns river networks into a Digital Elevation Model (DEM).
+
+    This workflow modifies the terrain elevation and roughness grids to
+    explicitly include river channels, ensuring they are hydrologically
+    consistent (i.e., they always flow downhill).
+
+    Args:
+        elevation_grid: Elevation DataArray with CRS and transform (meters).
+        manning_grid: Manning's n DataArray with CRS and transform (s/m^(1/3)).
+        rivers: GeoDataFrame containing river geometries and attributes.
+
+    Returns:
+        Tuple containing:
+            - Modified elevation DataArray with rivers burned in (meters).
+            - Modified Manning's n DataArray with river roughness values (s/m^(1/3)).
+    """
+    _validate_inputs(elevation_grid, manning_grid, rivers)
+
+    out_elevation = elevation_grid.copy()
+    transform = out_elevation.rio.transform()
+    shape = out_elevation.shape
+
+    river_network, to_m, to_deg = _calculate_river_profiles(out_elevation, rivers)
 
     # Actually modify the elevation and roughness grids.
     out_elevation, out_mannings = _burn(
