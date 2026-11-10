@@ -44,6 +44,7 @@ from geb.geb_types import (
 from geb.hazards.event import Event
 from geb.hazards.floods.workflows.bathymetry import (
     burn_rivers,
+    enforce_minimum_river_width_for_connectivity,
     skip_subgrid_tiles_without_river_bed_levels,
 )
 from geb.hazards.floods.workflows.utils import get_end_point
@@ -650,11 +651,19 @@ class SFINCSRootModel:
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
 
+            # make sure the burned channel is 4-connected on the subgrid, otherwise
+            # diagonal one-pixel channels do not convey water in SFINCS
+            if not rivers_to_burn.empty:
+                rivers_to_burn = enforce_minimum_river_width_for_connectivity(
+                    rivers_to_burn,
+                    pixel_size=abs(resolution[0]) / grid_size_multiplier,
+                    is_geographic=crs.is_geographic,
+                )
+
             with (
                 np.errstate(invalid="ignore"),
                 skip_subgrid_tiles_without_river_bed_levels(),
             ):
-                # only burn rivers that are wider than the subgrid pixel size
                 sf.subgrid.create(
                     elevation_list=DEMs,
                     roughness_list=[

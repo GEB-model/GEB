@@ -85,6 +85,45 @@ def skip_subgrid_tiles_without_river_bed_levels() -> Generator[None, None, None]
         )
 
 
+def enforce_minimum_river_width_for_connectivity(
+    rivers: gpd.GeoDataFrame,
+    pixel_size: float,
+    is_geographic: bool,
+) -> gpd.GeoDataFrame:
+    """Widens rivers so that the burned channel is 4-connected on the subgrid.
+
+    hydromt-sfincs burns a river into every subgrid pixel whose center lies within
+    `width / 2` of the center line. For narrow rivers that are not aligned with the
+    grid, this gives a one-pixel staircase that is only 8-connected (diagonal
+    links). SFINCS exchanges flow across cell faces only, so such a channel does
+    not convey water.
+
+    Every pixel touched by a line has its center within half a pixel diagonal of
+    that line, and the set of touched pixels is 4-connected. A minimum width of
+    one pixel diagonal therefore guarantees a 4-connected burned channel.
+
+    Args:
+        rivers: GeoDataFrame with a `width` column in meters.
+        pixel_size: Subgrid pixel size, in degrees if `is_geographic`, else in meters.
+        is_geographic: Whether the coordinate reference system of `rivers` is geographic.
+
+    Returns:
+        Copy of `rivers` with `width` raised to at least one pixel diagonal.
+    """
+    if rivers.empty:
+        return rivers
+
+    # In geographic coordinates the pixel is longest in the y-direction (a degree of
+    # latitude is longer than a degree of longitude), so use that to be conservative.
+    pixel_size_m: float = pixel_size * 111320.0 if is_geographic else pixel_size
+
+    minimum_width: float = np.sqrt(2.0) * pixel_size_m
+
+    rivers = rivers.copy()
+    rivers["width"] = np.maximum(rivers["width"], minimum_width)
+    return rivers
+
+
 def _validate_inputs(
     elevation_grid: xr.DataArray, manning_grid: xr.DataArray, rivers: gpd.GeoDataFrame
 ) -> None:
