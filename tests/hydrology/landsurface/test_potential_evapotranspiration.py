@@ -5,7 +5,10 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
+import yaml
 
+from geb import GEB_PACKAGE_DIR
 from geb.hydrology.landcovers import (
     FOREST,
     GRASSLAND_LIKE,
@@ -36,6 +39,32 @@ from ...testconfig import output_folder
 
 output_folder_pet: Path = output_folder / "potential_evapotranspiration"
 output_folder_pet.mkdir(exist_ok=True, parents=True)
+
+
+@pytest.mark.parametrize("reference_demand_m", [0.0, 0.005])
+def test_default_preserves_vegetation_water_demand(reference_demand_m: float) -> None:
+    """Keep uncalibrated potential demand at the vegetation-derived value.
+
+    Args:
+        reference_demand_m: Reference evapotranspiration depth (meters).
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If the default changes the vegetation-derived demand.
+    """  # noqa: DOC202, DOC502 - Document the test outcome and assertion failure.
+    default_config: dict = yaml.safe_load(
+        (GEB_PACKAGE_DIR / "reasonable_default_config.yml").read_text()
+    )
+    vegetation_factor: np.float32 = np.float32(0.8)
+    potential_demand_m: np.float32 = get_potential_evapotranspiration(
+        reference_evapotranspiration_grass_m=np.float32(reference_demand_m),
+        crop_factor=vegetation_factor
+        * np.float32(default_config["parameters"]["crop_factor_multiplier"]),
+        CO2_induced_crop_factor_adustment=np.float32(1.0),
+    )
+    assert float(potential_demand_m) == pytest.approx(reference_demand_m * 0.8)
 
 
 def test_get_vapour_pressure() -> None:

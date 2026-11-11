@@ -81,91 +81,99 @@ def test_update_node_kinematic_no_flow() -> None:
     assert math.isclose(Q_new, 1e-30, abs_tol=1e-12)
 
 
-def test_update_node_kinematic_evaporation_limiter() -> None:
-    """Test evaporation limiter behavior in kinematic routing."""
-    # Case 1: Evaporation exceeds available flow -> capped at available flow.
-    # Available flow = 0.5 * (1.0 + 1.0) + 0.5 = 1.5 m3/s.
-    q_new_1, actual_evap_1, actual_trans_1 = update_node_kinematic(
-        inflow_m3_s=np.float32(1.0),
-        previous_discharge_m3_s=np.float32(1.0),
-        sideflow_m3_s=np.float32(0.5),
-        evaporation_m3_s=np.float32(5.0),
-        transmission_loss_m3_s=np.float32(0.0),
-        river_storage_alpha=np.float32(1.7),
-        river_storage_beta=np.float32(0.6),
-        timestep_s=np.float32(60.0),
-        river_length_m=np.float32(1000.0),
-    )
-    assert math.isclose(actual_evap_1, 1.5, rel_tol=1e-5)
+@pytest.mark.parametrize(
+    "duration_s, evaporation_rate_m3_s, sideflow_m3_s, expected_evaporation_m3_s",
+    [
+        (60.0, 5.0, 0.5, 5.0),
+        (60.0, 0.3, 0.5, 0.3),
+        (3600.0, 3.0, -0.5, 3500.0 / 3600.0),
+    ],
+)
+def test_update_node_kinematic_evaporation_limiter(
+    duration_s: float,
+    evaporation_rate_m3_s: float,
+    sideflow_m3_s: float,
+    expected_evaporation_m3_s: float,
+) -> None:
+    """Limit evaporation using stored volume, incoming water and abstraction.
 
-    # Case 2: Evaporation is less than available flow -> actual evaporation equals potential evaporation.
-    q_new_2, actual_evap_2, actual_trans_2 = update_node_kinematic(
-        inflow_m3_s=np.float32(1.0),
-        previous_discharge_m3_s=np.float32(1.0),
-        sideflow_m3_s=np.float32(0.5),
-        evaporation_m3_s=np.float32(0.3),
-        transmission_loss_m3_s=np.float32(0.0),
-        river_storage_alpha=np.float32(1.7),
-        river_storage_beta=np.float32(0.6),
-        timestep_s=np.float32(60.0),
-        river_length_m=np.float32(1000.0),
-    )
-    assert math.isclose(actual_evap_2, 0.3, rel_tol=1e-5)
+    Args:
+        duration_s: Routing interval (seconds).
+        evaporation_rate_m3_s: Potential evaporation (cubic meters/second).
+        sideflow_m3_s: Lateral inflow, negative for abstraction (cubic meters/second).
+        expected_evaporation_m3_s: Physically available evaporation (cubic meters/second).
 
-    # Case 3: Negative sideflow (abstraction) does not contribute to available flow for evaporation.
-    # Available flow = 0.5 * (1.0 + 1.0) + max(-0.5, 0.0) = 1.0 m3/s.
-    q_new_3, actual_evap_3, actual_trans_3 = update_node_kinematic(
-        inflow_m3_s=np.float32(1.0),
-        previous_discharge_m3_s=np.float32(1.0),
-        sideflow_m3_s=np.float32(-0.5),
-        evaporation_m3_s=np.float32(3.0),
-        transmission_loss_m3_s=np.float32(0.0),
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If evaporation ignores storage or competes incorrectly with abstraction.
+    """  # noqa: DOC202, DOC502 - Document test outcomes and propagated assertions.
+    # Q_old=1 and alpha=1.7 over 1000 m imply 1700 m3 of initial water.
+    result: tuple = update_node_kinematic(
+        inflow_m3_s=np.float32(1),
+        previous_discharge_m3_s=np.float32(1),
+        sideflow_m3_s=np.float32(sideflow_m3_s),
+        evaporation_m3_s=np.float32(evaporation_rate_m3_s),
+        transmission_loss_m3_s=np.float32(0),
         river_storage_alpha=np.float32(1.7),
         river_storage_beta=np.float32(0.6),
-        timestep_s=np.float32(60.0),
-        river_length_m=np.float32(1000.0),
+        timestep_s=np.float32(duration_s),
+        river_length_m=np.float32(1000),
     )
-    assert math.isclose(actual_evap_3, 1.0, rel_tol=1e-5)
+    assert math.isclose(float(result[1]), expected_evaporation_m3_s, rel_tol=1e-6)
 
 
 def test_update_node_kinematic_residual() -> None:
-    """Test if update_node_kinematic converges to a solution with small residual.
+    """Check continuity against an independent double-precision residual.
 
-    This test checks if the returned Q_new actually satisfies the kinematic wave equation
-    within the specified epsilon tolerance.
-    """
-    deltaX: float = 100.0
-    deltaT: float = 3600.0
-    Qin: float = 10.0
-    Qold: float = 8.0
-    Qside: float = 1.0
-    alpha: float = 1.5
-    beta: float = 0.6
-    epsilon: np.float32 = np.float32(1e-6)
+    Notes:
+        The returned discharge is float32. The residual bound includes half an
+        output ULP propagated through the continuity derivative.
 
-    Q_new, _, _ = update_node_kinematic(
-        inflow_m3_s=np.float32(Qin),
-        previous_discharge_m3_s=np.float32(Qold),
-        sideflow_m3_s=np.float32(Qside),
-        evaporation_m3_s=np.float32(0.0),
-        transmission_loss_m3_s=np.float32(0.0),
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If the continuity residual exceeds solve and rounding error.
+    """  # noqa: DOC202, DOC502 - Document test outcomes and propagated assertions.
+    duration_s: float = 3600
+    length_m: float = 100
+    inflow_m3_s: float = 10
+    previous_discharge_m3_s: float = 8
+    sideflow_m3_s: float = 1
+    alpha: float = float(np.float32(1.5))
+    beta: float = float(np.float32(0.6))
+    tolerance_m2: float = 1e-6
+    result: tuple = update_node_kinematic(
+        inflow_m3_s=np.float32(inflow_m3_s),
+        previous_discharge_m3_s=np.float32(previous_discharge_m3_s),
+        sideflow_m3_s=np.float32(sideflow_m3_s),
+        evaporation_m3_s=np.float32(0),
+        transmission_loss_m3_s=np.float32(0),
         river_storage_alpha=np.float32(alpha),
         river_storage_beta=np.float32(beta),
-        timestep_s=np.float32(deltaT),
-        river_length_m=np.float32(deltaX),
-        epsilon=epsilon,
+        timestep_s=np.float32(duration_s),
+        river_length_m=np.float32(length_m),
+        epsilon=np.float32(tolerance_m2),
     )
-
-    deltaTX = np.float32(deltaT) / np.float32(deltaX)
-    q = np.float32(Qside) / np.float32(deltaX)
-    C = (
-        deltaTX * np.float32(Qin)
-        + np.float32(alpha) * np.float32(Qold) ** np.float32(beta)
-        + np.float32(deltaT) * q
+    discharge_m3_s: float = float(result[0])
+    rhs_area_m2: float = (
+        duration_s / length_m * (inflow_m3_s + sideflow_m3_s)
+        + alpha * previous_discharge_m3_s**beta
     )
-    residual = deltaTX * Q_new + np.float32(alpha) * Q_new ** np.float32(beta) - C
-
-    assert abs(residual) <= epsilon
+    residual_m2: float = (
+        duration_s / length_m * discharge_m3_s
+        + alpha * discharge_m3_s**beta
+        - rhs_area_m2
+    )
+    derivative: float = duration_s / length_m + alpha * beta * discharge_m3_s ** (
+        beta - 1
+    )
+    rounding_bound_m2: float = (
+        0.5 * float(np.spacing(np.float32(discharge_m3_s))) * derivative
+    )
+    assert abs(residual_m2) <= tolerance_m2 + rounding_bound_m2
 
 
 @pytest.fixture

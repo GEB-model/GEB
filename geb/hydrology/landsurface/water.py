@@ -638,6 +638,11 @@ def infiltration(
     initialized at the beginning of an infiltration event based on the soil
     moisture deficit.
 
+    Notes:
+        Once the front reaches the soil bottom, surface-to-groundwater
+        throughflow still crosses the soil profile. It shares the unfrozen,
+        conductivity-limited soil capacity with water filling soil storage.
+
     Args:
         seed: A seed for random number generation.
         ws: Saturated soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
@@ -675,7 +680,11 @@ def infiltration(
             - wetting_front_moisture_deficit: Updated wetting front moisture deficit [-].
             - green_ampt_active_layer_idx: Updated active soil layer index.
             - soil_enthalpy_top_layer_J_per_m2: Updated top-layer soil enthalpy (J/m2).
-    """
+
+    Raises:
+        ValueError: If Green-Ampt inputs are negative or nonfinite.
+        RuntimeError: If the incremental Green-Ampt solve fails to converge.
+    """  # noqa: DOC502 - Validation and convergence failures propagate from the solver.
     no_infiltration_land_use: bool = land_use_type == OPEN_WATER
     no_topwater_available: bool = bool(topwater_m <= np.float32(0.0))
 
@@ -974,9 +983,19 @@ def infiltration(
             water_available_for_recharge: np.float32 = (
                 excess_surface_water + current_topwater_m
             )
-            recharge_capacity_m_step: np.float32 = (
-                max(np.float32(0.0), groundwater_toplayer_conductivity_m_per_s)
+            # Reaching the aquifer does not bypass a tight or frozen soil layer.
+            # Water used to refill soil storage has already crossed the surface.
+            remaining_soil_capacity_m_step: np.float32 = max(
+                np.float32(0.0),
+                saturated_conductivity_of_most_restrictive_layer
                 * substep_time_s
+                * liquid_fraction_top_layer
+                - step_infiltration,
+            )
+            recharge_capacity_m_step: np.float32 = min(
+                max(np.float32(0.0), groundwater_toplayer_conductivity_m_per_s)
+                * substep_time_s,
+                remaining_soil_capacity_m_step,
             )
             step_groundwater_recharge_m: np.float32 = min(
                 water_available_for_recharge, recharge_capacity_m_step

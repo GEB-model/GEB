@@ -26,7 +26,7 @@ __all__: list[str] = [
     "_transfer_waterbody_outflows",
 ]
 
-MAX_ITERS_KINEMATIC: int = 10
+MAX_ITERS_KINEMATIC: int = 80
 
 # Threshold of headwater reach count above which parallel multi-threading outperforms serial execution
 KINEMATIC_PARALLEL_THRESHOLD: int = 5000
@@ -44,10 +44,16 @@ def update_node_kinematic(
     timestep_s: np.float32,
     river_length_m: np.float32,
     epsilon: np.float32 = np.float32(0.00001),
+    initial_storage_m3: np.float64 | None = None,
 ) -> tuple[np.float32, np.float32, np.float32]:
     """Calculate the new discharge, actual evaporation, and transmission loss for a single cell using kinematic wave routing.
 
-    Solves the non-linear kinematic wave equation using the Newton-Raphson method.
+    Solves the non-linear kinematic wave equation with bounded Newton iterations.
+
+    Notes:
+        Evaporation and seepage share the volume available after abstraction.
+        Saved storage takes precedence over storage inferred from the previous
+        discharge, which can differ after channel geometry changes.
 
     Args:
         inflow_m3_s: Inflow discharge from upstream cells (m³/s).
@@ -59,92 +65,116 @@ def update_node_kinematic(
         river_storage_beta: Kinematic wave beta parameter (-).
         timestep_s: Routing time step duration (seconds).
         river_length_m: Length of the river channel in the cell (meters).
-        epsilon: Convergence threshold for Newton-Raphson solver.
+        epsilon: Convergence threshold for the continuity residual (square meters).
+        initial_storage_m3: Saved reach storage (m³). If None, infer storage from
+            the previous discharge and the kinematic storage relation.
 
     Returns:
         A tuple containing:
             - new_discharge_m3_s: Updated discharge at current timestep (m³/s).
             - actual_evaporation_m3_s: Actual evaporation rate constrained by available flow (m³/s).
             - actual_transmission_loss_m3_s: Actual transmission loss rate constrained by available flow (m³/s).
+
+    Raises:
+        ValueError: If rates or storage are invalid, or hydraulic parameters,
+            timestep, reach length or tolerance are nonpositive or nonfinite.
+        RuntimeError: If the bounded continuity solve fails to converge.
     """
-    inv_river_length: np.float32 = np.float32(1.0) / river_length_m
-    # Limit evaporation and transmission loss to available flow rate (m³/s)
-    available_flow_m3_s: np.float32 = (
-        inflow_m3_s + previous_discharge_m3_s
-    ) * np.float32(0.5) + max(sideflow_m3_s, np.float32(0.0))
-    actual_evaporation_m3_s: np.float32 = min(
-        evaporation_m3_s,
-        max(available_flow_m3_s, np.float32(0.0)),
+    if (
+        not np.isfinite(inflow_m3_s)
+        or inflow_m3_s < 0
+        or not np.isfinite(previous_discharge_m3_s)
+        or previous_discharge_m3_s < 0
+        or not np.isfinite(sideflow_m3_s)
+        or not np.isfinite(evaporation_m3_s)
+        or evaporation_m3_s < 0
+        or not np.isfinite(transmission_loss_m3_s)
+        or transmission_loss_m3_s < 0
+        or not np.isfinite(river_storage_alpha)
+        or river_storage_alpha <= 0
+        or not np.isfinite(river_storage_beta)
+        or river_storage_beta <= 0
+        or not np.isfinite(timestep_s)
+        or timestep_s <= 0
+        or not np.isfinite(river_length_m)
+        or river_length_m <= 0
+        or not np.isfinite(epsilon)
+        or epsilon <= 0
+    ):
+        raise ValueError(
+            "Kinematic rates must be finite; losses must be nonnegative and hydraulic parameters positive."
+        )
+    duration_s: np.float64 = np.float64(timestep_s)
+    length_m: np.float64 = np.float64(river_length_m)
+    alpha: np.float64 = np.float64(river_storage_alpha)
+    beta: np.float64 = np.float64(river_storage_beta)
+    storage_m3: np.float64 = (
+        alpha * np.float64(previous_discharge_m3_s) ** beta * length_m
+        if initial_storage_m3 is None
+        else np.float64(initial_storage_m3)
     )
-    actual_transmission_loss_m3_s: np.float32 = min(
-        transmission_loss_m3_s,
-        max(available_flow_m3_s - actual_evaporation_m3_s, np.float32(0.0)),
+    if not np.isfinite(storage_m3) or storage_m3 < 0:
+        raise ValueError("Initial river storage must be finite and nonnegative.")
+
+    # Discharge at the previous step is a rate, not the volume remaining now.
+    available_volume_m3: np.float64 = max(
+        storage_m3 + (np.float64(inflow_m3_s) + np.float64(sideflow_m3_s)) * duration_s,
+        np.float64(0),
     )
-
-    total_loss_m3_s_per_m: np.float32 = (
-        actual_evaporation_m3_s + actual_transmission_loss_m3_s
-    ) * inv_river_length
-    lateral_inflow_m3_s_per_m: np.float32 = (
-        sideflow_m3_s * inv_river_length - total_loss_m3_s_per_m
+    available_rate_m3_s: np.float64 = available_volume_m3 / duration_s
+    actual_evaporation_m3_s: np.float64 = min(
+        np.float64(evaporation_m3_s), available_rate_m3_s
     )
+    actual_transmission_loss_m3_s: np.float64 = min(
+        np.float64(transmission_loss_m3_s),
+        max(available_rate_m3_s - actual_evaporation_m3_s, np.float64(0)),
+    )
+    remaining_volume_m3: np.float64 = max(
+        available_volume_m3
+        - duration_s * (actual_evaporation_m3_s + actual_transmission_loss_m3_s),
+        np.float64(0),
+    )
+    if remaining_volume_m3 == 0:
+        return (
+            np.float32(0),
+            np.float32(actual_evaporation_m3_s),
+            np.float32(actual_transmission_loss_m3_s),
+        )
 
-    # Return tiny positive flow if reach is dry
-    if (inflow_m3_s + previous_discharge_m3_s + lateral_inflow_m3_s_per_m) < 1e-30:
-        return np.float32(1e-30), actual_evaporation_m3_s, actual_transmission_loss_m3_s
-
-    inflow_m3_s = max(inflow_m3_s, np.float32(1e-30))
-    previous_discharge_m3_s = max(previous_discharge_m3_s, np.float32(1e-30))
-
-    # Initial guess for discharge using a linearized approximation
-    beta_minus_1: np.float32 = river_storage_beta - np.float32(1.0)
-    derivative_storage: np.float32 = (
-        river_storage_alpha
-        * river_storage_beta
-        * (
-            max(
-                (previous_discharge_m3_s + inflow_m3_s) * np.float32(0.5),
-                np.float32(1e-30),
+    # Backward-Euler continuity: dt*Q + length*alpha*Q**beta = remaining volume.
+    # The upper bound follows directly from nonnegative end-of-step storage.
+    lower_discharge_m3_s: np.float64 = np.float64(0)
+    upper_discharge_m3_s: np.float64 = remaining_volume_m3 / duration_s
+    discharge_m3_s: np.float64 = upper_discharge_m3_s
+    dt_over_length: np.float64 = duration_s / length_m
+    rhs_area_m2: np.float64 = remaining_volume_m3 / length_m
+    tolerance_m2: np.float64 = max(np.float64(epsilon), np.float64(1e-14) * rhs_area_m2)
+    for iteration in range(MAX_ITERS_KINEMATIC):
+        discharge_power: np.float64 = discharge_m3_s**beta
+        residual_m2: np.float64 = (
+            dt_over_length * discharge_m3_s + alpha * discharge_power - rhs_area_m2
+        )
+        if abs(residual_m2) <= tolerance_m2:
+            return (
+                np.float32(discharge_m3_s),
+                np.float32(actual_evaporation_m3_s),
+                np.float32(actual_transmission_loss_m3_s),
             )
-            ** beta_minus_1
+        if residual_m2 > 0:
+            upper_discharge_m3_s = discharge_m3_s
+        else:
+            lower_discharge_m3_s = discharge_m3_s
+        derivative: np.float64 = (
+            dt_over_length + alpha * beta * discharge_power / discharge_m3_s
         )
-    )
-    dt_over_dx: np.float32 = timestep_s * inv_river_length
-    prev_storage: np.float32 = previous_discharge_m3_s**river_storage_beta
-    rhs_constant: np.float32 = (
-        dt_over_dx * inflow_m3_s
-        + river_storage_alpha * prev_storage
-        + timestep_s * lateral_inflow_m3_s_per_m
-    )
-
-    new_discharge: np.float32 = (
-        dt_over_dx * inflow_m3_s
-        + previous_discharge_m3_s * derivative_storage
-        + timestep_s * lateral_inflow_m3_s_per_m
-    ) / (dt_over_dx + derivative_storage)
-    new_discharge = max(new_discharge, np.float32(1e-30))
-
-    # Newton-Raphson iteration
-    alpha_times_beta: np.float32 = river_storage_alpha * river_storage_beta
-    q_current: np.float32 = max(new_discharge, np.float32(1e-30))
-    q_pow_beta: np.float32 = q_current**river_storage_beta
-    f_q: np.float32 = (
-        dt_over_dx * new_discharge + river_storage_alpha * q_pow_beta - rhs_constant
-    )
-
-    iteration: int = 0
-    while np.abs(f_q) > epsilon and iteration < MAX_ITERS_KINEMATIC:
-        df_q: np.float32 = dt_over_dx + alpha_times_beta * (q_pow_beta / q_current)
-        new_discharge -= f_q / df_q
-        new_discharge = max(new_discharge, np.float32(1e-30))
-
-        q_current = new_discharge
-        q_pow_beta = q_current**river_storage_beta
-        f_q = (
-            dt_over_dx * new_discharge + river_storage_alpha * q_pow_beta - rhs_constant
-        )
-        iteration += 1
-
-    return new_discharge, actual_evaporation_m3_s, actual_transmission_loss_m3_s
+        next_discharge_m3_s: np.float64 = discharge_m3_s - residual_m2 / derivative
+        # Keep Newton inside the physical bracket; bisection guarantees progress.
+        if not lower_discharge_m3_s < next_discharge_m3_s < upper_discharge_m3_s:
+            next_discharge_m3_s = (
+                lower_discharge_m3_s + upper_discharge_m3_s
+            ) * np.float64(0.5)
+        discharge_m3_s = next_discharge_m3_s
+    raise RuntimeError("Kinematic continuity solve failed to converge.")
 
 
 @njit(cache=True)
@@ -211,6 +241,11 @@ def _solve_kinematic_reach(
 ) -> np.float32:
     """Solves flood retention, kinematic wave routing, evaporation, and mass balance for a single reach.
 
+    Notes:
+        Unmet lateral abstraction is recorded separately. Evaporation, seepage
+        and downstream discharge cannot consume more than the saved storage
+        plus realized incoming water.
+
     Args:
         reach_idx: Index of reach to update.
         upstream_inflow_m3_s: Aggregated upstream inflow discharge rate (m³/s).
@@ -233,7 +268,11 @@ def _solve_kinematic_reach(
 
     Returns:
         Computed downstream discharge rate for reach (m³/s).
-    """
+
+    Raises:
+        ValueError: If kinematic solver inputs are invalid.
+        RuntimeError: If the continuity solve does not converge.
+    """  # noqa: DOC502 - Solver validation and convergence failures propagate.
     if ret_id != -1:
         discharge_before_diversion: np.float32 = max(
             upstream_inflow_m3_s, np.float32(0.0)
@@ -270,40 +309,65 @@ def _solve_kinematic_reach(
         ret.outflow_m3[ret_id] += outflow_volume
         node_sideflow = discharge_at_basin_vol - upstream_inflow_m3_s * dt_f32
 
+    initial_storage_m3: np.float64 = river_storage_m3[reach_idx]
+    incoming_volume_m3: np.float64 = np.float64(upstream_inflow_m3_s) * np.float64(
+        dt_f32
+    )
+    realized_sideflow_m3: np.float64 = np.float64(node_sideflow)
+    # Abstraction was requested outside routing; report only the unmet part.
+    if realized_sideflow_m3 < np.float64(0):
+        available_for_abstraction_m3: np.float64 = (
+            initial_storage_m3 + incoming_volume_m3
+        )
+        requested_abstraction_m3: np.float64 = -realized_sideflow_m3
+        if requested_abstraction_m3 > available_for_abstraction_m3:
+            over_abstraction_m3[reach_idx] += np.float32(
+                requested_abstraction_m3 - available_for_abstraction_m3
+            )
+            realized_sideflow_m3 = -available_for_abstraction_m3
+
     # Solve kinematic wave routing for outflow discharge, channel evaporation, and transmission loss.
     kinematic_discharge, act_evap_rate, act_trans_rate = update_node_kinematic(
         inflow_m3_s=upstream_inflow_m3_s,
         previous_discharge_m3_s=previous_discharge,
-        sideflow_m3_s=node_sideflow * inv_dt_f32,
+        sideflow_m3_s=np.float32(realized_sideflow_m3 / np.float64(dt_f32)),
         evaporation_m3_s=evaporation_vol_m3 * inv_dt_f32,
         transmission_loss_m3_s=transmission_loss_vol_m3 * inv_dt_f32,
         river_storage_alpha=river_storage_alpha,
         river_storage_beta=river_storage_beta,
         timestep_s=dt_f32,
         river_length_m=river_length,
+        initial_storage_m3=initial_storage_m3,
     )
 
-    kinematic_discharge = max(kinematic_discharge, np.float32(0.0))
-    updated_discharge_m3_s[reach_idx] = kinematic_discharge
-
-    evap_vol: np.float32 = act_evap_rate * dt_f32
-    trans_vol: np.float32 = act_trans_rate * dt_f32
+    available_volume_m3: np.float64 = max(
+        initial_storage_m3 + incoming_volume_m3 + realized_sideflow_m3,
+        np.float64(0),
+    )
+    # Bound float32 rate-to-volume roundoff before saving the realized fluxes.
+    evap_vol: np.float64 = min(
+        np.float64(act_evap_rate) * np.float64(dt_f32), available_volume_m3
+    )
+    trans_vol: np.float64 = min(
+        np.float64(act_trans_rate) * np.float64(dt_f32), available_volume_m3 - evap_vol
+    )
     actual_evaporation_m3[reach_idx] = evap_vol
     actual_transmission_loss_m3[reach_idx] = trans_vol
 
-    # Update reach storage (mass balance) and track over-abstraction deficit if any.
-    inflow_vol: np.float32 = upstream_inflow_m3_s * dt_f32 + node_sideflow
-    outflow_vol: np.float32 = kinematic_discharge * dt_f32
-    river_storage_m3[reach_idx] += (
-        np.float64(inflow_vol)
-        - np.float64(outflow_vol)
-        - np.float64(evap_vol)
-        - np.float64(trans_vol)
+    remaining_volume_m3: np.float64 = available_volume_m3 - evap_vol - trans_vol
+    kinematic_discharge = np.float32(
+        min(
+            np.float64(kinematic_discharge),
+            remaining_volume_m3 * np.float64(inv_dt_f32),
+        )
     )
-
-    if river_storage_m3[reach_idx] < np.float64(0.0):
-        over_abstraction_m3[reach_idx] += np.float32(-river_storage_m3[reach_idx])
-        river_storage_m3[reach_idx] = np.float64(0.0)
+    if np.float64(kinematic_discharge) * np.float64(dt_f32) > remaining_volume_m3:
+        kinematic_discharge = np.nextafter(kinematic_discharge, np.float32(0))
+    updated_discharge_m3_s[reach_idx] = kinematic_discharge
+    river_storage_m3[reach_idx] = max(
+        remaining_volume_m3 - np.float64(kinematic_discharge) * np.float64(dt_f32),
+        np.float64(0),
+    )
 
     return kinematic_discharge
 

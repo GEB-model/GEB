@@ -15,6 +15,20 @@ Within GEB there are 6 land use classes in GEB, following the [CWatM](https://cw
 
 Land use classes `forest`, `grassland-like`, `sealed` and `open water` are set from the land `land_use_classes` input dataset. Land use classes `paddy irrigated` and `non-paddy irrigated` are set dynamically during the model run through the farmer agents. These lands are initially modelled as `grassland-like`, but when a farmer decides to irrigate their land, the land use type is switched dynamically to either `paddy irrigated` and `non-paddy irrigated`. After the growing season, the land is switched back to `grassland-like`.
 
+## Vegetation water demand
+
+`parameters.crop_factor_multiplier` scales vegetation factors used to calculate
+potential evapotranspiration. Despite its name, it also affects forest and
+grassland vegetation, not only cultivated crops. The default is `1.0`, which
+preserves the vegetation factors derived by the model. A value of `1.5` increases
+potential demand by 50%; actual evaporation and transpiration also depend on
+available water and other model constraints.
+
+The neutral default restores the value used before 21 October 2026. Use explicit
+regional overrides for calibrated values. After changing this multiplier, rerun
+spinup and simulation so soil moisture, groundwater heads, and channel geometry
+reflect the chosen demand. No input-file migration is required.
+
 ## Code
 
 ::: geb.hydrology.landsurface

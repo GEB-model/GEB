@@ -830,7 +830,9 @@ class ParametersConfig(BaseModel):
         gt=0.0,
         description="Calibration multiplier for bankfull discharge (Q_bf) used to determine channel geometry and overbank spill capacity.",
     )
-    crop_factor_multiplier: float = Field(description="Crop factor multiplier.")
+    crop_factor_multiplier: float = Field(
+        description="Dimensionless calibration multiplier for vegetation factors, including forest and grassland; 1.0 preserves the unscaled potential evapotranspiration demand."
+    )
     saturated_hydraulic_conductivity_multiplier: float = Field(
         description="Saturated hydraulic conductivity multiplier."
     )
