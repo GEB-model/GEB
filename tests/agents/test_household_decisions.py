@@ -399,22 +399,11 @@ def test_amenity_values(
     )
 
 
-@pytest.mark.parametrize(
-    ("project_income", "project_costs"),
-    [
-        (True, True),
-        (True, False),
-        (False, True),
-        (False, False),
-    ],
-)
-def test_update_monetary_variables_respects_projection_flags(
+def test_update_monetary_variables_projects_values_from_household_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    project_income: bool,
-    project_costs: bool,
 ) -> None:
-    """Check that income and cost projections follow their respective flags."""
+    """Check that monetary values are projected using the household CLIMRISK config."""
     years = [2020, 2021]
     gdp_map = xr.DataArray(
         np.array(
@@ -449,32 +438,21 @@ def test_update_monetary_variables_respects_projection_flags(
         fake_open_dataarray,
     )
 
-    class FakeTransform:
-        def to_gdal(self) -> tuple[int, int, int, int, int, int]:
-            return (0, 1, 0, 0, 0, -1)
-
-    monkeypatch.setattr(
-        xr.DataArray,
-        "rio",
-        property(lambda _: SimpleNamespace(transform=lambda: FakeTransform())),
-        raising=False,
-    )
-
-    climrisk_config: dict[str, Any] = {
-        "project_income": project_income,
-        "project_costs": project_costs,
-        "country_wide": True,
-        "ssp": "2",
-        "damage_function": "GDP",
-    }
-
     households = Households.__new__(Households)
     households.start_adaptation_year = 2020
     households.model = SimpleNamespace(
-        input_folder=tmp_path,
         current_time=datetime(2021, 1, 1),
         logger=logging.getLogger("test"),
-        config={"agent_settings": {"climrisk": climrisk_config}},
+        config={
+            "agent_settings": {
+                "households": {
+                    "climrisk_socioeconomic_scenarios": {
+                        "project_values": True,
+                        "country_wide": True,
+                    }
+                }
+            }
+        },
         files={
             "other": {
                 "ssp_maps/GDP": tmp_path / "GDP.zarr",
@@ -489,22 +467,19 @@ def test_update_monetary_variables_respects_projection_flags(
 
     households.update_monetary_variables_to_ssp()
 
-    income_factor = 1.1 if project_income else 1.0
-    cost_factor = 1.1 if project_costs else 1.0
-    np.testing.assert_allclose(households.var.income, [100.0 * income_factor])
-    np.testing.assert_allclose(households.var.wealth, [200.0 * income_factor])
-    assert households.var.factor_change == pytest.approx(cost_factor)
-
-    if project_income:
-        assert "POP.zarr" in opened_paths
-    else:
-        assert "POP.zarr" not in opened_paths
+    np.testing.assert_allclose(households.var.income, [110.0])
+    np.testing.assert_allclose(households.var.wealth, [220.0])
+    assert households.var.factor_change == pytest.approx(1.1)
+    assert opened_paths == ["GDP.zarr", "POP.zarr"]
 
 
 def test_update_monetary_variables_requires_climrisk_config() -> None:
-    """Raise a clear error when the climrisk configuration is absent."""
+    """Raise a clear error when the household CLIMRISK configuration is absent."""
     households = Households.__new__(Households)
-    households.model = SimpleNamespace(config={"agent_settings": {}})
+    households.model = SimpleNamespace(config={"agent_settings": {"households": {}}})
 
-    with pytest.raises(ValueError, match="agent_settings.climrisk"):
+    with pytest.raises(
+        ValueError,
+        match="agent_settings.households.climrisk_socioeconomic_scenarios.country_wide",
+    ):
         households.update_monetary_variables_to_ssp()

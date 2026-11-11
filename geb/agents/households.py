@@ -1578,28 +1578,20 @@ class Households(AgentBaseClass):
         Raises:
             ValueError: If the damage function or warming percentile is
                 invalid, or if the requested scenario map has not been built.
+            TypeError: If ``country_wide`` is not a boolean.
         """
         try:
-            climrisk_config = self.model.config["agent_settings"]["climrisk"]
+            country_wide = self.model.config["agent_settings"]["households"][
+                "climrisk_socioeconomic_scenarios"
+            ]["country_wide"]
         except (KeyError, TypeError) as exc:
             raise ValueError(
-                "Missing required configuration section: 'agent_settings.climrisk'."
+                "Missing required configuration section: 'agent_settings.households.climrisk_socioeconomic_scenarios.country_wide'."
             ) from exc
-
-        required_settings = {
-            "project_costs",
-            "project_income",
-            "country_wide",
-        }
-        missing_settings = required_settings.difference(climrisk_config)
-        if missing_settings:
-            missing = ", ".join(sorted(missing_settings))
-            raise ValueError(
-                f"Missing required settings in 'agent_settings.climrisk': {missing}."
+        if not isinstance(country_wide, bool):
+            raise TypeError(
+                f"country_wide must be an bool, got {type(country_wide).__name__}"
             )
-        project_costs: bool = climrisk_config["project_costs"]
-        project_income: bool = climrisk_config["project_income"]
-        country_wide: bool = climrisk_config["country_wide"]
 
         # We consider self.start_adaptation_year to be the base year
         base_year = self.start_adaptation_year
@@ -1607,125 +1599,73 @@ class Households(AgentBaseClass):
             self.model.logger.info(
                 "CLIMRISK: Initializing SSP socioeconomic projections"
             )
-            required_settings = {
-                "damage_function",
-            }
-            missing_settings = required_settings.difference(climrisk_config)
-            if missing_settings:
-                missing = ", ".join(sorted(missing_settings))
-                raise ValueError(
-                    f"Missing required settings in 'agent_settings.climrisk': {missing}."
-                )
-            if climrisk_config["damage_function"] != "GDP":
-                required_settings = {"warming_percentile"}
-                missing_settings = required_settings.difference(climrisk_config)
-                if missing_settings:
-                    missing = ", ".join(sorted(missing_settings))
-                    raise ValueError(
-                        f"Missing required settings in 'agent_settings.climrisk': {missing}."
-                    )
-            damage_function: str = self.model.config["agent_settings"]["climrisk"][
-                "damage_function"
-            ]
-            if damage_function not in ["GDP", "K", "KU", "KPU", "RU", "RPU"]:
-                raise ValueError(
-                    f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}."
-                )
-            if damage_function != "GDP":
-                warming_percentile: str = self.model.config["agent_settings"][
-                    "climrisk"
-                ]["warming_percentile"]
-                if warming_percentile not in ["10", "50", "90"]:
-                    raise ValueError(
-                        f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}."
-                    )
-                self.model.logger.info(
-                    f"CLIMRISK: Damage function: {damage_function}p{warming_percentile}"
-                )
-                gdp_damages_map_name: str = f"{damage_function}_p{warming_percentile}"
-            else:
-                self.model.logger.info(f"CLIMRISK: Damage function: no damages")
-                gdp_damages_map_name: str = f"GDP"
-
             try:
-                gdp_damages_map: xr.DataArray = xr.open_dataarray(
-                    self.model.files["other"][f"ssp_maps/{gdp_damages_map_name}"]
+                gdp_map: xr.DataArray = xr.open_dataarray(
+                    self.model.files["other"][f"ssp_maps/GDP"]
                 )
             except FileNotFoundError as e:
                 raise ValueError(
-                    f"Requested file {gdp_damages_map_name}.zarr has not been built. "
+                    f"Requested file {self.model.files['other'][f'ssp_maps/GDP']}.zarr has not been built. "
                     + f"Please build the model again passing the "
                     + f"requested data to 'setup_climrisk'."
                 ) from e
-            if project_income:
-                try:
-                    population_map: xr.Dataset = xr.open_dataarray(
-                        self.model.files["other"][f"ssp_maps/POP"]
-                    )
-                except FileNotFoundError as e:
-                    raise ValueError(
-                        f"Requested file POP.zarr has not been built. "
-                        + f"Please build the model again using 'setup_climrisk'."
-                    ) from e
-
-                # Calculate factor change and growth rate
-                # Country-wide or cell-level growth rate
-                # For the growth rate of income we use GDP per capita
-                if not country_wide:
-                    gdp_pcap = gdp_damages_map / population_map
-                else:
-                    gdp_pcap = gdp_damages_map.sum(["lon", "lat"]) / population_map.sum(
-                        ["lon", "lat"]
-                    )
-                self.growth_rate = gdp_pcap.diff(dim="year") / gdp_pcap.shift(
-                    {"year": 1}
+            try:
+                population_map: xr.Dataset = xr.open_dataarray(
+                    self.model.files["other"][f"ssp_maps/POP"]
                 )
-                self._growth_rate_geotransform = (
-                    self.growth_rate.attrs["lon_origin"],  # x_offset = gt[0]
-                    self.growth_rate.attrs["lon_resolution"],  # x_step = gt[1]
-                    0,  # row rotation
-                    self.growth_rate.attrs["lat_origin"],  # y_offset = gt[3]
-                    0,  # column rotation
-                    self.growth_rate.attrs["lat_resolution"],  # y_step = gt[5]
-                )
+            except FileNotFoundError as e:
+                raise ValueError(
+                    f"Requested file {self.model.files['other'][f'ssp_maps/POP']}.zarr has not been built. "
+                    + f"Please build the model again using 'setup_climrisk'."
+                ) from e
 
-            if project_costs:
-                # For damages and costs, we use a country-level GDP-based factor change.
-                self.factor_change = gdp_damages_map.sum(
+            # Calculate factor change and growth rate
+            # Country-wide or cell-level growth rate
+            # For the growth rate of income we use GDP per capita
+            if not country_wide:
+                gdp_pcap = gdp_map / population_map
+            else:
+                gdp_pcap = gdp_map.sum(["lon", "lat"]) / population_map.sum(
                     ["lon", "lat"]
-                ) / gdp_damages_map.sel({"year": base_year}).sum(["lon", "lat"])
+                )
+            self.growth_rate = gdp_pcap.diff(dim="year") / gdp_pcap.shift({"year": 1})
+            self._growth_rate_geotransform = (
+                gdp_map.attrs["lon_origin"],  # x_offset = gt[0]
+                gdp_map.attrs["lon_resolution"],  # x_step = gt[1]
+                0,  # row rotation
+                gdp_map.attrs["lat_origin"],  # y_offset = gt[3]
+                0,  # column rotation
+                gdp_map.attrs["lat_resolution"],  # y_step = gt[5]
+            )
+            # For damages and costs, we use a country-level GDP-based factor change.
+            self.factor_change = gdp_map.sum(["lon", "lat"]) / gdp_map.sel(
+                {"year": base_year}
+            ).sum(["lon", "lat"])
 
             self._ssp_maps_initialized = True
 
         current_year: int = self.model.current_time.year
-        if project_income:
-            # Contry-wide or cell-level growth rate
-            if not country_wide:
-                # Sample household data from map
-                # sample_from_map takes a map with y, x coordinates
-                growth_rate_map: np.ndarray = (
-                    self.growth_rate.sel({"year": current_year})
-                    .to_numpy()
-                    .swapaxes(-2, -1)
-                )
-                growth_rate = sample_from_map(
-                    array=growth_rate_map,
-                    coords=self.var.locations.data,
-                    gt=self._growth_rate_geotransform,
-                    out_of_bounds_value=None,
-                    sample_closest_valid_value=True,
-                )
-            else:
-                growth_rate = float(self.growth_rate.sel({"year": current_year}).item())
-            self.var.wealth *= 1 + growth_rate
-            self.var.income *= 1 + growth_rate
-
-        if project_costs:
-            self.var.factor_change = float(
-                self.factor_change.sel({"year": current_year}).item()
+        # Contry-wide or cell-level growth rate
+        if not country_wide:
+            # Sample household data from map
+            # sample_from_map takes a map with y, x coordinates
+            growth_rate_map: np.ndarray = (
+                self.growth_rate.sel({"year": current_year}).to_numpy().swapaxes(-2, -1)
+            )
+            growth_rate = sample_from_map(
+                array=growth_rate_map,
+                coords=self.var.locations.data,
+                gt=self._growth_rate_geotransform,
+                out_of_bounds_value=None,
+                sample_closest_valid_value=True,
             )
         else:
-            self.var.factor_change = 1.0
+            growth_rate = float(self.growth_rate.sel({"year": current_year}).item())
+        self.var.wealth *= 1 + growth_rate
+        self.var.income *= 1 + growth_rate
+        self.var.factor_change = float(
+            self.factor_change.sel({"year": current_year}).item()
+        )
 
     def step(self) -> None:
         """Advance the households by one time step."""
@@ -1800,11 +1740,10 @@ class Households(AgentBaseClass):
                     and self.model.current_time.day == 1
                 ):
                     climrisk_config = (
-                        self.model.config["agent_settings"].get("climrisk", {}) or {}
+                        self.config.get("climrisk_socioeconomic_scenarios", {}) or {}
                     )
                     if self.model.current_time.year > self.start_adaptation_year and (
-                        climrisk_config.get("project_income", False)
-                        or climrisk_config.get("project_costs", False)
+                        climrisk_config.get("project_values", False)
                     ):
                         self.update_monetary_variables_to_ssp()
                     if "flooded" not in self.buildings.columns:

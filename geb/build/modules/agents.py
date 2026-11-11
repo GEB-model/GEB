@@ -1809,8 +1809,8 @@ class Agents(BuildModelBase):
     @build_method(depends_on=["set_ssp"], required=True)
     def setup_climrisk(
         self,
-        damage_function: list[str] | None = None,
-        warming_percentile: list[str] | None = None,
+        damage_function: str = "K",
+        warming_percentile: str = "90",
         reference_year: int = 2020,
     ) -> None:
         """Load CLIMRISK population and GDP maps into the model.
@@ -1824,9 +1824,9 @@ class Agents(BuildModelBase):
             damage_function: Damage functions to load: ``"K"``, ``"KU"``,
                 ``"KPU"``, ``"RU"``, or ``"RPU"``. ``"GDP"`` may also be
                 supplied; it is added automatically if omitted. Defaults to
-                ``["K"]``.
+                ``"K"``.
             warming_percentile: Global warming percentiles to load:
-                ``"10"``, ``"50"``, or ``"90"``. Defaults to ``["90"]``.
+                ``"10"``, ``"50"``, or ``"90"``. Defaults to ``"90"``.
             reference_year: First year included in damage data, from 2010
                 through 2100. Defaults to 2020.
 
@@ -1836,41 +1836,26 @@ class Agents(BuildModelBase):
             ValueError: If a scenario option is unsupported or the reference
                 year is outside 2010-2100.
         """
-        if damage_function is None:
-            damage_function = ["K"]
-        elif not isinstance(damage_function, list):
+        if not isinstance(damage_function, str):
             raise TypeError(
-                f"damage_function must be a list, got {type(damage_function).__name__}"
+                f"damage_function must be a string, got {type(damage_function).__name__}"
             )
         else:
             damage_function = damage_function.copy()
-
-        if warming_percentile is None:
-            warming_percentile = ["90"]
-        elif not isinstance(warming_percentile, list):
+        if not isinstance(warming_percentile, str):
             raise TypeError(
-                f"warming_percentile must be a list, got {type(warming_percentile).__name__}"
+                f"warming_percentile must be a str, got {type(warming_percentile).__name__}"
             )
-
-        for name, value in {
-            "damage_function": damage_function,
-            "warming_percentile": warming_percentile,
-        }.items():
-            if not all(isinstance(item, str) for item in value):
-                raise TypeError(f"All items in {name} must be strings.")
-
-        valid_damage_functions = {"K", "KU", "KPU", "RU", "RPU", "GDP"}
-        invalid_damage_functions = set(damage_function) - valid_damage_functions
-        if invalid_damage_functions:
+        valid_damage_functions = ["K", "KU", "KPU", "RU", "RPU", "GDP"]
+        if not damage_function in valid_damage_functions:
             raise ValueError(
-                f"Unsupported damage_function value(s): {sorted(invalid_damage_functions)}"
+                f"Unsupported damage_function value: {damage_function}. Available options: {', '.join(sorted(valid_damage_functions))}"
             )
 
         valid_percentiles = {"10", "50", "90"}
-        invalid_percentiles = set(warming_percentile) - valid_percentiles
-        if invalid_percentiles:
+        if not warming_percentile in valid_percentiles:
             raise ValueError(
-                f"Unsupported warming_percentile value(s): {sorted(invalid_percentiles)}"
+                f"Unsupported warming_percentile value: {warming_percentile}. Available options: {', '.join(sorted(valid_percentiles))}"
             )
 
         if not isinstance(reference_year, int):
@@ -1879,9 +1864,6 @@ class Agents(BuildModelBase):
             )
         if not 2010 <= reference_year <= 2100:
             raise ValueError("reference_year must be between 2010 and 2100.")
-
-        if "GDP" not in damage_function:
-            damage_function.append("GDP")
 
         self.logger.info("Processing climrisk data")
         self.logger.info(f"Processing population: SSP{self.ssp}")
@@ -1898,33 +1880,15 @@ class Agents(BuildModelBase):
         for function in damage_function:
             if function == "GDP":
                 self.logger.info(f"Processing GDP for combination: SSP{self.ssp}")
-                climrisk = self.data_catalog.fetch("climrisk").read(
-                    region=self.region,
-                    ssp=self.ssp.replace("ssp", ""),
-                    rcp=None,
-                    damage_function=function,
-                    warming_percentile=None,
-                    reference_year=reference_year,
-                )
-                self.set_other(climrisk, name=f"ssp_maps/{function}")
-            else:
-                for percentile in warming_percentile:
-                    self.logger.info(
-                        f"Processing GDP for combination: SSP{self.ssp}-{self.rcp}, "
-                        f"damage function {function}"
-                    )
-                    climrisk = self.data_catalog.fetch("climrisk").read(
-                        region=self.region,
-                        ssp=self.ssp.replace("ssp", ""),
-                        rcp=self.rcp,
-                        damage_function=function,
-                        warming_percentile=percentile,
-                        reference_year=reference_year,
-                    )
-                    self.set_other(
-                        climrisk,
-                        name=(f"ssp_maps/{function}_p{percentile}"),
-                    )
+            climrisk = self.data_catalog.fetch("climrisk").read(
+                region=self.region,
+                ssp=self.ssp.replace("ssp", ""),
+                rcp=None,
+                damage_function=damage_function,
+                warming_percentile=None,
+                reference_year=reference_year,
+            )
+            self.set_other(climrisk, name=f"ssp_maps/GDP")
 
         self.logger.info("All climrisk data processed.")
 

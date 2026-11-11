@@ -120,6 +120,9 @@ agent_settings:
     adaptation_cost_scaler: 1 # Scale adaptation and relocation costs, usually by relative GDP per capita with respect to the EU
     income_currency_conversion: 1.11  # Convert local currency to USD. Default value: 1.11 EUR/USD
     ammenity_value_scaling_factor: 0.254820579 # scaling factor for riverine amenity based on Tesselaar et al. (2023).
+    climrisk_socioeconomic_scenarios:
+      project_values: false # If tru apply future GDP changes to economic variables.
+      country_wide: false # If true project GDP per capita homogenously for all the country. GDP is always projected at a national scale.
     export_building_damages: false # Whether to export the building damages to parquet files.
     export_building_damages_years: # Years for which to export building damages.
       - 2020
@@ -248,13 +251,6 @@ agent_settings:
     interest_rate_factor: 1
     well_cost_factor: 1
     drought_threshold_factor: 1
-
-  # climrisk: # RCP and SSP are set during build, see reasonable_default_build.yml
-  #   project_income: false # if true turn on household income growth, calculating it with GDP per capita growth
-  #   project_costs: false # if true turn on adaptation, relocation and asset damages costs growth, calculating it with the growth of the sum of the GDP for all countries that include the modelled region.
-  #   damage_function: 'K' # Macroeconomic climate damages function, choose from: 'K' (Kompas), 'KU' (Kompas + Urban Heat Island), 'KPU' (Kompas + U + persistent damages), 'RU' (RICE + U), 'RPU' (RICE + PU). Choose 'GDP' to project growth without damages.
-  #   warming_percentile: '90' # Global warming percentile, choose from: '10', '50', '90'.
-  #   country_wide: false # If true project GDP homogenously for all the country
 
 logging:
   logfile: GEB.log  
