@@ -699,7 +699,9 @@ class Floods(Module):
                     flood_depth=flood_depth
                 )
 
-    def get_return_period_maps(self, run_name: str) -> None:
+    def get_return_period_maps(
+        self, run_name: str, overwrite_flood_maps: bool = False
+    ) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
 
         Args:
@@ -890,6 +892,15 @@ class Floods(Module):
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
         for return_period in self.config["return_periods"]:
+            flood_map_path = (
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+            )
+
+            if not overwrite_flood_maps and flood_map_path.exists():
+                self.model.logger.info(
+                    f"Flood map for return period {return_period} already exists at {flood_map_path}. Skipping."
+                )
+                continue
             simulations: list[SFINCSSimulation] = []
             representative_year = self.config["representative_year"]
             if representative_year is None:
