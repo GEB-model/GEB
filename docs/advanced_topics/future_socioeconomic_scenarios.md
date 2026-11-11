@@ -30,70 +30,13 @@ The build method is automated to fetch the region mask and extract and crop data
 
 ### Configuration Parameters
 
-**ssp** *(default: '2')*:
-
-List of Shared Socioeconomic Pathways to build data for. Choose from: '1', '2', '3', '4', '5'. Example:
- 
-    ssp:
-      - '2'
-      - '5'
-
-**rcp** *(default: '70')*:
-
-List of Representative Concentration Pathways to build data for. Choose from: '19', '26', '34', '45', '60', '70', '85'. Example:
- 
-    rcp:
-      - '45'
-      - '70'
-
-**damage_function** *(required)*:
-
-List of macroeconomic climate damages function to build data for. Choose from: 'K' (Kompas), 'KU' (Kompas + Urban Heat Island), 'KPU' (Kompas + U + persistent damages), 'RU' (RICE + U), 'RPU' (RICE + PU). Choose 'GDP' to project growth without damages. Example:
-
-    damage_function:
-      - 'GDP'
-      - 'K'
-
-**warming_percentile** *(default: '90')*
-
-List of global warming percentiles to build data for. Choose from: '10', '50', '90'. Example:
-
-    damage_function:
-      - '10'
-      - '50'
-
-### Source data for model build
-
-Currently, data for Climrisk spatial socioeconomic scenarios and damage functions is not public. If you need the data to build a model using the GEB Climrisk module, please contact Rodrigo Muñoz (<rodrigo.munos@atmosfera.unam.mx>)
-
-GEB will look for the Climrisk data within the local cache of your model, so make sure the `climrisk` folder is located within the `your_model_directory/cache` folder.
-
-## Run Configuration
-
-Configuration for running the model data with socioeconomic scenarios is specified in the `config.yml` file under the `setup_climrisk` field, which is itself under the `agent_settings` field. Only a single combination of parameters can be used per run. For further guidance, look at the `reasonable_default_config.yml` file.
-
-### Configuration Parameters
-
-
-**project_income** *(required)*:
-
-Turn on household income growth, calculating it with GDP per capita growth. Example:
- 
-    project_income: false
-
-**project_costs** *(required)*:
-
-Turn on adaptation, relocation and asset damages costs growth, calculating it with the growth of the sum of the GDP for all countries that include the modelled region. Example:
- 
-    project_costs: true
-
 **ssp** *(required)*:
 
 Shared Socioeconomic Pathway to use. Choose from: '1', '2', '3', '4', '5'. Example:
  
     ssp: '2'
 
-**rcp** *(required)*:
+**rcp**:
 
 Representative Concentration Pathway. Choose from: '19', '26', '34', '45', '60', '70', '85'. Example:
  
@@ -105,11 +48,30 @@ Macroeconomic climate damages function to build data for. Choose from: 'K' (Komp
 
     damage_function: 'KU'
 
-**warming_percentile** *(required)*
+**warming_percentile**:
 
 Global warming percentile. Choose from: '10', '50', '90'. Example:
 
     damage_function: '90'
+
+### Source data for model build
+
+Currently, data for Climrisk spatial socioeconomic scenarios and damage functions is not public. If you need the data to build a model using the GEB Climrisk module, please contact Rodrigo Muñoz (<rodrigo.munos@atmosfera.unam.mx>)
+
+GEB will look for the Climrisk data within the local cache of your model, so make sure the `climrisk` folder is located within the `your_model_directory/cache` folder.
+
+## Run Configuration
+
+Configuration for running the model data with socioeconomic scenarios is specified in the `config.yml` file under the `climrisk_socioeconomic_scenarios` field, which is itself under the `agent_settings.households` field. Only a single combination of parameters can be used per run. For further guidance, look at the `reasonable_default_config.yml` file.
+
+### Configuration Parameters
+
+
+**project_values** *(required)*:
+
+Turn on household income growth, calculating it with GDP per capita growth. Example:
+ 
+    project_values: false
 
 **country_wide** *(required)*
 
