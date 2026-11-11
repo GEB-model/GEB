@@ -432,10 +432,17 @@ def spinup(
     metavar="KEY=VALUE",
     help="Argument to pass to the method, as KEY=VALUE. Can be repeated.",
 )
+@click.option(
+    "--build-only",
+    is_flag=True,
+    default=False,
+    help="Only build the models without running the simulations (e.g., for estimate_return_periods, only build the SFINCS models).",
+)
 @click_run_options()
 def exec(
     method: str,
     method_args_raw: tuple[str, ...],
+    build_only: bool = False,
     save_checkpoints: tuple[str, ...] = (),
     continue_from_checkpoint: str | None = None,
     **kwargs: Any,
@@ -445,6 +452,7 @@ def exec(
     Args:
         method: Method to run on the model.
         method_args_raw: Arguments to pass to the method, as KEY=VALUE strings.
+        build_only: If set, pass build_only=True to the method.
         save_checkpoints: Checkpoint dates to save.
         continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
         **kwargs: Keyword arguments to pass to the method.
@@ -461,6 +469,8 @@ def exec(
         key, value = raw_arg.split("=", 1)
         method_args[key] = value
 
+    if build_only:
+        method_args["build_only"] = True
     if save_checkpoints:
         method_args["save_checkpoints"] = save_checkpoints
     if continue_from_checkpoint is not None:
