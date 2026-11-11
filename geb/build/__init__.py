@@ -2548,16 +2548,30 @@ class GEBModel(
         return end_date
 
     @build_method(required=True)
-    def set_ssp(self, ssp: str) -> None:
-        """Sets the SSP name for the model.
+    def set_ssp(
+        self,
+        ssp: str,
+        rcp: str | None = None,
+    ) -> None:
+        """Sets the SSP (socioeconomic scenario) and RCP (climate forcing) name for the model. If only either ssp is defined, the other scenario will be inferred from one of the standard scenario combinations.
 
         Args:
-            ssp: The SSP name. Supported SSPs are: ssp1, ssp3, ssp5.
+            ssp: The SSP name. Supported SSPs are: ssp1, ssp2, ssp3, ssp4, ssp5. Some data might not be available for all SSPs.
+            rcp: The RCP name. Supported RCPs are: 19, 26, 34, 45, 60, 70, 85. Some data might not be available for all RCPs.
+        Raises:
+            ValueError: If the SSP or RCP value is not supported.
         """
-        assert ssp in ["ssp1", "ssp3", "ssp5"], (
-            f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
-        )
-        self.set_params({"ssp": ssp}, name="ssp")
+        if ssp not in ["ssp1", "ssp2", "ssp3", "ssp4", "ssp5"]:
+            raise ValueError(
+                f"SSP {ssp} not supported. Supported SSPs are: "
+                "ssp1, ssp2, ssp3, ssp4, ssp5."
+            )
+        if rcp not in ["19", "26", "34", "45", "60", "70", "85", None]:
+            raise ValueError(
+                f"RCP {rcp} not supported. Supported RCPs are: "
+                "19, 26, 34, 45, 60, 70, 85."
+            )
+        self.set_params({"ssp": ssp, "rcp": rcp}, name="ssp")
 
     @property
     def ssp(self) -> str:
@@ -2566,43 +2580,88 @@ class GEBModel(
         Returns:
             The SSP name. If no SSP was set, returns "ssp3" (middle of the road).
         """
-        return self.params["ssp"]["ssp"] if "ssp" in self.params else "ssp3"
+        if "ssp" not in self.params:
+            return "ssp3"
+        params = self.params["ssp"]
+        configured_ssp = params.get("ssp")
+        if configured_ssp is None:
+            return "ssp3"
+        else:
+            return configured_ssp
+
+    @property
+    def rcp(self) -> str:
+        """Return the configured RCP, or infer its default from the SSP.
+
+        Raises:
+            ValueError: If the SSP has no default RCP and no RCP was explicitly set.
+        """
+        if "ssp" not in self.params:
+            return "70"
+
+        params = self.params["ssp"]
+        configured_rcp = params.get("rcp")
+        if configured_rcp is not None:
+            return configured_rcp
+
+        configured_ssp = params.get("ssp")
+        if configured_ssp is None:
+            return "70"
+
+        default_rcps = {
+            "ssp1": "26",
+            "ssp2": "45",
+            "ssp3": "70",
+            "ssp4": "34",
+            "ssp5": "85",
+        }
+        try:
+            return default_rcps[params["ssp"]]
+        except KeyError:
+            raise ValueError(
+                f"{params['ssp']} has no default RCP combination; "
+                "rcp must be set explicitly"
+            ) from None
 
     @property
     def ISIMIP_ssp(self) -> str:
-        """Returns the ISIMIP SSP name.
+        """Returns the ISIMIP SSP-RCP name. ISIMIP only uses the climate forcing value (RCP), so the SSP-RCP might be different from the model's SSP.
 
         Raises:
-            ValueError: If the SSP is not supported.
+            ValueError: If the RCP is not supported.
         """
-        if self.ssp == "ssp1":
+        if self.rcp == "26":
             return "ssp126"
-        elif self.ssp == "ssp3":
+        elif self.rcp == "70":
             return "ssp370"
-        elif self.ssp == "ssp5":
+        elif self.rcp == "85":
             return "ssp585"
         else:
-            raise ValueError(f"SSP {self.ssp} not supported.")
+            raise ValueError(f"RCP-{self.rcp} not supported.")
 
     @property
     def ssp_rcp(self) -> int:
-        """Returns the SSP-RCP identifier.
+        """Returns the SSP-RCP identifier for CMIP models. CMIP models only use the climate forcing data, so the SSP-RCP combination might be different from the model's SSP.
 
         Raises:
-            ValueError: If the SSP is not supported.
+            ValueError: If the SSP-RCP is not supported.
         """
-        if self.ssp == "ssp1":
+        if self.rcp == "19":
+            return 119
+        if self.rcp == "26":
             return 126
-        elif self.ssp == "ssp2":
-            return 245
-        elif self.ssp == "ssp3":
-            return 370
-        elif self.ssp == "ssp4":
+        elif self.rcp == "34":
             return 434
-        elif self.ssp == "ssp5":
+        elif self.rcp == "45":
+            return 245
+        elif self.rcp == "60":
+            return 460
+        elif self.rcp == "70":
+            return 370
+        elif self.rcp == "85":
             return 585
         else:
-            raise ValueError(f"SSP {self.ssp} not supported.")
+            raise ValueError(f"RCP-{self.rcp} not supported.")
 
     @build_method(required=False)
     def setup_precipitation_scaling_factors_for_return_periods(
