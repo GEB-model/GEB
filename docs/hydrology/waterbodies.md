@@ -7,6 +7,12 @@ Lake outflow depends on the water level and the outlet size. A higher water
 level allows more water to flow out. Water leaving a lake enters the downstream river or waterbody.
 
 The local inertial solver calculates lake outflow at each routing substep.
+Reported outlet discharge is the actual released volume accumulated over the
+routing hour divided by its duration, including releases into rivers, downstream
+waterbodies and domain boundaries. It is not the lake's incoming discharge.
+Older outputs need a rerun to obtain corrected outlet series; rerun spinup as
+well when regenerating channel geometry derived from discharge history.
+
 The lake outlet is represented by a weir rating curve. For the current
 parabolic outlet shape, discharge follows `Q = k × h²`, where `h` is the
 water depth above the outlet (m) and `k` is a lake-specific outlet factor

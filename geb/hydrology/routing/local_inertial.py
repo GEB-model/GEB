@@ -201,6 +201,10 @@ class LocalInertial:
     1D local inertial dynamic routing formulation for river network reaches,
     supporting power-law (parabolic) channels and CaMa-Flood style dead-storage floodplains
     (Yamazaki et al. 2011; Bates et al. 2010).
+
+    Attributes:
+        waterbody_outflow_m3: Actual release volume per waterbody in the latest
+            macro timestep (m³). Reset each step; independent of release controls.
     """
 
     def __init__(
@@ -612,6 +616,7 @@ class LocalInertial:
         )
 
         self._waterbody_inflow_perm: ArrayFloat32 = np.empty(n_wb, dtype=np.float32)
+        self.waterbody_outflow_m3: ArrayFloat64 = np.zeros(n_wb, dtype=np.float64)
         self._retention_inflow_perm: ArrayFloat32 = np.empty(n_ret, dtype=np.float32)
         self._retention_outflow_perm: ArrayFloat32 = np.empty(n_ret, dtype=np.float32)
 
@@ -936,6 +941,11 @@ class LocalInertial:
     ]:
         """Executes a full macro-timestep routing update.
 
+        Notes:
+            Actual routed releases are accumulated in ``waterbody_outflow_m3``
+            (m³), reset at the start of each call. Release controls remain separate
+            so natural-lake NaN flags survive all adaptive substeps.
+
         Args:
             Q_prev_m3_s: Channel discharge at start of timestep (m³/s).
             river_storage_m3: Total reach storage volume (m³).
@@ -996,6 +1006,7 @@ class LocalInertial:
             self._transmission_loss_perm[:] = transmission_loss_m3
 
         self._iteration_count += 1
+        self.waterbody_outflow_m3.fill(0.0)
         self._substep_buffers.wb_extra_lateral_accum_m3.fill(0.0)
         self._substep_buffers.terminal_wb_outflow_accum_m3.fill(0.0)
         diagnostics: RoutingStepDiagnostics | None = None
@@ -1014,6 +1025,7 @@ class LocalInertial:
             storage_m3=waterbody_storage_m3,
             prescribed_outflow_m3=outflow_per_waterbody_m3,
             inflow_m3=self._waterbody_inflow_perm,
+            outflow_m3=self.waterbody_outflow_m3,
             lake_area=self._wb_lake_area,
             lake_factor=self._wb_lake_factor,
             outflow_height=self._wb_outflow_height,

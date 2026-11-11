@@ -2331,8 +2331,10 @@ class Routing(Module):
             self.hydrology.waterbodies.var.storage[self._routing_waterbody_indices] = (
                 routed_waterbody_storage_m3
             )
+            # Release controls may be NaN or consumed by transfers; report only
+            # water actually delivered through the solver's outlet links.
             outflow_per_waterbody_m3[self._routing_waterbody_indices] = (
-                routed_outflow_m3
+                self.router.waterbody_outflow_m3
             )
             waterbody_inflow_m3: ArrayFloat32 = np.zeros(
                 self.hydrology.waterbodies.n, dtype=np.float32

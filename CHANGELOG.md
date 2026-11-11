@@ -1,4 +1,5 @@
 # dev
+- Report actual lake and reservoir outlet releases accumulated across routing substeps and all outlet link types, rather than substituting upstream inflow or consumed release controls. Existing outputs require rerunning; rerun spinup to regenerate affected discharge-derived channel geometry. No configuration or input migration is required.
 - Fix Green-Ampt infiltration increments by consistently integrating the same equation instead of subtracting an approximate forward solution from an exact inverse; rerun spinup when comparing with older simulations.
 - Add optional `hydrology.routing.interflow_peak_hours` (hours, default `0.0`) to delay interflow in the accounted runoff buffer, with complete late-day response storage and checkpoint compatibility checks. Include a separate-output Europe_003 trial overlay for the Guntauninkai-calibrated settings; these parameters are not new regional defaults.
 - Bound floodplain temporary arrays to row blocks and load only the required DEM window, reducing peak memory without changing floodplain profiles.

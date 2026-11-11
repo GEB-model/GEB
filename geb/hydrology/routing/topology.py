@@ -541,6 +541,8 @@ class WaterbodyCoupling(NamedTuple):
         storage_m3: Current water storage volume per waterbody (m³).
         prescribed_outflow_m3: Outflow volume prescribed by human operations or dams (m³).
         inflow_m3: Cumulative inflow volume accumulator per waterbody (m³).
+        outflow_m3: Actual routed release accumulated per waterbody (m³), separate
+            from prescribed releases and natural-lake NaN control flags.
         lake_area: Surface area per waterbody (m²).
         lake_factor: Rating curve weir discharge multiplier per waterbody.
         outflow_height: Weir sill elevation height above bed per waterbody (meters).
@@ -557,6 +559,7 @@ class WaterbodyCoupling(NamedTuple):
     storage_m3: ArrayFloat64
     prescribed_outflow_m3: ArrayFloat32
     inflow_m3: ArrayFloat32
+    outflow_m3: ArrayFloat64
     lake_area: ArrayFloat32
     lake_factor: ArrayFloat32
     outflow_height: ArrayFloat32

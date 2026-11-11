@@ -837,6 +837,7 @@ def _update_waterbodies_substep(
                     buffers.wb_extra_lateral_accum_m3[target_reach] += release
                     buffers.wb_outflow_avail_buf[wb_id_node] = 0.0
                     wb.storage_m3[wb_id_node] -= release
+                    wb.outflow_m3[wb_id_node] += release
 
         # Transfer waterbody releases to connected downstream cascading waterbodies
         n_wb_to_wb: int = len(wb.wb_to_wb_src_wb)
@@ -847,6 +848,7 @@ def _update_waterbodies_substep(
                 if release > 0.0:
                     tgt_wb: int = wb.wb_to_wb_tgt_wb[link_idx]
                     wb.storage_m3[src_wb] -= release
+                    wb.outflow_m3[src_wb] += release
                     wb.storage_m3[tgt_wb] += release
                     wb.inflow_m3[tgt_wb] += np.float32(release)
                     buffers.wb_outflow_avail_buf[src_wb] = 0.0
@@ -859,6 +861,7 @@ def _update_waterbodies_substep(
                 release = buffers.wb_outflow_avail_buf[term_wb]
                 if release > 0.0:
                     wb.storage_m3[term_wb] -= release
+                    wb.outflow_m3[term_wb] += release
                     buffers.terminal_wb_outflow_accum_m3[0] += np.float32(release)
                     buffers.wb_outflow_avail_buf[term_wb] = 0.0
 

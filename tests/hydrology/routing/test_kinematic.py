@@ -273,6 +273,7 @@ def test_serial_and_parallel_kinematic_kernels_equivalence() -> None:
             storage_m3=np.zeros(0, dtype=np.float64),
             prescribed_outflow_m3=np.zeros(0, dtype=np.float32),
             inflow_m3=np.zeros(0, dtype=np.float32),
+            outflow_m3=np.zeros(0, dtype=np.float64),
             lake_area=np.zeros(0, dtype=np.float32),
             lake_factor=np.zeros(0, dtype=np.float32),
             outflow_height=np.zeros(0, dtype=np.float32),

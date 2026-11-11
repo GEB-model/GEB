@@ -1,5 +1,8 @@
 """Check construction-year activation with the incoming routing solver."""
 
+# Project instructions require explicit None returns and assertion documentation.
+# ruff: noqa: DOC202, DOC502
+
 from datetime import datetime
 from unittest.mock import Mock
 
@@ -12,12 +15,17 @@ from geb.hydrology.routing import Routing, RoutingVariables, create_river_networ
 from geb.hydrology.waterbodies import LAKE, RESERVOIR, WaterBodies, WaterBodyVariables
 
 
-@pytest.mark.parametrize("existing_lake", [False, True])
-def test_construction_with_incoming_solver(existing_lake: bool) -> None:
-    """Keep water and stable model IDs when a future reservoir starts operating.
+def _make_reservoir_routing(existing_lake: bool) -> tuple[Routing, WaterBodies, Mock]:
+    """Build a four-cell river with a future reservoir and optional active lake.
 
     Args:
-        existing_lake: Start with lake ID 1 active, or with both reservoirs unbuilt.
+        existing_lake: Whether stable waterbody ID 1 starts as an active lake.
+
+    Returns:
+        Routing, waterbody state and model with lengths in meters and storage in m³.
+
+    Raises:
+        AssertionError: If the initial active topology has unexpected waterbody IDs.
     """
     routing: Routing = Routing.__new__(Routing)
     waterbodies: WaterBodies = WaterBodies.__new__(WaterBodies)
@@ -157,6 +165,26 @@ def test_construction_with_incoming_solver(existing_lake: bool) -> None:
     np.testing.assert_array_equal(
         routing._routing_waterbody_indices, [1] if existing_lake else []
     )
+    return routing, waterbodies, model
+
+
+@pytest.mark.parametrize("existing_lake", [False, True])
+def test_construction_with_incoming_solver(existing_lake: bool) -> None:
+    """Keep water and stable model IDs when a future reservoir starts operating.
+
+    Args:
+        existing_lake: Start with lake ID 1 active, or with both reservoirs unbuilt.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If activation changes stored water or stable waterbody IDs.
+    """
+    routing: Routing
+    waterbodies: WaterBodies
+    model: Mock
+    routing, waterbodies, model = _make_reservoir_routing(existing_lake)
     zeros: np.ndarray = np.zeros((24, 4), dtype=np.float32)
     initial_storage: float = float(
         waterbodies.var.storage.sum() + routing.var.river_storage_m3.sum()

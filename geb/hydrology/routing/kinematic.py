@@ -168,6 +168,7 @@ def _transfer_waterbody_outflows(
         outflow_vol: float = np.float64(wb.prescribed_outflow_m3[src_wb])
         if outflow_vol > 0.0:
             wb.storage_m3[src_wb] -= outflow_vol
+            wb.outflow_m3[src_wb] += outflow_vol
             wb.storage_m3[tgt_wb] += outflow_vol
             wb.inflow_m3[tgt_wb] += np.float32(outflow_vol)
             wb.prescribed_outflow_m3[src_wb] = np.float32(0.0)
@@ -182,6 +183,7 @@ def _transfer_waterbody_outflows(
         if wb_of > np.float32(0.0):
             rel_vol: float = np.float64(wb_of)
             wb.storage_m3[wb_id_up] -= rel_vol
+            wb.outflow_m3[wb_id_up] += rel_vol
             kin.kin_wb_inflow_m3[tgt_reach] += wb_of
             wb.prescribed_outflow_m3[wb_id_up] = np.float32(0.0)
 
