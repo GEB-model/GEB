@@ -324,3 +324,35 @@ def test_return_period_model_zero_threshold_fixed() -> None:
     )
     assert model_quant.u == 0.0
     assert (model_quant.rl_table["GPD_POT_RL"] == 0.0).all()
+
+
+def test_return_period_model_free_shape_skips_unfittable_thresholds(
+    synthetic_daily_discharge: pd.Series,
+) -> None:
+    """Test that thresholds with too few peaks for a free-shape fit are skipped.
+
+    With min_exceed=1 and a free shape, the highest candidate thresholds have
+    fewer than the 6 exceedances needed by the L-moment fit. These must be
+    skipped rather than raising inside fit_gpd_lmoments.
+    """
+    model: ReturnPeriodModel = ReturnPeriodModel(
+        series=synthetic_daily_discharge,
+        return_periods=[2, 10],
+        min_exceed=1,
+        nboot=50,
+        fixed_shape=None,
+        fixed_scale=None,
+    )
+
+    assert model.n_exc >= 6
+    assert (model.candidates_df["n_exc"] >= 6).all()
+
+    # Fixed threshold with too few peaks for a free-shape fit raises a clear error
+    with pytest.raises(ValueError, match="fewer than min_exceed=6"):
+        ReturnPeriodModel(
+            series=synthetic_daily_discharge,
+            return_periods=[2, 10],
+            fixed_quantile=0.99,
+            min_exceed=1,
+            fixed_shape=None,
+        )
