@@ -1840,8 +1840,6 @@ class Agents(BuildModelBase):
             raise TypeError(
                 f"damage_function must be a string, got {type(damage_function).__name__}"
             )
-        else:
-            damage_function = damage_function.copy()
         if not isinstance(warming_percentile, str):
             raise TypeError(
                 f"warming_percentile must be a str, got {type(warming_percentile).__name__}"
