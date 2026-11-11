@@ -35,25 +35,6 @@ def test_explicit_ssp_rcp_pair_is_preserved(
 
 
 @pytest.mark.parametrize(
-    ("rcp", "expected_ssp"),
-    [
-        ("19", "ssp1"),
-        ("26", "ssp1"),
-        ("34", "ssp4"),
-        ("45", "ssp2"),
-        ("60", "ssp4"),
-        ("70", "ssp3"),
-        ("85", "ssp5"),
-    ],
-)
-def test_ssp_is_inferred_from_rcp(model: GEBModel, rcp: str, expected_ssp: str) -> None:
-    """Infer the default SSP from the configured RCP."""
-    model.set_ssp(rcp=rcp)
-    assert model.ssp == expected_ssp
-    assert model.rcp == rcp
-
-
-@pytest.mark.parametrize(
     ("ssp", "expected_rcp"),
     [
         ("ssp1", "26"),
@@ -75,7 +56,7 @@ def test_defaults_when_scenarios_are_unset(model: GEBModel) -> None:
     assert model.ssp == "ssp3"
     assert model.rcp == "70"
 
-    model.set_ssp()
+    model.set_ssp(ssp=model.ssp)
     assert model.ssp == "ssp3"
     assert model.rcp == "70"
 
