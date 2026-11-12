@@ -2090,13 +2090,22 @@ class Households(AgentBaseClass):
         operating_insurer = np.float32(0.3)
         public_reinsurer = np.float32(0.5)
 
+        adaptation_eval = (
+            self.model.config
+            .get("agent_settings", {})
+            .get("households", {})
+            .get("adaptation_evaluation", {})
+        )
+        cache_dir = adaptation_eval.get("building_damage_cache_dir")
+        if not cache_dir:
+            raise ValueError("Missing adaptation_evaluation.building_damage_cache_dir")
 
         if adapt_flood:
             self.update_risk_perceptions()
             damages_do_not_adapt, damages_adapt = (
                 self.flood_risk_module.calculate_building_flood_damages(
-                    export_building_damages = True,
-                    building_damage_cache_dir = "cluter_004/base/output/spinup/building_damage"
+                    export_building_damages=False,
+                    building_damage_cache_dir=cache_dir,
                 )
             )
             p_flood = 1.0 / np.asarray(self.return_periods, dtype=np.float32)
@@ -2292,9 +2301,8 @@ class Households(AgentBaseClass):
         if adapt_wind:
             damages_unprotected_w, damages_adapt_w = (
                 self.wind_risk_module.calculate_building_wind_damages(
-                    export_building_damages = True,
-                    building_damage_cache_dir = "output/spinup/building_damage"
-
+                    export_building_damages=False,
+                    building_damage_cache_dir=cache_dir,
                 )
             )
             self._last_damages_unprotected_w = damages_unprotected_w

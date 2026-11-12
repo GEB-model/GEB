@@ -714,6 +714,53 @@ class FloodRiskModule:
             }
         )
 
+        if building_damage_cache_dir is not None and not export_building_damages:
+            cache_dir = Path(building_damage_cache_dir)
+
+            for i, return_period in enumerate(self.households.return_periods):
+                cache_file = cache_dir / f"flood_rp{int(return_period)}.parquet"
+                if not cache_file.is_file():
+                    raise FileNotFoundError(
+                        f"Precomputed flood damage file not found: {cache_file}"
+                    )
+
+                cached = pd.read_parquet(cache_file)
+                required = {"id", "damages", "damages_flood_proofed", "inundation"}
+                missing = required.difference(cached.columns)
+                if missing:
+                    raise ValueError(
+                        f"{cache_file} is missing columns: {sorted(missing)}"
+                    )
+
+                unprotected, adapted = self.households.assign_damages_to_agents(
+                    agent_df,
+                    cached[["id", "damages", "damages_flood_proofed"]],
+                )
+                damages_do_not_adapt[i, lecz_mask] = unprotected
+                damages_adapt[i, lecz_mask] = adapted
+
+                inundation_by_building = cached[["id", "inundation"]].rename(
+                    columns={"id": "building_id"}
+                )
+                household_inundation = (
+                    agent_df.merge(
+                        inundation_by_building,
+                        left_on="building_id_of_household",
+                        right_on="building_id",
+                        how="left",
+                    )["inundation"].to_numpy(dtype=np.float32)
+                )
+                inundation[i, lecz_mask] = household_inundation
+
+            if not dynamic:
+                self.damages_do_not_adapt = damages_do_not_adapt
+                self.damages_adapt = damages_adapt
+
+            self.inundation = inundation
+            return damages_do_not_adapt, damages_adapt
+
+
+
         buildings = self.households.buildings[
             self.households.buildings["flooded"]
             & (self.households.buildings["id"].isin(lecz_building_ids))

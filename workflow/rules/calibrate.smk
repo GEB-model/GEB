@@ -137,7 +137,8 @@ def get_progress_message(wildcards, action):
     n_init = len(list(path.glob(f"{gen}_*/init.done")))
     n_altered = len(list(path.glob(f"{gen}_*/input/build_complete.txt")))
     n_params_set = len(list(path.glob(f"{gen}_*/params_set.done")))
-    n_spinup = len(list(path.glob(f"{gen}_*/spinup.done")))
+    #n_spinup = len(list(path.glob(f"{gen}_*/spinup.done")))
+    n_refreshed = len(list(path.glob(f"{gen}_*/agents_refreshed.done")))
     n_run = len(list(path.glob(f"{gen}_*/run.done")))
     n_eval = len(list(path.glob(f"{gen}_*/fitness.yml")))
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -145,7 +146,7 @@ def get_progress_message(wildcards, action):
     return (
         f"[{timestamp}] {action} for gen {gen}, ind {ind}. "
         f"Progress: {n_params}/{total} create, {n_init}/{total} init, {n_altered}/{total} alter, "
-        f"{n_params_set}/{total} set, {n_spinup}/{total} spinup, {n_run}/{total} run, {n_eval}/{total} evaluate."
+        f"{n_params_set}/{total} set, {n_refreshed}/{total} refreshed agents, {n_run}/{total} run, {n_eval}/{total} evaluate."
     )
 
 creator.create("FitnessMulti", base.Fitness, weights=weights)
@@ -426,6 +427,20 @@ rule init_individual:
             .setdefault("households", {})
             .setdefault("adaptation_evaluation", {})
         )
+
+        cache_dir = (
+            Path(base).resolve()
+            / "output"
+            / "spinup"
+            / "building_damage"
+        )
+        if not cache_dir.is_dir():
+            raise FileNotFoundError(
+                f"Building damage cache not found for {wildcards.cluster}: {cache_dir}"
+            )
+        
+        adaptation_eval["building_damage_cache_dir"] = str(cache_dir)
+
         #adaptation_eval["cluster_run_dirs"] = [
         #    str(cluster_run_dir(wildcards.gen, wildcards.ind, cluster).resolve())
         #    for cluster in CLUSTERS
@@ -504,22 +519,39 @@ rule set_cluster_parameters:
                "report._discharge_stations+=true")
         run_command(cmd, log[0], "Could not set cluster parameters")
         
-rule spinup_cluster:
-    input:
+#rule spinup_cluster:
+#    input:
+#        str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "params_set.done")
+#    output:
+#        touch(str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "spinup.done"))
+#    log:
+#        str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "logs" / "spinup.log")
+#    wildcard_constraints:
+#        cluster="|".join(CLUSTERS)
+#    run:
+#        work = cluster_run_dir(wildcards.gen, wildcards.ind, wildcards.cluster)
+#        run_command(f"geb spinup -wd {work}", log[0], "Cluster spinup failed")
+
+rule refresh_agents_cluster:
+    input: 
         str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "params_set.done")
     output:
-        touch(str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "spinup.done"))
+        touch(str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "agents_refreshed.done"))
     log:
-        str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "logs" / "spinup.log")
+        str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "logs" / "refresh_agents.log")
     wildcard_constraints:
         cluster="|".join(CLUSTERS)
     run:
         work = cluster_run_dir(wildcards.gen, wildcards.ind, wildcards.cluster)
-        run_command(f"geb spinup -wd {work}", log[0], "Cluster spinup failed")
+        run_command(
+            f"geb exec refresh_agent_attributes -wd {work}",
+            log[0],
+            "Could not refresh agent attributes",
+        )
 
 rule run_cluster:
     input:
-        str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "spinup.done")
+        str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "agents_refreshed.done")
     output:
         touch(str(RUNS_DIR / "{gen}_{ind}" / "{cluster}" / "run.done"))
     log:

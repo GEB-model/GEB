@@ -197,6 +197,29 @@ class WindRiskModule:
         if len(rps) == 0:
             return damages_unprotected_w, damages_adapt_w
     
+        #NEW CODE pre-calculated damges
+        if building_damage_cache_dir is not None and not export_building_damages:
+            cache_dir = Path (building_damage_cache_dir)
+
+            for i, rp in enumerate(rps):
+                cache_file = cache_dir / f"wind_rp{int(rp)}.parquet"
+                if not cache_file.is_file():
+                    raise FileNotFoundError(f"Precomputed wind damage file not found: {cache_file}")
+
+                cached = pd.read_parquet(cache_file)
+                required = {"id", "damages_unprotected", "damages_wind_shutters"}
+                missing = required.difference(cached.columns)
+                if missing:
+                    raise ValueError(f"{cache_file} is missing columns: {sorted(missing)}")
+
+                unprotected, adapted = self.households.assign_wdamages_to_agents(
+                    agent_df,
+                    cached[["id", "damages_unprotected", "damages_wind_shutters"]],
+                )
+                damages_unprotected_w[i, lecz_mask] = unprotected
+                damages_adapt_w[i, lecz_mask] = adapted
+
+            return damages_unprotected_w, damages_adapt_w 
         # Ensure buildings is a GeoDataFrame with a CRS (typically EPSG:4326 in this project)
         buildings_gdf = buildings
     

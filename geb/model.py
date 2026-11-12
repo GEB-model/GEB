@@ -827,13 +827,31 @@ class GEBModel(Module):
         # save initial household attributes
         self.logger.info(f"Refreshing household attributes for {agent_type}...")
         path: Path = self.store.path
-        name = getattr(self.agents, agent_type).name
-        self.logger.debug(f"Saving {name}.var")
-        bucket = self.store.buckets[f"{name}.var"]
+        #name = getattr(self.agents, agent_type).name
+        #self.logger.debug(f"Saving {name}.var")
+        # bucket = self.store.buckets[f"{name}.var"]
+        # with ThreadPoolExecutor() as executor:
+        #     futures = bucket.save(path / f"{name}.var", executor)
+        #     for future in futures:
+        #         future.result()
+
+        #new code for callibration
+        bucket_names = [
+            bucket_name
+            for bucket_name in self.store.buckets
+            if bucket_name == "var" or bucket_name.endswith(".var")
+        ]
+
         with ThreadPoolExecutor() as executor:
-            futures = bucket.save(path / f"{name}.var", executor)
+            futures = []
+            for bucket_name in bucket_names:
+                self.logger.debug(f"Saving {bucket_name}")
+                bucket = self.store.buckets[bucket_name]
+                futures.extend(bucket.save(path / bucket_name, executor))
+
             for future in futures:
                 future.result()
+        #end new code for calibration
 
     def refresh_agents(self, agent_type: str = "households") -> None:
         """Refresh agent attributes.
