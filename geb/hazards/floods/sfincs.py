@@ -1581,17 +1581,31 @@ class SFINCSRootModel:
                 raise TypeError(
                     f"Discharge series for river {idx} must have a DatetimeIndex."
                 )
-
-            model = ReturnPeriodModel(
-                series=discharge,
-                return_periods=return_periods_arr,
-                min_exceed=min_exceed,
-                nboot=nboot,
-                fixed_shape=fixed_shape,
-                fixed_scale=fixed_scale,
-                p_value_threshold=p_value_threshold,
-                selection_strategy=selection_strategy,
-            )
+            try:
+                model = ReturnPeriodModel(
+                    series=discharge,
+                    return_periods=return_periods_arr,
+                    min_exceed=min_exceed,
+                    nboot=nboot,
+                    fixed_shape=fixed_shape,
+                    fixed_scale=fixed_scale,
+                    p_value_threshold=p_value_threshold,
+                    selection_strategy=selection_strategy,
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"Error fitting GPD-POT model for river {idx}: {e}. Retrying with fixed shape=0.0 (Gumbel distribution)."
+                )
+                model = ReturnPeriodModel(
+                    series=discharge,
+                    return_periods=return_periods_arr,
+                    min_exceed=min_exceed,
+                    nboot=nboot,
+                    fixed_shape=0.0,
+                    fixed_scale=fixed_scale,
+                    p_value_threshold=p_value_threshold,
+                    selection_strategy=selection_strategy,
+                )
 
             if write_figures and output_directory:
                 fig = model.plot_diagnostics()
