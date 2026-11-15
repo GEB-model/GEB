@@ -64,8 +64,8 @@ class INPUT4MIPS(Adapter):
                 base_url = f"https://esgf-node.ornl.gov/thredds/fileServer/user_pub_work/input4MIPs/CMIP6/CMIP/UoM/UoM-CMIP-1-2-0/atmos/yr/mole-fraction-of-carbon-dioxide-in-air/gr1-GMNHSH/v20160830/"
                 file_name = f"mole-fraction-of-carbon-dioxide-in-air_input4MIPs_GHGConcentrations_CMIP_UoM-CMIP-1-2-0_gr1-GMNHSH_0000-2014.nc"
             else:
-                base_url = f"https://esgf-node.ornl.gov/thredds/fileServer/user_pub_work/input4MIPs/CMIP6/ScenarioMIP/UoM/UoM-{model[ssp]}-{ssp}-1-2-1/atmos/yr/mole_fraction_of_carbon_dioxide_in_air/gr1-GMNHSH/v20181127/"
-                file_name = f"mole-fraction-of-carbon-dioxide-in-air_input4MIPs_GHGConcentrations_ScenarioMIP_UoM-{model[ssp]}-{ssp}-1-2-1_gr1-GMNHSH_2015-2500.nc"
+                base_url = f"https://esgf-node.ornl.gov/thredds/fileServer/user_pub_work/input4MIPs/CMIP6/ScenarioMIP/UoM/UoM-{model[scenario]}-{scenario}-1-2-1/atmos/yr/mole_fraction_of_carbon_dioxide_in_air/gr1-GMNHSH/v20181127/"
+                file_name = f"mole-fraction-of-carbon-dioxide-in-air_input4MIPs_GHGConcentrations_ScenarioMIP_UoM-{model[scenario]}-{scenario}-1-2-1_gr1-GMNHSH_2015-2500.nc"
             return base_url + file_name
 
         co2_historical = xr.open_dataset(
