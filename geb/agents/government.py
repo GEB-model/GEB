@@ -633,10 +633,12 @@ class Government(AgentBaseClass):
             maintenance_cost_per_m_dike = self.config["adaptation"][
                 "dike_maintenance_cost_per_year_usd"
             ]
-            if (
-                hasattr(self.model.agents.households.var, "factor_change")
-                and self.model.config["agent_settings"]["climrisk"]["project_costs"]
-            ):
+            climrisk_config = (
+                self.config.get("climrisk_socioeconomic_scenarios", {}) or {}
+            )
+            if hasattr(
+                self.model.agents.households.var, "factor_change"
+            ) and climrisk_config.get("project_values", False):
                 cost_per_meter *= self.model.agents.households.var.factor_change
                 maintenance_cost_per_m_dike *= (
                     self.model.agents.households.var.factor_change

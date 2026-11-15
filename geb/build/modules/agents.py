@@ -1864,7 +1864,7 @@ class Agents(BuildModelBase):
             raise ValueError("reference_year must be between 2010 and 2100.")
 
         self.logger.info("Processing climrisk data")
-        self.logger.info(f"Processing population: SSP{self.ssp}")
+        self.logger.info(f"Processing population: {self.ssp}")
         climrisk = self.data_catalog.fetch("climrisk").read(
             region=self.region,
             ssp=self.ssp.replace("ssp", ""),

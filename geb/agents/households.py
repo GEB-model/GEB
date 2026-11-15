@@ -1220,7 +1220,7 @@ class Households(AgentBaseClass):
                 (households_exposed_to_flooding.size, 10), -1, dtype=np.int32
             )
             EU_relocate = np.full(households_exposed_to_flooding.size, -np.inf)
-            building_idx = 0
+            building_idx = np.full(households_exposed_to_flooding.size, 0)
 
         # fill array of all households with NaN values for relocation utility
         EU_relocate_full = np.full(self.n, -np.inf, dtype=np.float32)
