@@ -16,7 +16,41 @@ from geb.build.modules.hydrography import (
     _extract_1sec_subgrid,
     calculate_dem_floodplain_geometry,
     calculate_stream_length,
+    propagate_downstream,
 )
+
+
+def test_propagate_downstream_main_stem_wins_at_confluence() -> None:
+    """A missing cell below a confluence gets the main stem value, not the tributary's."""
+    # cells 0 -> 1 -> 2 is the main stem, cell 3 is a tributary joining at cell 2.
+    # cells 2 and 4 are missing, cell 4 is downstream of cell 2.
+    data = np.array([250.0, 250.0, np.nan, 42.0, np.nan])
+    idxs_ds = np.array([1, 2, 4, 2, -1])
+    upstream_area = np.array([1.0, 5.0, 8.0, 1.5, 9.0])
+
+    result = propagate_downstream(
+        data=data,
+        idxs_ds=idxs_ds,
+        upstream_area=upstream_area,
+        missing_val=np.nan,
+    )
+
+    np.testing.assert_array_equal(result, [250.0, 250.0, 250.0, 42.0, 250.0])
+    # input is not modified
+    assert np.isnan(data[2])
+
+
+def test_propagate_downstream_does_not_overwrite_existing_values() -> None:
+    """Cells that already have data are kept, also when upstream values differ."""
+    data = np.array([10, -1, 20], dtype=np.int32)
+    idxs_ds = np.array([1, 2, -1])
+    upstream_area = np.array([1.0, 2.0, 3.0])
+
+    result = propagate_downstream(
+        data=data, idxs_ds=idxs_ds, upstream_area=upstream_area, missing_val=-1
+    )
+
+    np.testing.assert_array_equal(result, [10, 10, 20])
 
 
 def test_calculate_stream_length_high_res_diagonal() -> None:

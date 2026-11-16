@@ -397,6 +397,13 @@ class ReturnPeriodModel:
             self._set_zero_flow_return_levels()
             return
 
+        # The L-moment fit needs at least 6 exceedances when both shape and scale are
+        # free, so never accept fewer than that, regardless of the requested min_exceed.
+        min_exceed_fit: int = max(
+            min_exceed,
+            1 if (fixed_shape is not None or fixed_scale is not None) else 6,
+        )
+
         # Handle fixed threshold vs candidate threshold search
         if fixed_threshold is not None or fixed_quantile is not None:
             if fixed_threshold is not None:
@@ -420,10 +427,10 @@ class ReturnPeriodModel:
             self.all_peaks = properties_fixed["peak_heights"]
             n_exc: int = self.all_peaks.size
 
-            if n_exc < min_exceed:
+            if n_exc < min_exceed_fit:
                 raise ValueError(
                     f"Fixed threshold {u:.2f} has only {n_exc} exceedances, "
-                    f"fewer than min_exceed={min_exceed}."
+                    f"fewer than min_exceed={min_exceed_fit}."
                 )
 
             y: np.ndarray = self.all_peaks - u
@@ -464,10 +471,10 @@ class ReturnPeriodModel:
                 peaks_u = self.all_peaks[self.all_peaks > u_cand]
                 n_exc_cand: int = peaks_u.size
 
-                if n_exc_cand < min_exceed:
+                if n_exc_cand < min_exceed_fit:
                     if u_cand == u_candidates[-1]:
                         raise ValueError(
-                            f"No valid thresholds found with at least {min_exceed} exceedances. "
+                            f"No valid thresholds found with at least {min_exceed_fit} exceedances. "
                             f"Lowest candidate threshold {u_cand:.2f} has only {n_exc_cand} exceedances."
                         )
                     continue

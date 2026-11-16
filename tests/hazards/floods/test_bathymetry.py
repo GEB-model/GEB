@@ -12,6 +12,8 @@ from shapely.geometry import LineString
 
 from geb.hazards.floods.workflows.bathymetry import (
     burn_rivers,
+    calculate_river_bed_points,
+    enforce_minimum_river_width_for_connectivity,
     skip_subgrid_tiles_without_river_bed_levels,
 )
 from tests.testconfig import output_folder
@@ -378,3 +380,86 @@ def test_subgrid_tile_without_river_bed_levels() -> None:
     # the original function must be restored afterwards
     with pytest.raises(ValueError, match="Lengths of inputs do not match"):
         burn_river_rect(da_elv=elevation, da_man=manning, gdf_riv=river_on_tile_edge)
+
+
+def test_river_bed_points_decrease_downstream_across_rivers() -> None:
+    """The bed profile is continuous and never rises downstream at a junction of rivers with different depths."""
+    x = np.arange(0.5, 2000, 10.0)
+    y = np.arange(1999.5, 0, -10.0)
+    elevation = xr.DataArray(
+        np.broadcast_to(20.0 - 0.005 * x, (len(y), len(x))).astype(np.float32).copy(),
+        coords={"y": y, "x": x},
+        dims=("y", "x"),
+    ).rio.write_crs(32631)
+
+    # an upstream river that is much deeper than the downstream river
+    rivers = gpd.GeoDataFrame(
+        {
+            "width": [20.0, 20.0],
+            "depth": [20.0, 5.0],
+            "manning": [0.03, 0.03],
+            "downstream_ID": [1, -1],
+            "topological_stream_order": [0, 1],
+        },
+        geometry=[
+            LineString([(100, 1000), (1000, 1000)]),
+            LineString([(1000, 1000), (1900, 1000)]),
+        ],
+        crs=32631,
+    )
+
+    points = calculate_river_bed_points(elevation, rivers)
+    points = points.iloc[np.argsort(points.geometry.x.values)]
+
+    assert (np.diff(points["rivbed"].values) <= 1e-3).all()
+    assert points.geometry.x.is_unique
+    assert (points["rivbed"] < elevation.values.max()).all()
+
+
+def test_minimum_river_width_ensures_connected_channel() -> None:
+    """A narrow diagonal river is widened to at least one pixel diagonal."""
+    rivers = gpd.GeoDataFrame(
+        {"width": [3.0, 100.0]},
+        geometry=[LineString([(0, 0), (1, 1)]), LineString([(0, 0), (1, 2)])],
+        crs=32631,
+    )
+    widened = enforce_minimum_river_width_for_connectivity(
+        rivers, pixel_size=30.0, is_geographic=False
+    )
+    assert widened["width"].tolist() == pytest.approx([30.0 * np.sqrt(2.0), 100.0])
+    assert rivers["width"].tolist() == [3.0, 100.0]
+
+
+def test_river_bed_points_in_area_below_sea_level() -> None:
+    """Rivers passing through terrain below sea level (coastal bathymetry) do not raise and have a bed relative to sea level."""
+    x = np.arange(0.5, 2000, 10.0)
+    y = np.arange(1999.5, 0, -10.0)
+    # land that drops to -7 m bathymetry in the downstream half of the domain
+    elevation = xr.DataArray(
+        np.broadcast_to(np.where(x < 1000, 5.0, -7.0), (len(y), len(x)))
+        .astype(np.float32)
+        .copy(),
+        coords={"y": y, "x": x},
+        dims=("y", "x"),
+    ).rio.write_crs(32631)
+
+    rivers = gpd.GeoDataFrame(
+        {
+            "width": [20.0, 20.0],
+            "depth": [4.0, 4.0],
+            "manning": [0.03, 0.03],
+            "downstream_ID": [1, 999],
+            "topological_stream_order": [0, 1],
+        },
+        geometry=[
+            LineString([(100, 1000), (1000, 1000)]),
+            LineString([(1000, 1000), (1900, 1000)]),
+        ],
+        crs=32631,
+    )
+
+    points = calculate_river_bed_points(elevation, rivers)
+
+    assert np.isfinite(points["rivbed"]).all()
+    # the water surface is at sea level where the terrain is below sea level
+    assert points["rivbed"].min() == pytest.approx(-4.0, abs=0.1)

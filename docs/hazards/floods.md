@@ -78,6 +78,8 @@ We distinguish two parts of a SFINCS model: the static data and dynamic data:
     - `true`: the model is always overwritten
     - `false`: the model is always read, unless it doesn't exist yet
 
+- To re-use a root model that was built in another model run, set `hazards.floods.base_model_path` to the folder that contains the SFINCS root models (e.g., `/path/to/other_run/simulation_root/SFINCS`). The root models are then only read from this folder (they are never built or overwritten, regardless of `overwrite`, and an error is raised if they do not exist), while the SFINCS simulations are stored in the simulation root of the current run. By default (`null`), root models are built in and read from the simulation root of the current run.
+
 - The dynamic data (e.g., forcing data) created in the [`SFINCS simulation`][geb.hazards.floods.sfincs.SFINCSSimulation] is different for each SFINCS simulation (and usually much smaller) and never saved between SFINCS runs.
 
 ## Model runs

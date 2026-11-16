@@ -942,10 +942,18 @@ class Crops(BuildModelBase):
                             float(crop_id) in crops_in_region
                             and np.isnan(region_data[crop_name]).any()
                         ):
-                            raise ValueError(
-                                f"Crop {crop_name} has NaN values in region {region_id} ({region_iso3}) data. "
-                                "If it has no price at all, neither this country nor any country in "
-                                "its trade region has FAOSTAT prices for this crop in the model period."
+                            # log a warning that the crop has NaN values in the region data
+                            self.logger.warning(
+                                f"Crop {crop_name} has NaN values in region {region_id} data, substituting with mean price."
+                            )
+                            # substitute NaN values with the mean of the crop prices for that region
+                            mean_price = region_data.mean(axis=1)
+                            if any(np.isnan(mean_price)):
+                                raise ValueError(
+                                    f"Crop {crop_name} has NaN values in region {region_id} data."
+                                )
+                            region_data[crop_name] = region_data[crop_name].fillna(
+                                mean_price
                             )
                         region_dict[str(crop_id)] = region_data[crop_name].tolist()
                     # check if crop is in the crop calendar, if is raise an error because it must be

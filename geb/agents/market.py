@@ -174,7 +174,9 @@ class Market(AgentBaseClass):
             # Defining the dependent variable
             price = total_farmer_income[crop][has_price] / prod
 
-            y = np.log(price)
+            y = np.log(
+                np.maximum(price, 1e-10)
+            )  # Avoid log(0) by setting a minimum price
 
             # Fitting the model
             try:

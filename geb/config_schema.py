@@ -127,6 +127,15 @@ class FloodsConfig(BaseModel):
     write_figures: bool = Field(
         True, description="Whether to generate and save diagnostic figures."
     )
+    base_model_path: str | None = Field(
+        None,
+        description="Optional path to a folder with existing SFINCS root models. If set, root models are only read from this folder (never built or overwritten), while simulations are stored in the simulation root of the current model.",
+    )
+    representative_year: int | None = Field(
+        None,
+        ge=1,
+        description="Year used for sea-level-rise forcing in return-period maps. If null, the current model year is used.",
+    )
     return_periods: list[int] = Field(
         [2, 5, 10, 25, 50, 100, 250, 500, 1000],
         description="Return periods for flood maps.",

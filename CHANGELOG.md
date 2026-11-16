@@ -1,4 +1,8 @@
 # dev
+- Fixed SFINCS subgrid river burning giving steps and uphill bed slopes where consecutive rivers have different depths (e.g. a shallow bed at the model outflow). The river bed levels are now calculated with the same network-consistent method as the non-subgrid burn (bed decreasing downstream, continuous depth across rivers) and passed to hydromt-sfincs. Rebuild SFINCS models to apply this.
+- Fixed the SFINCS river outflow boundary water level being set to the burned bed level plus the outflow river's depth, which could be far above the surrounding terrain (e.g. ~21 m instead of ~5 m) when the bed at the outflow was burned with a different river depth. It is now the median unburned terrain elevation around the outflow cell (never below the bed). Rebuild SFINCS models to apply this.
+- Fixed SFINCS subgrid river burning producing diagonal one-pixel-wide channels that do not convey water (stalling or choking the simulation): rivers are now burned at least one subgrid pixel diagonal wide, which guarantees a 4-connected channel. Rebuild SFINCS models to apply this.
+- Fixed river widths (and river IDs) missing in the routing network being filled from a small tributary instead of the main stem at confluences. This could give a river reach a much smaller width than the reaches up- and downstream of it, creating a bottleneck in SFINCS flood maps. Rebuild `setup_hydrography` (and everything depending on it) to apply this to existing models.
 - Fixed a build failure in `setup_coastal_water_levels` for small coastal models without any GTSM station inside their bounds: the nearest offshore stations are now used, with a warning in the log.
 - Fixed a build failure in `setup_region` (shape mismatch between MERIT Hydro flow direction and elevation) for some regions: merged MERIT Hydro tiles now get exact 3-arcsecond grid coordinates, so all MERIT Hydro variables are clipped to the same pixels.
 - Fixed spinup failing with "divide by zero encountered in log" in the crop market's price model when a crop has years without production: those years are now left out of the price regression instead of setting production to 1. With the dynamic market enabled, a crop that is grown but has no estimated price model now raises a clear error.
@@ -14,6 +18,9 @@
 - Fixed a build failure in `setup_region` ("cannot align objects ... along y") for some regions, caused by tiny floating-point differences between the coordinates of the MERIT Hydro elevation and flow direction data.
 - Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
+- Added the optional `hazards.floods.representative_year` setting for sea-level-rise forcing in return-period maps; `null` uses the current model year.
+- Added a `--build-only` flag to `geb exec` (e.g., `geb exec estimate_return_periods --build-only`) to only build the SFINCS models for the return-period flood maps without running the simulations.
+- Reduced memory use when merging the flood maps of multiple SFINCS simulations into one return-period map. Maps are now read one at a time and spilled to temporary files next to the simulations, then merged into a single pre-allocated array, so peak memory is roughly the size of the final map instead of several times the size of all maps combined. This requires temporary disk space equal to the combined size of the individual maps.
 - Added `cmip6_model` option to `setup_forcing` (default `gfdl_esm4`) and made it consistently available through the forcing build methods. CMIP6 cache files are now stored per model (`cmip6_combined_deltas_{model}.zarr`); previously cached CMIP6 files are no longer used and can be deleted.
 
 # v1.0.0b37
@@ -28,10 +35,12 @@
 - Various improvements to dashboard.
 - SFINCS is now run with a native binary by default (`/scistor/ivm/GEB/sfincs/bin/sfincs`, or `sfincs-gpu` when a GPU is detected). Apptainer and Docker remain available by setting the `SFINCS_RUNTIME` environment variable to `apptainer` or `docker`.
 - Now set ssp-rcp for climate change projection based on model ssp setting.
+- Added `hazards.floods.base_model_path` to read existing SFINCS root models from another location (read-only) while storing the SFINCS simulations in the current simulation root.
 - Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.
 
 # v1.0.0b36
 - Fixed CMIP6 download requesting historical years 2015-2016 and future years starting in 2017, which left a two-year gap and made the delta calculation fail. Historical now covers 1950-2014 and future 2015-2100; cached `cmip6_future_*.zip` files must be deleted and redownloaded.
+- Fixed SFINCS outflow point of rivers flowing into the ocean being moved in the wrong direction (out of the region) when the river extends beyond the region boundary, and fixed the 1 m upstream step for projected coordinate systems.
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 
 # v1.0.0b35

@@ -163,3 +163,42 @@ def create_outflow_in_mask(
             outflows[contour_row, contour_col] = True
 
     return outflows
+
+
+def get_outflow_water_level(
+    terrain_elevation: np.ndarray,
+    row: int,
+    col: int,
+    bed_elevation: float,
+    window_radius: int = 1,
+) -> float:
+    """Calculates the constant water level of a river outflow boundary.
+
+    The water level is the median elevation of the unburned terrain around the
+    outflow cell, i.e. the level of the surrounding banks. It is intentionally not
+    derived from the burned bed level plus the river depth, because the bed level at
+    the outflow is interpolated between rivers of different depths and does not
+    necessarily match the depth of the outflow river. That can set the boundary
+    water level far above the surrounding terrain.
+
+    Args:
+        terrain_elevation: 2D array with the elevation of the terrain before any rivers
+            were burned in (m).
+        row: Row index of the outflow cell.
+        col: Column index of the outflow cell.
+        bed_elevation: Burned bed elevation at the outflow cell (m). The water level is
+            never set below this.
+        window_radius: Radius (in cells) of the window around the outflow cell used to
+            determine the terrain level.
+
+    Returns:
+        The water level of the outflow boundary (m).
+    """
+    window: np.ndarray = terrain_elevation[
+        max(row - window_radius, 0) : row + window_radius + 1,
+        max(col - window_radius, 0) : col + window_radius + 1,
+    ]
+    window = window[np.isfinite(window)]
+    if window.size == 0:
+        return bed_elevation
+    return float(max(np.median(window), bed_elevation))
