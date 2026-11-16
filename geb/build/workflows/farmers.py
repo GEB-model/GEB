@@ -243,13 +243,25 @@ def create_farm_distributions(
         assert farm_sizes.sum() == size_class_data.whole_cells
 
     region_farm_sizes: ArrayInt32 = np.concatenate(region_farm_sizes)
-    region_agents = pd.DataFrame(
+    return create_farmers_table(region_farm_sizes, UID)
+
+
+def create_farmers_table(farm_sizes_cells: ArrayInt32, region_id: int) -> pd.DataFrame:
+    """Create the farmers table with one row per farmer.
+
+    Args:
+        farm_sizes_cells: Farm size of each farmer (number of subgrid cells). Can be empty.
+        region_id: Region ID of the farmers.
+
+    Returns:
+        DataFrame with the columns `farm_size_cells` and `region_id`.
+    """
+    return pd.DataFrame(
         {
-            "farm_size_cells": region_farm_sizes,
-            "region_id": np.full_like(region_farm_sizes, UID, dtype=np.int32),
+            "farm_size_cells": farm_sizes_cells,
+            "region_id": np.full_like(farm_sizes_cells, region_id, dtype=np.int32),
         }
     )
-    return region_agents
 
 
 @njit(cache=True, parallel=False)

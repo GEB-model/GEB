@@ -241,7 +241,7 @@ def setup_donor_countries(
     # load HDI index
     dev_index = data_catalog.fetch("un_hdi").read()
 
-    dev_index.rename(columns={"Human Development Index": "HDI"}, inplace=True)
+    dev_index = dev_index.rename(columns={"Human Development Index": "HDI"})
     dev_index = (
         dev_index.groupby("Code", as_index=False)["HDI"].mean().set_index("Code")
     )  # calculate mean HDI for each country

@@ -159,14 +159,14 @@ def set_river_initial_water_level(
         return "No burned river cells found; initial water levels were not changed."
 
     sfincs_model.initial_conditions.create(
-        ini=initial_level,
+        zsini=initial_level,
         reproj_method="nearest",
     )
     # initial_conditions.create only sets the map in memory; the simulation does not
     # write the grid, so write the initial water level file here.
     sfincs_model.grid.write_map(
         map_fn=simulation.path / "sfincs.ini",
-        data=sfincs_model.grid.data["ini"].values,
+        data=sfincs_model.grid.data["zs"].values,
         mask=sfincs_model.grid.mask.values,
     )
     sfincs_model.config.write()

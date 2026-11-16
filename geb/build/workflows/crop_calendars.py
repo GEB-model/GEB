@@ -4,14 +4,10 @@ import calendar
 import warnings
 from datetime import date
 
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from geb.build.workflows.conversions import setup_donor_countries
 from geb.geb_types import TwoDArrayInt32
-
-from ..data_catalog import DataCatalog
 
 MIRCA_OS_CROP_CLASS_MAP: dict[str, int] = {
     "Wheat": 0,
@@ -282,82 +278,39 @@ def donate_and_receive_crop_prices(
     donor_data: pd.DataFrame,
     recipient_regions: pd.DataFrame,
     trade_regions: dict[str, str],
-    data_catalog: DataCatalog,
-    global_countries: gpd.GeoDataFrame,
-    regions: gpd.GeoDataFrame,
 ) -> pd.DataFrame:
-    """Gets crop prices from other regions to fill missing data.
+    """Gets crop prices from other countries in the same trade region to fill missing data.
 
-    If there are multiple countries in one selected basin, where one country has prices for a certain crop,
-    but the other does not, this gives issues. This function adjusts crop data for those countries by
-    filling in missing values using data from nearby regions and PPP conversion rates. In case crop data
-    is missing for a country, and is also not in countries in the same trade_regions dataset, it uses the prices
-    for that crop from the country in the model region with least nan values.
+    For each recipient region and each crop without any price in its country, the prices are
+    filled with the median price per year over all countries in the same trade region that have
+    data for that crop. ``donor_data`` should therefore contain all countries of the relevant
+    trade regions, not only the countries in the model region. If no country in the trade region
+    has data for a crop, the crop is left missing; ``process_crop_data`` then raises an error if
+    farmers grow that crop. Prices are in USD, so no currency conversion is needed.
 
     Args:
-        donor_data: A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'.
-            The DataFrame contains crop prices for different regions.
-        recipient_regions: DataFrame containing recipient region information with 'region_id' and 'ISO3' columns.
-        trade_regions: A dictionary mapping ISO3 country codes to their respective trade regions.
-        data_catalog: The data catalog containing necessary data sources.
-        global_countries: A GeoDataFrame containing global country information.
-        regions: A GeoDataFrame containing region information.
+        donor_data: Crop prices (one column per crop, plus an 'ISO3' column), indexed by
+            (ISO3, year).
+        recipient_regions: Regions to fill, with 'region_id' and 'ISO3' columns.
+        trade_regions: Mapping of ISO3 country codes to their trade region.
 
     Returns:
-        The updated DataFrame with missing crop data filled in using PPP conversion rates from nearby regions.
+        Crop prices per (region_id, year), with missing crops filled from the trade-region median.
 
-    Notes:
-        The function performs the following steps:
-        1. Identifies columns where all values are NaN for each country and stores this information.
-        2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
-        3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
-        4. Drops the 'ISO3' column before returning the updated DataFrame.
-
-        Some countries without data are also not in the trade_regions dataset (e.g Liechtenstein (LIE)).
-        For these countries, we cannot assess which donor we should take, and the country_data will be
-        empty for these countries. Therefore, we first estimate the most similar country based on the
-        setup_donor_countries function. The ISO3 of these countries will be replaced by the ISO3 of the donor.
-        However, the region_id will remain the same, so that only the data is used from the donor,
-        but still the original region is used.
+    Raises:
+        ValueError: If a recipient country has no price data or is not in any trade region.
     """
-    # create a copy of the data to avoid using data that was adjusted in this function
     data_out = pd.DataFrame()
 
     for _, region in recipient_regions.iterrows():
         ISO3 = region["ISO3"]
-        region_id = region["region_id"]
-
-        # Filter the data for the current country
         country_data = donor_data[donor_data["ISO3"] == ISO3]
-
-        if country_data.empty:  # happens if country is not in trade_regions regions dataset (e.g. Kosovo). Fill these countries using data from a country that is in the trade_regions regions dataset, using the regular donor countries setup.
-            countries_with_donor_data = donor_data.ISO3.unique().tolist()
-            donor_countries = setup_donor_countries(
-                data_catalog,
-                global_countries,
-                countries_with_donor_data,
-                alternative_countries=regions["ISO3"].unique().tolist(),
+        if country_data.empty or ISO3 not in trade_regions:
+            raise ValueError(
+                f"No crop price data for {ISO3}: the country is not in the trade regions "
+                "dataset, so prices cannot be filled from its trade region."
             )
-            ISO3 = donor_countries.get(ISO3, None)
-            print(
-                f"Missing price donor data for {region['ISO3']}, using donor country {ISO3}. This country is NOT in the trade_regions regions dataset"
-            )
-            assert ISO3 is not None, (
-                f"Could not find a donor country for {region['ISO3']}. Please check the donor countries setup."
-            )
-
-            country_data = donor_data[donor_data["ISO3"] == ISO3]
-
-            assert not country_data.empty, (
-                f"Donor country {ISO3} has no data for {region['ISO3']}. Please check the donor countries setup."
-            )
-            # note: it can be that a country is donor for another in the first donor step (outside this function) (e.g. Isreal for cyprus), and that here cyprus is again selected as a donor country for another country (e.g. Liechtenstein)
-
         trade_regions_region = trade_regions[ISO3]
-
-        assert len(trade_regions_region) > 0, (
-            f"trade_regions region for {ISO3} is empty. Please check the trade_regions regions setup."
-        )
 
         trade_regions_region_countries: list[str] = [
             ISO3
@@ -371,23 +324,15 @@ def donate_and_receive_crop_prices(
                     donor_data["ISO3"].isin(trade_regions_region_countries), column
                 ]
 
-                # Check if data is available within the trade_regions region
-                non_na_values = donor_data_region.groupby("ISO3").count()
-
-                if non_na_values.max() > 0:  # if there is at least one non-NaN value
-                    donor_country = non_na_values.idxmax()
-                    donor_data_country = donor_data_region[donor_country]
-
+                if donor_data_region.notna().any():
+                    # median price per year over all trade-region countries with data
+                    donor_data_country = donor_data_region.groupby(
+                        level="year"
+                    ).median()
                 else:
-                    # if no data is available, take the country with most non-nan values
-                    donor_data_crop = donor_data[column]
-                    donor_data_crop = donor_data_crop.reset_index()
-                    donor_data_crop = donor_data_crop.set_index("year")
-                    amount_of_non_na = donor_data_crop.groupby("ISO3").count()
-                    donor_country = amount_of_non_na[column].idxmax()
-                    donor_data_country = donor_data_crop.loc[
-                        donor_data_crop["ISO3"] == donor_country, column
-                    ]
+                    # no price in the trade region: leave missing; process_crop_data raises
+                    # a clear error if farmers in this region grow the crop
+                    continue
 
                 new_data = pd.DataFrame(
                     donor_data_country.values,

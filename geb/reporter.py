@@ -1627,6 +1627,9 @@ class Reporter:
             ValueError: If the function name is not recognised.
         """
         function, *args = config["function"].split(",")
+        if function in ("mean", "nanmean") and np.size(value) == 0:
+            # the mean over zero agents is undefined (e.g. no farmers in the region)
+            return np.nan
         if function == "mean":
             return np.mean(value)
         elif function == "nanmean":

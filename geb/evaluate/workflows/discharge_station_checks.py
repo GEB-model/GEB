@@ -168,7 +168,10 @@ def find_dashboard_excluded_stations(
         "No valid river match within 1.5 km and 10% upstream area.",
         index=inventory.index,
     )
-    area: pd.Series = inventory["discharge_observations_upstream_area_m2"]
+    # cast to float: an empty station inventory (basin without gauges) is stored with object dtype
+    area: pd.Series = inventory["discharge_observations_upstream_area_m2"].astype(
+        np.float64
+    )
     reasons.loc[~np.isfinite(area) | (area <= 0)] = "Missing station upstream area."
     reasons.loc[reasons.index.intersection(snapped.index)] = (
         "No paired discharge record meets the evaluation period or record-length requirements."

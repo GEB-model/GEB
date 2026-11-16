@@ -14,7 +14,6 @@ rule setup_catchment:
     output:
         model_config=f"{BENCHMARK_DIR}/{{catchment}}/model.yml",
         build_config=f"{BENCHMARK_DIR}/{{catchment}}/build.yml",
-        update_config=f"{BENCHMARK_DIR}/{{catchment}}/update.yml"
     params:
         basin_id=lambda wildcards: CATCHMENTS[wildcards.catchment]
     log:
@@ -32,7 +31,6 @@ rule build_catchment:
     input:
         config=f"{BENCHMARK_DIR}/{{catchment}}/model.yml",
         build_config=f"{BENCHMARK_DIR}/{{catchment}}/build.yml",
-        update_config=f"{BENCHMARK_DIR}/{{catchment}}/update.yml"
     output:
         touch(f"{BENCHMARK_DIR}/{{catchment}}/build.done")
     log:

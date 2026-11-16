@@ -28,7 +28,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Bucket, Store
-from geb.version import __version__
+from geb.version import __version__, get_git_commit
 from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
@@ -692,6 +692,16 @@ class GEBModel(Module):
             self.reporter = Reporter(
                 self, self.report_folder, clean=clean_report_folder
             )
+            # record which GEB version (and, for git checkouts, which commit) produced this
+            # output; overwritten at every start, also when the run continues from a checkpoint
+            (self.output_folder / "geb_version.txt").write_text(f"{__version__}\n")
+            git_commit_file: Path = self.output_folder / "git_commit.txt"
+            git_commit: str | None = get_git_commit()
+            if git_commit is not None:
+                git_commit_file.write_text(f"{git_commit}\n")
+            else:
+                # not a git checkout: remove a commit left by an earlier run in this folder
+                git_commit_file.unlink(missing_ok=True)
 
     def step_to_end(
         self,
