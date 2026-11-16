@@ -6,9 +6,11 @@ and read simulation results.
 
 """
 
+import gc
 import logging
 import math
 import shutil
+import tempfile
 import warnings
 from pathlib import Path
 from types import TracebackType
@@ -27,7 +29,6 @@ from hydromt_sfincs import SfincsModel
 from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
 from pyproj import CRS
-from rioxarray.merge import merge_arrays
 from scipy.ndimage import binary_dilation, value_indices
 from shapely import line_locate_point, unary_union
 from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point, shape
@@ -48,7 +49,11 @@ from geb.hazards.floods.workflows.bathymetry import (
     enforce_minimum_river_width_for_connectivity,
     skip_subgrid_tiles_without_river_bed_levels,
 )
-from geb.hazards.floods.workflows.utils import get_end_point
+from geb.hazards.floods.workflows.utils import (
+    SpilledRaster,
+    get_end_point,
+    merge_spilled_rasters_max,
+)
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
     create_hash_from_parameters,
@@ -2057,21 +2062,37 @@ class MultipleSFINCSSimulations:
         if not self.simulations:
             raise ValueError("No simulations available to read flood depth from.")
 
-        flood_depths: list[xr.DataArray] = []
-        for simulation in self.simulations:
-            simulation_max_flood_depth: xr.DataArray = simulation.read_max_flood_depth(
+        if len(self.simulations) == 1:
+            rp_map: xr.DataArray = self.simulations[0].read_max_flood_depth(
                 minimum_flood_depth
             )
-            # merge_arrays expects the origin to be bottom-left, so we flip the y-axis
-            simulation_max_flood_depth = simulation_max_flood_depth.isel(
-                y=slice(None, None, -1)
-            )
-            flood_depths.append(simulation_max_flood_depth)
+            assert rp_map.rio.crs is not None
+            return rp_map
 
-        rp_map: xr.DataArray = merge_arrays(flood_depths, method="max")
-        rp_map = rp_map.isel(
-            y=slice(None, None, -1)
-        )  # flip back to original orientation
+        # Holding all (subgrid-resolution) flood maps in memory at once and then
+        # merging them with rasterio requires several times the size of the
+        # final map in RAM. Instead, each map is read one at a time and spilled
+        # to a temporary .npy file, after which the maps are merged into a single
+        # pre-allocated output array, streaming the inputs from disk.
+        with tempfile.TemporaryDirectory(
+            dir=self.simulations[0].path.parent, prefix="merge_max_flood_depth_"
+        ) as tmp_dir:
+            tiles: list[SpilledRaster] = []
+            for i, simulation in enumerate(self.simulations):
+                simulation_max_flood_depth: xr.DataArray = (
+                    simulation.read_max_flood_depth(minimum_flood_depth)
+                )
+                tiles.append(
+                    SpilledRaster.spill(
+                        simulation_max_flood_depth, Path(tmp_dir) / f"{i}.npy"
+                    )
+                )
+                # DataArrays with a cached .rio accessor form a reference cycle, so
+                # they are only freed by the cyclic garbage collector.
+                del simulation_max_flood_depth
+                gc.collect()
+
+            rp_map = merge_spilled_rasters_max(tiles)
 
         assert rp_map.rio.crs is not None
 
