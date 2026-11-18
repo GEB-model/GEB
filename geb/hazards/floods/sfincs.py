@@ -2004,6 +2004,18 @@ class SFINCSRootModel:
         """Cleans up the SFINCS model directory."""
         shutil.rmtree(self.path, ignore_errors=True)
 
+    def close(self) -> None:
+        """Closes the SFINCS model and releases its data from memory.
+
+        Cached rivers, subbasins and area of interest are also released. The model
+        can be read again from disk with `read`.
+        """
+        if self._sfincs_model is not None:
+            self._sfincs_model.close()
+            self._sfincs_model = None
+        for attribute in ("_rivers", "_subbasins", "_area_of_interest"):
+            self.__dict__.pop(attribute, None)
+
     def __enter__(self) -> SFINCSRootModel:
         """Enters the context of the SFINCS simulation.
 
@@ -2019,8 +2031,7 @@ class SFINCSRootModel:
         traceback: TracebackType | None,
     ) -> None:
         """Exits the context of the SFINCS simulation."""
-        if self._sfincs_model is not None:
-            self.sfincs_model.close()
+        self.close()
 
 
 class MultipleSFINCSSimulations:
