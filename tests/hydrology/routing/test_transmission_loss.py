@@ -39,6 +39,7 @@ def test_calculate_wetted_channel_area_kinematic() -> None:
         bed_elevation_m=bed_elevation_m,
         bankfull_width_m=bankfull_width_m,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         shape_exponent=shape_exponent,
         floodplain_profile_widths_m=floodplain_widths,
         floodplain_side_slope_m_per_m=floodplain_side_slope,
@@ -85,6 +86,7 @@ def test_calculate_wetted_channel_area_local_inertial_inbank() -> None:
         bed_elevation_m=bed_elev,
         bankfull_width_m=bankfull_width,
         bankfull_depth_m=bankfull_depth,
+        levee_depth_m=bankfull_depth,
         shape_exponent=shape_exponent,
         floodplain_profile_widths_m=floodplain_widths,
         floodplain_side_slope_m_per_m=floodplain_side_slope,
@@ -136,6 +138,7 @@ def test_calculate_wetted_channel_area_local_inertial_overbank() -> None:
         bed_elevation_m=bed_elev,
         bankfull_width_m=bankfull_width,
         bankfull_depth_m=bankfull_depth,
+        levee_depth_m=bankfull_depth,
         shape_exponent=shape_exponent,
         floodplain_profile_widths_m=floodplain_widths,
         floodplain_side_slope_m_per_m=floodplain_side_slope,
@@ -160,7 +163,7 @@ def test_potential_transmission_loss_disconnected_unit_gradient() -> None:
     riverbed_k: np.ndarray = np.array([1e-5], dtype=np.float32)
     bed_elev: np.ndarray = np.array([100.0], dtype=np.float32)
     stage: np.ndarray = np.array([101.5], dtype=np.float32)  # depth = 1.5 m
-    gw_head: np.ndarray = np.array([95.0], dtype=np.float32)  # deep table
+    gw_head: np.ndarray = np.array([95.0], dtype=np.float64)  # deep table
     dt: np.float32 = np.float32(3600.0)
     out: np.ndarray = np.zeros(n, dtype=np.float32)
 
@@ -187,7 +190,7 @@ def test_potential_transmission_loss_gaining_stream_zero_loss() -> None:
     bed_elev: np.ndarray = np.array([100.0], dtype=np.float32)
     stage: np.ndarray = np.array([101.5], dtype=np.float32)
     gw_head: np.ndarray = np.array(
-        [102.0], dtype=np.float32
+        [102.0], dtype=np.float64
     )  # water table above river stage
     dt: np.float32 = np.float32(3600.0)
     out: np.ndarray = np.zeros(n, dtype=np.float32)
@@ -213,7 +216,7 @@ def test_potential_transmission_loss_partially_connected_gradient() -> None:
     bed_elev: np.ndarray = np.array([100.0], dtype=np.float32)
     stage: np.ndarray = np.array([102.0], dtype=np.float32)  # depth = 2.0 m
     gw_head: np.ndarray = np.array(
-        [101.0], dtype=np.float32
+        [101.0], dtype=np.float64
     )  # head is halfway up depth
     dt: np.float32 = np.float32(3600.0)
     out: np.ndarray = np.zeros(n, dtype=np.float32)
@@ -248,7 +251,7 @@ def test_potential_transmission_loss_edge_cases(area: float, k_bed: float) -> No
         riverbed_hydraulic_conductivity_m_s=np.array([k_bed], dtype=np.float32),
         bed_elevation_m=np.array([100.0], dtype=np.float32),
         water_stage_m=np.array([101.0], dtype=np.float32),
-        groundwater_head_m=np.array([90.0], dtype=np.float32),
+        groundwater_head_m=np.array([90.0], dtype=np.float64),
         timestep_s=np.float32(3600.0),
         potential_transmission_loss_m3=out,
     )

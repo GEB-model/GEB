@@ -15,6 +15,7 @@ from geb.evaluate.workflows import (
     discharge_helpers,
     discharge_plots,
     discharge_publication,
+    evapotranspiration_evaluation,
     external_skill_scores,
     water_balance_plots,
 )
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 
 
 class Hydrology:
-    """Expose discharge, dashboard, water-balance, and storage evaluation commands."""
+    """Expose discharge, evapotranspiration, dashboard, water-balance, and storage evaluation commands."""
 
     def __init__(self, model: GEBModel, evaluator: Evaluate) -> None:
         """Initialize the Hydrology evaluation module."""
@@ -38,6 +39,11 @@ class Hydrology:
     # Discharge evaluation and data access
     evaluate_discharge = discharge_evaluation.evaluate_discharge
     get_discharge_per_river = discharge_helpers.get_discharge_per_river
+
+    # Evapotranspiration against eddy covariance (FLUXNET) towers
+    evaluate_evapotranspiration = (
+        evapotranspiration_evaluation.evaluate_evapotranspiration
+    )
 
     # Discharge plots (load and match external scores automatically)
     plot_discharge = discharge_plots.plot_discharge
@@ -71,17 +77,18 @@ class Hydrology:
         Returns:
             Path to the created dashboard, keyed by ``dashboard``.
         """
-        run_output_folder: Path = (
-            Path(self.model.config["general"]["output_folder"]) / run_name
-        )
+        run_output_folder: Path = Path(self.model.config["output_folder"]) / run_name
         return dashboard.create_discharge_dashboard(
             evaluation_folder=self.evaluate_discharge_output_folder,
             run_output_folder=run_output_folder,
             geometry_files=self.model.files["geom"],
             table_files=self.model.files["table"],
-            minimum_upstream_area_km2=self.model.config["hydrology"]["evaluation"][
-                "discharge"
-            ]["minimum_upstream_area_km2"],
+            flood_protection_config=self.model.config["hydrology"]["routing"][
+                "flood_protection"
+            ],
+            minimum_upstream_area_km2=self.model.config["evaluation"]["discharge"][
+                "minimum_upstream_area_km2"
+            ],
             logger=self.model.logger,
             correct_discharge_observations=correct_discharge_observations,
             output_filename=output_filename,

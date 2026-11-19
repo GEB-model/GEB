@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import xarray as xr
 from scipy.sparse import csr_matrix
 
@@ -612,6 +613,78 @@ class Temperature(ForcingLoader):
 
         return interpolated_temperature
 
+    def get_dekadal_climatology_of_daily_mean_C(
+        self,
+    ) -> tuple[TwoDArrayFloat32, TwoDArrayFloat32]:
+        """Climatology of the daily mean temperature per dekad on the model grid.
+
+        Uses all complete days of the forcing record. The mean is corrected for
+        elevation with the lapse rate as the temperature itself; the day-to-day
+        standard deviation is interpolated without elevation correction.
+
+        Returns:
+            Mean and standard deviation of the daily mean temperature per dekad
+            (36 dekads of the year) and grid cell (C), shape (36, n_active_cells).
+
+        Raises:
+            ValueError: If the forcing record has no complete day in one of the dekads.
+        """
+        time = pd.DatetimeIndex(self.reader.datetime_index)
+        n_source: int = self.interpolation_matrix.shape[1]
+        temperature_sum = np.zeros((36, n_source), dtype=np.float64)
+        temperature_squared_sum = np.zeros((36, n_source), dtype=np.float64)
+        number_of_days = np.zeros(36, dtype=np.int64)
+
+        for year in np.unique(time.year):
+            time_indices = np.flatnonzero(time.year == year)
+            time_year = time[time_indices]
+            data = self.reader.array[:, time_indices[0] : time_indices[-1] + 1]
+            assert isinstance(data, np.ndarray)
+            day_starts = np.flatnonzero(
+                np.r_[True, time_year.day_of_year[1:] != time_year.day_of_year[:-1]]
+            )
+            values_per_day = np.diff(np.r_[day_starts, time_year.size])
+            complete_days = values_per_day == self.n
+            daily_mean_K = (
+                np.add.reduceat(data.astype(np.float64), day_starts, axis=1)[
+                    :, complete_days
+                ]
+                / self.n
+            )
+            first_time_of_day = time_year[day_starts[complete_days]]
+            dekad_per_day = (first_time_of_day.month - 1) * 3 + np.minimum(
+                (first_time_of_day.day - 1) // 10, 2
+            )
+            for dekad in range(36):
+                in_dekad = dekad_per_day == dekad
+                number_of_days[dekad] += in_dekad.sum()
+                temperature_sum[dekad] += daily_mean_K[:, in_dekad].sum(axis=1)
+                temperature_squared_sum[dekad] += (daily_mean_K[:, in_dekad] ** 2).sum(
+                    axis=1
+                )
+
+        if (number_of_days == 0).any():
+            raise ValueError(
+                "The temperature forcing does not cover all dekads of the year; a "
+                "temperature climatology needs at least one full year of forcing."
+            )
+
+        mean_K = temperature_sum / number_of_days[:, np.newaxis]
+        variance = temperature_squared_sum / number_of_days[:, np.newaxis] - mean_K**2
+        standard_deviation = np.sqrt(np.maximum(variance, 0.0))
+
+        # interpolate() takes (n_source_cells, n_timesteps): the 36 dekads here
+        mean_grid_C = self.interpolate(mean_K.T.astype(np.float32)).T - np.float32(
+            273.15
+        )
+        standard_deviation_grid_C = (
+            ForcingLoader.interpolate(self, standard_deviation.T.astype(np.float32))
+        ).T
+        return (
+            np.ascontiguousarray(mean_grid_C, dtype=np.float32),
+            np.ascontiguousarray(standard_deviation_grid_C, dtype=np.float32),
+        )
+
 
 class Wind(ForcingLoader):
     """Loader for wind data with specific validation."""
@@ -923,6 +996,9 @@ class Forcing(Module):
 
     @overload
     def __getitem__(self, name: Literal["CO2_ppm"]) -> CO2: ...
+
+    @overload
+    def __getitem__(self, name: Literal["tas_2m_K"]) -> Temperature: ...
 
     @overload
     def __getitem__(self, name: str) -> ForcingLoader: ...

@@ -11,6 +11,8 @@ from geb.hydrology.landsurface.redistribution import (
     calculate_capillary_rise_and_percolation_parameters,
     calculate_saturated_matric_flux_potential,
     distribute_soil_water_ross,
+    fill_soil_below_water_table,
+    get_interflow_release_m_per_s,
 )
 
 from ...testconfig import output_folder
@@ -23,13 +25,15 @@ output_folder_redistribution.mkdir(exist_ok=True, parents=True)
 
 
 def test_distribute_soil_water_ross_basic() -> None:
-    """Test basic downward flow in a 6-layer soil column using Ross scheme."""
-    n_layers = 6
+    """Test basic downward flow in a soil column using Ross scheme."""
+    n_layers = N_SOIL_LAYERS
     timestep_length_s = np.float32(3600.0)
-    soil_layer_height_m = np.array([0.05, 0.1, 0.15, 0.3, 0.4, 1.0], dtype=np.float32)
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
     # Top wet, bottom drier
     w = (
-        np.array([0.45, 0.4, 0.3, 0.2, 0.2, 0.2], dtype=np.float32)
+        np.array([0.45, 0.4, 0.3, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
         * soil_layer_height_m
     )
     wr = np.full(n_layers, 0.05, dtype=np.float32) * soil_layer_height_m
@@ -74,19 +78,18 @@ def test_distribute_soil_water_ross_basic() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.01),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(1.0),
+        interflow_structural_conductivity_m_per_s=np.float32(1e-05),
         green_ampt_active_layer_idx=active_layer_idx,
         topwater_m=topwater_m,
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
     # Check that water moved downwards (layer 0 decreased, layer 1 increased)
@@ -103,9 +106,11 @@ def test_distribute_soil_water_ross_basic() -> None:
 
 def test_distribute_soil_water_ross_active_layer_masking() -> None:
     """Test that layers above the green_ampt_active_layer_idx do not lose water."""
-    n_layers = 6
+    n_layers = N_SOIL_LAYERS
     timestep_length_s = np.float32(3600.0)
-    soil_layer_height_m = np.array([0.05, 0.1, 0.15, 0.3, 0.4, 1.0], dtype=np.float32)
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
 
     # Case: Infiltration front is at the 3rd layer (index 2).
     # Layers 0 and 1 should be "frozen" in terms of redistribution
@@ -114,7 +119,7 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
 
     # Wet soil
     w = (
-        np.array([0.45, 0.45, 0.45, 0.45, 0.45, 0.45], dtype=np.float32)
+        np.array([0.45, 0.45, 0.45, 0.45, 0.45, 0.45, 0.45], dtype=np.float32)
         * soil_layer_height_m
     )
     wr = np.full(n_layers, 0.05, dtype=np.float32) * soil_layer_height_m
@@ -148,14 +153,12 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.01),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(
+        interflow_structural_conductivity_m_per_s=np.float32(
             0.0
         ),  # Test vertical redistribution masking in isolation
         green_ampt_active_layer_idx=active_idx,
@@ -163,6 +166,7 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
     # Layers above active_idx must NOT change
@@ -180,14 +184,18 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
 
 def test_distribute_soil_water_ross_extreme_dry_wet() -> None:
     """Test Ross scheme with a mix of extremely dry and extremely wet layers."""
-    n_layers = 6
+    n_layers = N_SOIL_LAYERS
     timestep_length_s = np.float32(3600.0)
-    soil_layer_height_m = np.array([0.05, 0.1, 0.15, 0.3, 0.4, 1.0], dtype=np.float32)
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
 
     # Top and bottom are saturated, middle is residual
     wr_val, ws_val = 0.05, 0.5
     w = (
-        np.array([ws_val, wr_val, wr_val, wr_val, wr_val, ws_val], dtype=np.float32)
+        np.array(
+            [ws_val, wr_val, wr_val, wr_val, wr_val, ws_val, ws_val], dtype=np.float32
+        )
         * soil_layer_height_m
     )
     wr = np.full(n_layers, wr_val, dtype=np.float32) * soil_layer_height_m
@@ -222,24 +230,23 @@ def test_distribute_soil_water_ross_extreme_dry_wet() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.01),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(1.0),
+        interflow_structural_conductivity_m_per_s=np.float32(1e-05),
         green_ampt_active_layer_idx=np.int32(0),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
-    # Mass balance
+    # Mass balance (float32 sum of about 1.6 m: allow a few ulp)
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
-        np.float32(np.sum(w)), abs=1e-7
+        np.float32(np.sum(w)), abs=3e-7
     )
     # Check water content bounds
     assert np.all(w_new >= wr)
@@ -258,11 +265,13 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
     and the total lateral outflow should be non-zero.
     """
     timestep_length_s = np.float32(3600.0)
-    soil_layer_height_m = np.array([0.05, 0.1, 0.15, 0.3, 0.4, 1.0], dtype=np.float32)
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
 
     # All layers wet (above field capacity)
     w_initial = (
-        np.array([0.45, 0.45, 0.45, 0.45, 0.45, 0.45], dtype=np.float32)
+        np.array([0.45, 0.45, 0.45, 0.45, 0.45, 0.45, 0.45], dtype=np.float32)
         * soil_layer_height_m
     )
     wr = np.full(N_SOIL_LAYERS, 0.05, dtype=np.float32) * soil_layer_height_m
@@ -279,7 +288,7 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
 
     interface_dist_m = (soil_layer_height_m[:-1] + soil_layer_height_m[1:]) / 2.0
 
-    # 1. Run WITHOUT interflow (interflow_multiplier = 0)
+    # 1. Run WITHOUT interflow (no lateral conductivity)
     w_no_interflow = w_initial.copy()
     e_no_interflow = enth.copy()
     results_no_interflow = distribute_soil_water_ross(
@@ -291,24 +300,23 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
         soil_enthalpy_J_per_m2=e_no_interflow,
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
-        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=np.zeros_like(ksat),
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.1),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(0.0),  # OFF
+        interflow_structural_conductivity_m_per_s=np.float32(0.0),  # OFF
         green_ampt_active_layer_idx=np.int32(0),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
     lateral_outflow_no = results_no_interflow[5]
 
-    # 2. Run WITH interflow (interflow_multiplier = 10.0 for visible effect)
+    # 2. Run WITH interflow (structural lateral conductivity for visible effect)
     w_with_interflow = w_initial.copy()
     e_with_interflow = enth.copy()
     results_with_interflow = distribute_soil_water_ross(
@@ -321,19 +329,18 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.1),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(10.0),  # ON
+        interflow_structural_conductivity_m_per_s=np.float32(0.0001),  # ON
         green_ampt_active_layer_idx=np.int32(0),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
     lateral_outflow_with = results_with_interflow[5]
 
@@ -351,17 +358,165 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
     ) == pytest.approx(np.float32(np.sum(w_initial)), abs=1e-7)
     assert np.float32(
         np.sum(w_with_interflow) + results_with_interflow[2] + results_with_interflow[5]
-    ) == pytest.approx(np.float32(np.sum(w_initial)), abs=1e-7)
+    ) == pytest.approx(np.float32(np.sum(w_initial)), abs=3e-7)
+
+
+def test_distribute_soil_water_ross_structural_interflow() -> None:
+    """Soil structure adds lateral conductivity to that of the soil matrix.
+
+    Verifies that:
+    1. A structural lateral conductivity far above the matrix value increases interflow.
+    2. A wetter soil gives more interflow.
+    3. Mass balance is conserved.
+    """
+    timestep_length_s = np.float32(3600.0)
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
+    wr = np.full(N_SOIL_LAYERS, 0.05, dtype=np.float32) * soil_layer_height_m
+    ws = np.full(N_SOIL_LAYERS, 0.5, dtype=np.float32) * soil_layer_height_m
+    wfc = np.full(N_SOIL_LAYERS, 0.3, dtype=np.float32) * soil_layer_height_m
+    ksat = np.full(N_SOIL_LAYERS, 0.01 / np.float32(3600.0), dtype=np.float32)
+
+    def run(theta: float, structural_m_per_day: float) -> tuple[float, float]:
+        w_initial = (
+            np.full(N_SOIL_LAYERS, theta, dtype=np.float32) * soil_layer_height_m
+        )
+        water_content_m = w_initial.copy()
+        results = distribute_soil_water_ross(
+            timestep_length_s=timestep_length_s,
+            water_content_m=water_content_m,
+            water_content_residual_m=wr,
+            water_content_saturated_m=ws,
+            water_content_field_capacity_m=wfc,
+            soil_enthalpy_J_per_m2=np.full(N_SOIL_LAYERS, 1e7, dtype=np.float32),
+            solid_heat_capacity_J_per_m2_K=np.full(
+                N_SOIL_LAYERS, 1e6, dtype=np.float32
+            ),
+            vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+            horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
+            soil_layer_height=soil_layer_height_m,
+            bubbling_pressure_m_positive=np.full(
+                N_SOIL_LAYERS, 0.6666, dtype=np.float32
+            ),
+            lambda_=np.full(N_SOIL_LAYERS, 0.3, dtype=np.float32),
+            slope_m_per_m=np.float32(0.1),
+            hillslope_length_m=np.float32(100.0),
+            interflow_structural_conductivity_m_per_s=np.float32(
+                structural_m_per_day / 86400.0
+            ),
+            green_ampt_active_layer_idx=np.int32(0),
+            topwater_m=np.float32(0.0),
+            gw_ksat_m_per_s=np.float32(0.0),
+            groundwater_depth_m=np.float32(10.0),
+            deep_soil_temperature_C=np.float32(10.0),
+            interflow_structural_depth_m=np.float32(2.0),
+        )
+        total = np.float32(np.sum(water_content_m) + results[2] + results[5])
+        assert total == pytest.approx(np.float32(np.sum(w_initial)), abs=3e-7)
+        free_water_m = float(np.sum(w_initial - wfc))
+        return float(results[5]), free_water_m
+
+    lateral_matrix, _ = run(0.48, 0.0)
+    lateral_structure, free_high = run(0.48, 100.0)
+    assert lateral_matrix > 0.0
+    assert lateral_structure > 5.0 * lateral_matrix
+
+    lateral_moderate, free_moderate = run(0.35, 100.0)
+    assert free_high > free_moderate
+    assert lateral_structure > lateral_moderate > 0.0
+
+
+def test_distribute_soil_water_ross_cosine_slope_projection() -> None:
+    """Test that steeper slopes reduce downward gravity percolation via cos(slope) projection."""
+    timestep_length_s = np.float32(3600.0)
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
+
+    # Uniform moisture across layers to isolate gravity-driven drainage from matric suction gradients
+    w_initial = np.full(N_SOIL_LAYERS, 0.45, dtype=np.float32) * soil_layer_height_m
+    wr = np.full(N_SOIL_LAYERS, 0.05, dtype=np.float32) * soil_layer_height_m
+    ws = np.full(N_SOIL_LAYERS, 0.5, dtype=np.float32) * soil_layer_height_m
+    wfc = np.full(N_SOIL_LAYERS, 0.3, dtype=np.float32) * soil_layer_height_m
+
+    enth = np.full(N_SOIL_LAYERS, 1e7, dtype=np.float32)
+    hc = np.full(N_SOIL_LAYERS, 1e6, dtype=np.float32)
+    ksat = np.full(N_SOIL_LAYERS, 0.01 / np.float32(3600.0), dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(N_SOIL_LAYERS, 0.6666, dtype=np.float32)
+    lambda_ = np.full(N_SOIL_LAYERS, 1.3 - 1.0, dtype=np.float32)
+
+    # Flat slope (slope = 0 -> cos_slope = 1.0, interflow = 0)
+    w_flat = w_initial.copy()
+    res_flat = distribute_soil_water_ross(
+        timestep_length_s=timestep_length_s,
+        water_content_m=w_flat,
+        water_content_residual_m=wr,
+        water_content_saturated_m=ws,
+        water_content_field_capacity_m=wfc,
+        soil_enthalpy_J_per_m2=enth.copy(),
+        solid_heat_capacity_J_per_m2_K=hc,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
+        soil_layer_height=soil_layer_height_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
+        lambda_=lambda_,
+        slope_m_per_m=np.float32(0.0),
+        hillslope_length_m=np.float32(100.0),
+        interflow_structural_conductivity_m_per_s=np.float32(0.0),
+        green_ampt_active_layer_idx=np.int32(-1),
+        topwater_m=np.float32(0.0),
+        gw_ksat_m_per_s=np.float32(1e-4),
+        groundwater_depth_m=np.float32(10.0),
+        deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
+    )
+
+    # Steep slope (slope = 1.0 -> cos_slope = 1/sqrt(2) = 0.707, interflow off to isolate vertical gravity)
+    w_steep = w_initial.copy()
+    res_steep = distribute_soil_water_ross(
+        timestep_length_s=timestep_length_s,
+        water_content_m=w_steep,
+        water_content_residual_m=wr,
+        water_content_saturated_m=ws,
+        water_content_field_capacity_m=wfc,
+        soil_enthalpy_J_per_m2=enth.copy(),
+        solid_heat_capacity_J_per_m2_K=hc,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
+        soil_layer_height=soil_layer_height_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
+        lambda_=lambda_,
+        slope_m_per_m=np.float32(1.0),
+        hillslope_length_m=np.float32(100.0),
+        interflow_structural_conductivity_m_per_s=np.float32(0.0),
+        green_ampt_active_layer_idx=np.int32(-1),
+        topwater_m=np.float32(0.0),
+        gw_ksat_m_per_s=np.float32(1e-4),
+        groundwater_depth_m=np.float32(10.0),
+        deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
+    )
+
+    # Percolation and deep recharge are reduced on steep slopes by cos(slope)
+    assert res_steep[0] < res_flat[0]
+    assert res_steep[2] < res_flat[2]
+    # Deep percolation ratio closely tracks cos(45 deg) = 1/sqrt(2) ~ 0.707
+    cos_45_deg = np.float32(1.0) / np.sqrt(np.float32(2.0))
+    assert (res_steep[2] / res_flat[2]) == pytest.approx(cos_45_deg, rel=0.05)
 
 
 def test_distribute_soil_water_ross_interflow_dry_soil() -> None:
     """Test that interflow is zero when soil is below field capacity."""
     timestep_length_s = np.float32(3600.0)
-    soil_layer_height_m = np.array([0.05, 0.1, 0.15, 0.3, 0.4, 1.0], dtype=np.float32)
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
 
     # Soil below field capacity (0.2 < 0.3)
     w_initial = (
-        np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32) * soil_layer_height_m
+        np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
+        * soil_layer_height_m
     )
     wr = np.full(N_SOIL_LAYERS, 0.05, dtype=np.float32) * soil_layer_height_m
     ws = np.full(N_SOIL_LAYERS, 0.5, dtype=np.float32) * soil_layer_height_m
@@ -387,19 +542,18 @@ def test_distribute_soil_water_ross_interflow_dry_soil() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.1),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(10.0),
+        interflow_structural_conductivity_m_per_s=np.float32(0.0001),
         green_ampt_active_layer_idx=np.int32(0),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
     lateral_outflow = results[5]
@@ -410,13 +564,15 @@ def test_distribute_soil_water_ross_interflow_dry_soil() -> None:
 
 def test_distribute_soil_water_ross_frozen_barrier() -> None:
     """Test Ross scheme with a frozen layer acting as a hydraulic barrier."""
-    n_layers = 6
+    n_layers = N_SOIL_LAYERS
     timestep_length_s = np.float32(3600.0)
-    soil_layer_height_m = np.array([0.05, 0.1, 0.15, 0.3, 0.4, 1.0], dtype=np.float32)
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
 
     # Wet top, dry bottom
     w = (
-        np.array([0.45, 0.45, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+        np.array([0.45, 0.45, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
         * soil_layer_height_m
     )
     wr = np.full(n_layers, 0.05, dtype=np.float32) * soil_layer_height_m
@@ -455,24 +611,23 @@ def test_distribute_soil_water_ross_frozen_barrier() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.01),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(1.0),
+        interflow_structural_conductivity_m_per_s=np.float32(1e-05),
         green_ampt_active_layer_idx=np.int32(0),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
-    # Mass balance
+    # Mass balance (float32 sum of about 1.6 m: allow a few ulp)
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
-        np.float32(np.sum(w)), abs=1e-7
+        np.float32(np.sum(w)), abs=3e-7
     )
     # Check water content bounds
     assert np.all(w_new >= wr)
@@ -491,7 +646,7 @@ def test_ross_redistribution_scenarios(ksat: float, gw_ksat: float) -> None:
     """
     import matplotlib.pyplot as plt
 
-    n_layers = 6
+    n_layers = N_SOIL_LAYERS
     timestep_length_s = np.float32(3600.0)
     duration_hours = 48
     soil_layer_height_m = np.full(n_layers, 0.1, dtype=np.float32)
@@ -511,9 +666,9 @@ def test_ross_redistribution_scenarios(ksat: float, gw_ksat: float) -> None:
     hc = np.full(n_layers, 1e6, dtype=np.float32)
 
     scenarios = {
-        "top_wet": np.array([0.49] * 1 + [0.1] * 5),
-        "uniform": np.array([0.3] * 6),
-        "interflow_test": np.array([0.45] * 6),
+        "top_wet": np.array([0.49] * 1 + [0.1] * (N_SOIL_LAYERS - 1)),
+        "uniform": np.array([0.3] * N_SOIL_LAYERS),
+        "interflow_test": np.array([0.45] * N_SOIL_LAYERS),
     }
 
     output_dir: Path = output_folder_ross_scenarios
@@ -551,19 +706,18 @@ def test_ross_redistribution_scenarios(ksat: float, gw_ksat: float) -> None:
                 solid_heat_capacity_J_per_m2_K=hc,
                 vertical_saturated_hydraulic_conductivity_m_per_s=ksat_arr,
                 horizontal_saturated_hydraulic_conductivity_m_per_s=ksat_arr,
-                interface_dist_m=interface_dist_m,
                 soil_layer_height=soil_layer_height_m,
                 bubbling_pressure_m_positive=bubbling_pressure_m_positive_val,
                 lambda_=lambda_,
-                pore_size_index=pore_size_index,
                 slope_m_per_m=np.float32(1),
                 hillslope_length_m=np.float32(100.0),
-                interflow_multiplier=np.float32(1.0),
+                interflow_structural_conductivity_m_per_s=np.float32(1e-05),
                 green_ampt_active_layer_idx=np.int32(0),
                 topwater_m=np.float32(0.0),
                 gw_ksat_m_per_s=np.float32(gw_ksat / 3600.0),
                 groundwater_depth_m=np.float32(10.0),
                 deep_soil_temperature_C=np.float32(10.0),
+                interflow_structural_depth_m=np.float32(2.0),
             )
             history_w.append(current_w.copy() / soil_layer_height_m)
             history_e.append(current_enth.copy() / 1e6)
@@ -620,12 +774,14 @@ def test_ross_redistribution_scenarios(ksat: float, gw_ksat: float) -> None:
 
 def test_distribute_soil_water_ross_percolation_to_groundwater() -> None:
     """Test Ross scheme with a gravity bottom boundary (groundwater percolation)."""
-    n_layers = 6
+    n_layers = N_SOIL_LAYERS
     timestep_length_s = np.float32(3600.0)
-    soil_layer_height_m = np.array([0.05, 0.1, 0.15, 0.3, 0.4, 1.0], dtype=np.float32)
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
     # Saturated column
     w = (
-        np.array([0.45, 0.45, 0.45, 0.45, 0.45, 0.45], dtype=np.float32)
+        np.array([0.45, 0.45, 0.45, 0.45, 0.45, 0.45, 0.45], dtype=np.float32)
         * soil_layer_height_m
     )
     wr = np.full(n_layers, 0.05, dtype=np.float32) * soil_layer_height_m
@@ -663,26 +819,26 @@ def test_distribute_soil_water_ross_percolation_to_groundwater() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.01),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(1.0),
+        interflow_structural_conductivity_m_per_s=np.float32(1e-05),
         green_ampt_active_layer_idx=np.int32(0),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=gw_ksat,
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
     # Column should have lost water to groundwater
     assert perc_gw > 0
     # Mass balance: Sum(new) + perc_gw + lateral_outflow == Sum(old)
+    # float32 sum over 7 layers of ~1.8 m: allow a few ulp (1e-6 m).
     assert np.float32(np.sum(w_new) + perc_gw + lateral_outflow) == pytest.approx(
-        np.float32(np.sum(w)), abs=1e-7
+        np.float32(np.sum(w)), abs=1e-6
     )
     # Check water content bounds
     assert np.all(w_new >= wr)
@@ -691,37 +847,98 @@ def test_distribute_soil_water_ross_percolation_to_groundwater() -> None:
     # Check that enthalpy was also advected out
     assert np.sum(e_new) < np.sum(enth)
     assert perc_gw_e > 0
+    # float32 sum of 7e7 J/m2: one ulp is 8 J/m2
     assert np.float32(np.sum(e_new) + perc_gw_e + interflow_e) == pytest.approx(
-        np.float32(np.sum(enth)), abs=5.0
+        np.float32(np.sum(enth)), abs=16.0
     )
+
+
+def _lateral_outflow_of_profile(volumetric_water_content: list[float]) -> np.float32:
+    """Lateral outflow in one hour of a uniform soil with the given water content per layer.
+
+    Field capacity is 0.30 and saturation 0.50 in every layer; no wetting front,
+    groundwater far below.
+
+    Args:
+        volumetric_water_content: Water content per layer (m3/m3).
+
+    Returns:
+        Total lateral outflow (m).
+    """
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 1.0], dtype=np.float32
+    )
+    ksat = np.full(N_SOIL_LAYERS, 0.01 / np.float32(3600.0), dtype=np.float32)
+    return distribute_soil_water_ross(
+        timestep_length_s=np.float32(3600.0),
+        water_content_m=np.array(volumetric_water_content, dtype=np.float32)
+        * soil_layer_height_m,
+        water_content_residual_m=np.float32(0.05) * soil_layer_height_m,
+        water_content_saturated_m=np.float32(0.50) * soil_layer_height_m,
+        water_content_field_capacity_m=np.float32(0.30) * soil_layer_height_m,
+        soil_enthalpy_J_per_m2=np.full(N_SOIL_LAYERS, 1e7, dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(N_SOIL_LAYERS, 1e6, dtype=np.float32),
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
+        soil_layer_height=soil_layer_height_m,
+        bubbling_pressure_m_positive=np.full(N_SOIL_LAYERS, 0.5, dtype=np.float32),
+        lambda_=np.full(N_SOIL_LAYERS, 0.5, dtype=np.float32),
+        slope_m_per_m=np.float32(0.10),
+        hillslope_length_m=np.float32(100.0),
+        interflow_structural_conductivity_m_per_s=np.float32(1e-05),
+        green_ampt_active_layer_idx=np.int32(-1),
+        topwater_m=np.float32(0.0),
+        gw_ksat_m_per_s=np.float32(0.0),
+        groundwater_depth_m=np.float32(10.0),
+        deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
+    )[5]
+
+
+def test_distribute_soil_water_ross_lateral_flow_needs_filled_layer_below() -> None:
+    """Lateral flow of a layer scales with the free water in the layer below it.
+
+    A wet layer over soil at or below field capacity drains down, not sideways. The
+    more of the drainable pores of the layer below are filled, the more the layer
+    drains sideways. The lowest layer rests on the rock and always drains sideways.
+    """
+    dry = 0.15
+    # one wet layer over dry soil: no lateral flow
+    assert _lateral_outflow_of_profile([dry, 0.45, dry, dry, dry, dry, dry]) == 0.0
+    # the same layer over a layer exactly at field capacity: still none
+    assert _lateral_outflow_of_profile([dry, 0.45, 0.30, dry, dry, dry, dry]) == 0.0
+    # over a partly and a fully filled layer: lateral flow grows with the filling
+    # (the layer below itself lies over dry soil and gives none)
+    half = _lateral_outflow_of_profile([dry, 0.45, 0.40, dry, dry, dry, dry])
+    full = _lateral_outflow_of_profile([dry, 0.45, 0.50, dry, dry, dry, dry])
+    assert half > 0.0
+    assert full > half
+    # the lowest layer drains sideways whatever lies above it
+    assert _lateral_outflow_of_profile([dry, dry, dry, dry, dry, dry, 0.45]) > 0.0
 
 
 def test_distribute_soil_water_ross_active_wetting_front_lateral_flow() -> None:
-    """Test dual-mode lateral interflow with active and inactive Green-Ampt wetting front.
+    """Test lateral interflow on hillslope.
 
     Verifies:
-    1. During an active wetting front (storm quickflow), layers in the transmission
-       zone (i <= active_layer_idx) drain laterally via saturated conductivity.
-    2. Lateral quickflow is orders of magnitude faster than unsaturated matrix flow.
-    3. Lateral quickflow is zero when soil moisture is at or below field capacity.
-    4. Exact water mass balance holds across all modes.
+    1. Layers with water content above field capacity drain laterally via saturated conductivity.
+    2. Layers above an active Green-Ampt wetting front drain laterally like the others.
+    3. Lateral interflow is zero when soil moisture is at or below field capacity.
+    4. Exact water mass balance holds across all layers.
     """
-    n_layers: int = 6
+    n_layers: int = N_SOIL_LAYERS
     timestep_length_s: np.float32 = np.float32(3600.0)
     soil_layer_height_m: np.ndarray = np.array(
-        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0], dtype=np.float32
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 1.0], dtype=np.float32
     )
-    interface_dist_m: np.ndarray = (
-        soil_layer_height_m[:-1] + soil_layer_height_m[1:]
-    ) / 2.0
 
     wr: np.ndarray = np.full(n_layers, 0.05, dtype=np.float32) * soil_layer_height_m
     ws: np.ndarray = np.full(n_layers, 0.50, dtype=np.float32) * soil_layer_height_m
     wfc: np.ndarray = np.full(n_layers, 0.30, dtype=np.float32) * soil_layer_height_m
 
-    # Top layers saturated/wet above field capacity, deeper layers dry
+    # Top three layers wet above field capacity, deeper layers dry
     w_wet: np.ndarray = (
-        np.array([0.45, 0.45, 0.15, 0.15, 0.15, 0.15], dtype=np.float32)
+        np.array([0.45, 0.45, 0.45, 0.15, 0.15, 0.15, 0.15], dtype=np.float32)
         * soil_layer_height_m
     )
     enth: np.ndarray = np.full(n_layers, 1e7, dtype=np.float32)
@@ -731,13 +948,12 @@ def test_distribute_soil_water_ross_active_wetting_front_lateral_flow() -> None:
     ksat: np.ndarray = np.full(n_layers, 0.01 / np.float32(3600.0), dtype=np.float32)
     bubbling_pressure_m_positive: np.ndarray = np.full(n_layers, 0.5, dtype=np.float32)
     lambda_: np.ndarray = np.full(n_layers, 0.5, dtype=np.float32)
-    pore_size_index: np.ndarray = np.float32(3.0) + (np.float32(2.0) / lambda_)
 
     slope_m_per_m: np.float32 = np.float32(0.10)
     hillslope_length_m: np.float32 = np.float32(100.0)
-    interflow_multiplier: np.float32 = np.float32(1.0)
+    interflow_structural_conductivity_m_per_s: np.float32 = np.float32(1e-5)
 
-    # 1. Active wetting front in layer 1 (layers 0 and 1 are in perched transmission zone)
+    # 1. With active wetting front in layer 1
     w_active: np.ndarray = w_wet.copy()
     e_active: np.ndarray = enth.copy()
     (
@@ -758,22 +974,21 @@ def test_distribute_soil_water_ross_active_wetting_front_lateral_flow() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=slope_m_per_m,
         hillslope_length_m=hillslope_length_m,
-        interflow_multiplier=interflow_multiplier,
+        interflow_structural_conductivity_m_per_s=interflow_structural_conductivity_m_per_s,
         green_ampt_active_layer_idx=np.int32(1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
-    # 2. Inactive wetting front (inter-storm matrix flow: green_ampt_active_layer_idx = -1)
+    # 2. Inactive wetting front (green_ampt_active_layer_idx = -1)
     w_inactive: np.ndarray = w_wet.copy()
     e_inactive: np.ndarray = enth.copy()
     (
@@ -794,35 +1009,36 @@ def test_distribute_soil_water_ross_active_wetting_front_lateral_flow() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=slope_m_per_m,
         hillslope_length_m=hillslope_length_m,
-        interflow_multiplier=interflow_multiplier,
+        interflow_structural_conductivity_m_per_s=interflow_structural_conductivity_m_per_s,
         green_ampt_active_layer_idx=np.int32(-1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
-    # Active storm wetting front should produce much higher quickflow than matrix flow:
+    # Lateral interflow operates on free water above field capacity, with or without an
+    # active wetting front (the front only switches off the vertical redistribution,
+    # which leaves a little more water in the layers).
     assert lateral_outflow_active > np.float32(0.0)
-    assert lateral_outflow_active > lateral_outflow_inactive * np.float32(3.0)
+    assert lateral_outflow_inactive > np.float32(0.0)
+    assert lateral_outflow_active == pytest.approx(lateral_outflow_inactive, rel=0.4)
 
-    # Mass balance check
+    # Mass balance check (float32: 0.54 m total, two rounding steps are 1.2e-7)
     assert np.float32(np.sum(w_active) + lateral_outflow_active) == pytest.approx(
-        np.float32(np.sum(w_wet)), abs=1e-7
+        np.float32(np.sum(w_wet)), abs=3e-7
     )
     assert np.float32(np.sum(w_inactive) + lateral_outflow_inactive) == pytest.approx(
-        np.float32(np.sum(w_wet)), abs=1e-7
+        np.float32(np.sum(w_wet)), abs=3e-7
     )
 
-    # 3. Moisture in active transmission zone at field capacity produces zero quickflow
-    # (sub-front layers at residual storage)
+    # 3. Moisture at field capacity produces zero interflow
     w_fc: np.ndarray = wfc.copy()
     w_fc[2:] = wr[2:]
     e_fc: np.ndarray = enth.copy()
@@ -844,82 +1060,27 @@ def test_distribute_soil_water_ross_active_wetting_front_lateral_flow() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=slope_m_per_m,
         hillslope_length_m=hillslope_length_m,
-        interflow_multiplier=interflow_multiplier,
+        interflow_structural_conductivity_m_per_s=interflow_structural_conductivity_m_per_s,
         green_ampt_active_layer_idx=np.int32(1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(0.0),
         groundwater_depth_m=np.float32(10.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
     assert lateral_outflow_fc == pytest.approx(0.0, abs=1e-7)
-
-
-def test_wetting_front_retraction_from_interflow() -> None:
-    """Test that lateral interflow correctly retracts the Green-Ampt wetting front.
-
-    Verifies:
-    1. Retraction depth equals interflow volume divided by moisture deficit.
-    2. Active layer index updates when the front retracts across soil layer boundaries.
-    3. Wetting front fully dissipates and resets to -1 when retracted to surface.
-    """
-    soil_layer_height = np.array([0.05, 0.10, 0.15, 0.30, 0.40, 1.00], dtype=np.float32)
-
-    # Initial state: front in layer 1 at 0.12 m depth (layer 0 is 0.05m, layer 1 ends at 0.15m)
-    depth = np.float32(0.12)
-    deficit = np.float32(0.20)
-    active_idx = 1
-    suction = np.float32(0.35)
-
-    # Case 1: Partial retraction within same layer (lateral outflow = 0.004 m = 4 mm)
-    # Delta L_f = 0.004 / 0.20 = 0.02 m -> new depth = 0.10 m (still in layer 1)
-    lateral_outflow = np.float32(0.004)
-    retraction = lateral_outflow / deficit
-    depth = max(np.float32(0.0), depth - retraction)
-    assert depth == pytest.approx(0.10, abs=1e-5)
-
-    # Case 2: Retraction across boundary into layer 0 (lateral outflow = 0.012 m = 12 mm)
-    # Delta L_f = 0.012 / 0.20 = 0.06 m -> new depth = 0.04 m (in layer 0)
-    lateral_outflow = np.float32(0.012)
-    retraction = lateral_outflow / deficit
-    depth = max(np.float32(0.0), depth - retraction)
-    accum = np.float32(0.0)
-    new_idx = 0
-    for l_idx in range(len(soil_layer_height)):
-        accum += soil_layer_height[l_idx]
-        if depth <= accum:
-            new_idx = l_idx
-            break
-    assert depth == pytest.approx(0.04, abs=1e-5)
-    assert new_idx == 0
-
-    # Case 3: Complete dissipation of wetting front (lateral outflow = 0.010 m = 10 mm)
-    # Delta L_f = 0.010 / 0.20 = 0.05 m -> new depth <= 0 -> resets
-    lateral_outflow = np.float32(0.010)
-    retraction = lateral_outflow / deficit
-    depth = max(np.float32(0.0), depth - retraction)
-    if depth <= np.float32(1e-4):
-        depth = np.float32(0.0)
-        new_idx = -1
-        suction = np.float32(0.0)
-        deficit = np.float32(0.0)
-    assert depth == 0.0
-    assert new_idx == -1
-    assert suction == 0.0
-    assert deficit == 0.0
 
 
 def test_distribute_soil_water_ross_capillary_rise_shallow_gw() -> None:
     """Test that upward capillary rise occurs when soil is dry and water table is shallow."""
     timestep_length_s = np.float32(3600.0)
     soil_layer_height_m = np.array(
-        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00], dtype=np.float32
+        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 1.00], dtype=np.float32
     )
     ws = 0.45 * soil_layer_height_m
     wr = 0.05 * soil_layer_height_m
@@ -960,19 +1121,18 @@ def test_distribute_soil_water_ross_capillary_rise_shallow_gw() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.0),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(0.0),
+        interflow_structural_conductivity_m_per_s=np.float32(0.0),
         green_ampt_active_layer_idx=np.int32(-1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=gw_ksat,
         groundwater_depth_m=groundwater_depth_m,
         deep_soil_temperature_C=deep_soil_temp_C,
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
     # Assertions
@@ -995,7 +1155,7 @@ def test_distribute_soil_water_ross_capillary_rise_deep_gw_shutoff() -> None:
     """Test that capillary rise is completely zero when the water table is deep."""
     timestep_length_s = np.float32(3600.0)
     soil_layer_height_m = np.array(
-        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00], dtype=np.float32
+        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 1.00], dtype=np.float32
     )
     ws = 0.45 * soil_layer_height_m
     wr = 0.05 * soil_layer_height_m
@@ -1034,19 +1194,18 @@ def test_distribute_soil_water_ross_capillary_rise_deep_gw_shutoff() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.0),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(0.0),
+        interflow_structural_conductivity_m_per_s=np.float32(0.0),
         green_ampt_active_layer_idx=np.int32(-1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=gw_ksat,
         groundwater_depth_m=groundwater_depth_m,
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
     assert cap_gw == 0.0, "Capillary rise must be zero when water table is deep"
@@ -1056,7 +1215,7 @@ def test_distribute_soil_water_ross_capillary_rise_supply_limited() -> None:
     """Test that capillary rise is strictly bounded by max_capillary_rise_m."""
     timestep_length_s: np.float32 = np.float32(3600.0)
     soil_layer_height_m: np.ndarray = np.array(
-        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00], dtype=np.float32
+        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 1.00], dtype=np.float32
     )
     ws: np.ndarray = 0.45 * soil_layer_height_m
     wr: np.ndarray = 0.05 * soil_layer_height_m
@@ -1101,19 +1260,18 @@ def test_distribute_soil_water_ross_capillary_rise_supply_limited() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.0),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(0.0),
+        interflow_structural_conductivity_m_per_s=np.float32(0.0),
         green_ampt_active_layer_idx=np.int32(-1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=gw_ksat,
         groundwater_depth_m=groundwater_depth_m,
         deep_soil_temperature_C=deep_soil_temp_C,
+        interflow_structural_depth_m=np.float32(2.0),
     )
     assert cap_gw_ref > 0.0
 
@@ -1137,20 +1295,19 @@ def test_distribute_soil_water_ross_capillary_rise_supply_limited() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.0),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(0.0),
+        interflow_structural_conductivity_m_per_s=np.float32(0.0),
         green_ampt_active_layer_idx=np.int32(-1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=gw_ksat,
         groundwater_depth_m=groundwater_depth_m,
         deep_soil_temperature_C=deep_soil_temp_C,
         max_capillary_rise_m=np.float32(0.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
     assert cap_gw_zero == 0.0, "Capillary rise must be zero when available supply is 0"
     assert perc_gw_e_zero >= 0.0, (
@@ -1178,20 +1335,19 @@ def test_distribute_soil_water_ross_capillary_rise_supply_limited() -> None:
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.0),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(0.0),
+        interflow_structural_conductivity_m_per_s=np.float32(0.0),
         green_ampt_active_layer_idx=np.int32(-1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=gw_ksat,
         groundwater_depth_m=groundwater_depth_m,
         deep_soil_temperature_C=deep_soil_temp_C,
         max_capillary_rise_m=half_supply,
+        interflow_structural_depth_m=np.float32(2.0),
     )
     assert cap_gw_lim <= half_supply + 1e-7, (
         f"Capillary rise {cap_gw_lim} exceeded supply limit {half_supply}"
@@ -1232,6 +1388,7 @@ def test_calculate_capillary_rise_and_percolation_shallow_gw() -> None:
         dconductivity_dS_bottom=dk_bottom,
         liquid_fraction=np.float32(1.0),
         gw_ksat_m_per_s=np.float32(1e-4),
+        cos_slope=np.float32(1.0),
     )
 
     # Flux should be negative (upward capillary rise)
@@ -1266,6 +1423,7 @@ def test_calculate_capillary_rise_and_percolation_deep_gw() -> None:
         dconductivity_dS_bottom=dk_bottom,
         liquid_fraction=np.float32(1.0),
         gw_ksat_m_per_s=np.float32(1e-4),
+        cos_slope=np.float32(1.0),
     )
 
     # Pure gravity drainage
@@ -1299,6 +1457,7 @@ def test_calculate_capillary_rise_and_percolation_submerged() -> None:
         dconductivity_dS_bottom=np.float32(1e-8),
         liquid_fraction=np.float32(1.0),
         gw_ksat_m_per_s=np.float32(1e-4),
+        cos_slope=np.float32(1.0),
     )
 
     assert flux < 0.0, "Submerged water table into dry soil must pull water upward"
@@ -1325,6 +1484,7 @@ def test_calculate_capillary_rise_and_percolation_frozen() -> None:
         dconductivity_dS_bottom=np.float32(1e-6),
         liquid_fraction=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(1e-4),
+        cos_slope=np.float32(1.0),
     )
 
     assert flux == 0.0, "Frozen layer must have zero groundwater flux"
@@ -1354,6 +1514,7 @@ def test_calculate_capillary_rise_and_percolation_ksat_capping() -> None:
         dconductivity_dS_bottom=np.float32(1e-3),
         liquid_fraction=np.float32(1.0),
         gw_ksat_m_per_s=gw_ksat_limit,
+        cos_slope=np.float32(1.0),
     )
     assert flux_down == gw_ksat_limit, "Downward flux must be capped at gw_ksat_limit"
     assert dflux_down == 0.0, "Capped flux must have zero derivative"
@@ -1376,6 +1537,7 @@ def test_calculate_capillary_rise_and_percolation_ksat_capping() -> None:
         dconductivity_dS_bottom=np.float32(1e-8),
         liquid_fraction=np.float32(1.0),
         gw_ksat_m_per_s=gw_ksat_limit,
+        cos_slope=np.float32(1.0),
     )
     assert flux_up == -gw_ksat_limit, "Upward flux must be capped at -gw_ksat_limit"
     assert dflux_up == 0.0, "Capped upward flux must have zero derivative"
@@ -1533,6 +1695,7 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
                 dconductivity_dS_bottom=dk_ds_dry,
                 liquid_fraction=np.float32(1.0),
                 gw_ksat_m_per_s=ksat,
+                cos_slope=np.float32(1.0),
             )
             # Upward flux is negative; convert to positive capillary rise in mm/day
             rise_mm_day: float = max(0.0, -float(flux_m_s) * mm_per_m * seconds_per_day)
@@ -1565,6 +1728,7 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
                 dconductivity_dS_bottom=dk_ds_wet,
                 liquid_fraction=np.float32(1.0),
                 gw_ksat_m_per_s=ksat,
+                cos_slope=np.float32(1.0),
             )
             # Positive = percolation down, Negative = capillary rise up
             net_fluxes_mm_day.append(float(flux_m_s) * mm_per_m * seconds_per_day)
@@ -1641,6 +1805,7 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
                 dconductivity_dS_bottom=dk_ds_val,
                 liquid_fraction=np.float32(1.0),
                 gw_ksat_m_per_s=ksat_loam,
+                cos_slope=np.float32(1.0),
             )
             flux_series_mm_day.append(float(flux_m_s) * mm_per_m * seconds_per_day)
             dflux_series.append(float(dflux_ds) * mm_per_m * seconds_per_day)
@@ -1703,14 +1868,16 @@ def test_distribute_soil_water_ross_wet_bottom_dry_upper_layers_no_spurious_capi
     """
     timestep_length_s: np.float32 = np.float32(3600.0)
     soil_layer_height_m: np.ndarray = np.array(
-        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00], dtype=np.float32
+        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 1.00], dtype=np.float32
     )
     n_layers: int = len(soil_layer_height_m)
     wr: np.ndarray = np.full(n_layers, 0.05, dtype=np.float32) * soil_layer_height_m
     ws: np.ndarray = np.full(n_layers, 0.50, dtype=np.float32) * soil_layer_height_m
     wfc: np.ndarray = np.full(n_layers, 0.30, dtype=np.float32) * soil_layer_height_m
 
-    s_eff: np.ndarray = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.95], dtype=np.float32)
+    s_eff: np.ndarray = np.array(
+        [0.05, 0.05, 0.05, 0.05, 0.05, 0.95, 0.95], dtype=np.float32
+    )
     w_initial: np.ndarray = wr + s_eff * (ws - wr)
 
     enth: np.ndarray = np.full(n_layers, 1e7, dtype=np.float32)
@@ -1747,19 +1914,18 @@ def test_distribute_soil_water_ross_wet_bottom_dry_upper_layers_no_spurious_capi
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.0),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(0.0),
+        interflow_structural_conductivity_m_per_s=np.float32(0.0),
         green_ampt_active_layer_idx=np.int32(-1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(1e-4),
         groundwater_depth_m=np.float32(15.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
     # Capillary rise from 15 m deep water table must be zero (not ~5.3 mm/hr spurious influx)
@@ -1779,19 +1945,19 @@ def test_distribute_soil_water_ross_wet_bottom_dry_upper_layers_no_spurious_capi
 def test_distribute_soil_water_ross_vertical_vs_lateral_ksat_decoupling() -> None:
     """Verify vertical ksat does not affect interflow, and lateral ksat does not affect vertical flux."""
     timestep_length_s = np.float32(3600.0)
-    w_initial = np.array([0.02, 0.02, 0.02, 0.02, 0.02, 0.02], dtype=np.float32)
-    wr = np.array([0.005, 0.005, 0.005, 0.005, 0.005, 0.005], dtype=np.float32)
-    wfc = np.array([0.015, 0.015, 0.015, 0.015, 0.015, 0.015], dtype=np.float32)
-    ws = np.array([0.025, 0.025, 0.025, 0.025, 0.025, 0.025], dtype=np.float32)
-    enth = np.full(6, 1e7, dtype=np.float32)
-    hc = np.full(6, 1e6, dtype=np.float32)
-    base_ksat = np.full(6, 1e-6, dtype=np.float32)
+    w_initial = np.array([0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02], dtype=np.float32)
+    wr = np.array([0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005], dtype=np.float32)
+    wfc = np.array([0.015, 0.015, 0.015, 0.015, 0.015, 0.015, 0.015], dtype=np.float32)
+    ws = np.array([0.025, 0.025, 0.025, 0.025, 0.025, 0.025, 0.025], dtype=np.float32)
+    enth = np.full(N_SOIL_LAYERS, 1e7, dtype=np.float32)
+    hc = np.full(N_SOIL_LAYERS, 1e6, dtype=np.float32)
+    base_ksat = np.full(N_SOIL_LAYERS, 1e-6, dtype=np.float32)
     vertical_ksat_karst = base_ksat * np.float32(10.0)
     interface_dist_m = np.full(5, 0.1, dtype=np.float32)
-    soil_layer_height_m = np.full(6, 0.1, dtype=np.float32)
-    bubbling_pressure_m_positive = np.full(6, 0.1, dtype=np.float32)
-    lambda_ = np.full(6, 0.2, dtype=np.float32)
-    pore_size_index = np.full(6, 13.0, dtype=np.float32)
+    soil_layer_height_m = np.full(N_SOIL_LAYERS, 0.1, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(N_SOIL_LAYERS, 0.1, dtype=np.float32)
+    lambda_ = np.full(N_SOIL_LAYERS, 0.2, dtype=np.float32)
+    pore_size_index = np.full(N_SOIL_LAYERS, 13.0, dtype=np.float32)
 
     # 1. Base simulation (equal vertical and lateral ksat)
     w1 = w_initial.copy()
@@ -1806,19 +1972,18 @@ def test_distribute_soil_water_ross_vertical_vs_lateral_ksat_decoupling() -> Non
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=base_ksat,
         horizontal_saturated_hydraulic_conductivity_m_per_s=base_ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.05),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(1.0),
+        interflow_structural_conductivity_m_per_s=np.float32(1e-05),
         green_ampt_active_layer_idx=np.int32(-1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(1e-6),
         groundwater_depth_m=np.float32(1.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
     # 2. Simulation with 10x vertical ksat (karst) but identical lateral ksat
@@ -1834,19 +1999,18 @@ def test_distribute_soil_water_ross_vertical_vs_lateral_ksat_decoupling() -> Non
         solid_heat_capacity_J_per_m2_K=hc,
         vertical_saturated_hydraulic_conductivity_m_per_s=vertical_ksat_karst,
         horizontal_saturated_hydraulic_conductivity_m_per_s=base_ksat,
-        interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
         lambda_=lambda_,
-        pore_size_index=pore_size_index,
         slope_m_per_m=np.float32(0.05),
         hillslope_length_m=np.float32(100.0),
-        interflow_multiplier=np.float32(1.0),
+        interflow_structural_conductivity_m_per_s=np.float32(1e-05),
         green_ampt_active_layer_idx=np.int32(-1),
         topwater_m=np.float32(0.0),
         gw_ksat_m_per_s=np.float32(1e-6),
         groundwater_depth_m=np.float32(1.0),
         deep_soil_temperature_C=np.float32(10.0),
+        interflow_structural_depth_m=np.float32(2.0),
     )
 
     # Vertical drainage to groundwater should increase under 10x vertical ksat
@@ -1859,3 +2023,204 @@ def test_distribute_soil_water_ross_vertical_vs_lateral_ksat_decoupling() -> Non
     assert res_karst_vertical[5] > 0.0
     # Crucially, lateral outflow must NOT scale with the 10x vertical factor
     assert res_karst_vertical[5] < res_base[5] * 2.0
+
+
+def test_distribute_soil_water_ross_structural_conductivity_declines_with_depth() -> (
+    None
+):
+    """The structural lateral conductivity declines with depth.
+
+    With an e-folding depth of 0.3 m the top layer (middle at 2.5 cm) keeps about 92% of
+    the structural conductivity, the deepest layers almost none, so deep layers keep
+    more water than with a deep-reaching structure (e-folding depth 100 m).
+    """
+    soil_layer_height_m = np.array(
+        [0.05, 0.1, 0.15, 0.3, 0.4, 1.0, 2.0], dtype=np.float32
+    )
+    w_initial = np.full(N_SOIL_LAYERS, 0.45, dtype=np.float32) * soil_layer_height_m
+    ksat = np.full(N_SOIL_LAYERS, 0.01 / np.float32(3600.0), dtype=np.float32)
+
+    def run(structural_depth_m: float) -> tuple[np.ndarray, float]:
+        water_content_m = w_initial.copy()
+        results = distribute_soil_water_ross(
+            timestep_length_s=np.float32(3600.0),
+            water_content_m=water_content_m,
+            water_content_residual_m=np.full(N_SOIL_LAYERS, 0.05, dtype=np.float32)
+            * soil_layer_height_m,
+            water_content_saturated_m=np.full(N_SOIL_LAYERS, 0.5, dtype=np.float32)
+            * soil_layer_height_m,
+            water_content_field_capacity_m=np.full(N_SOIL_LAYERS, 0.3, dtype=np.float32)
+            * soil_layer_height_m,
+            soil_enthalpy_J_per_m2=np.full(N_SOIL_LAYERS, 1e7, dtype=np.float32),
+            solid_heat_capacity_J_per_m2_K=np.full(
+                N_SOIL_LAYERS, 1e6, dtype=np.float32
+            ),
+            vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+            horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
+            soil_layer_height=soil_layer_height_m,
+            bubbling_pressure_m_positive=np.full(
+                N_SOIL_LAYERS, 0.6666, dtype=np.float32
+            ),
+            lambda_=np.full(N_SOIL_LAYERS, 0.3, dtype=np.float32),
+            slope_m_per_m=np.float32(0.1),
+            hillslope_length_m=np.float32(100.0),
+            interflow_structural_conductivity_m_per_s=np.float32(10.0 / 86400.0),
+            green_ampt_active_layer_idx=np.int32(0),
+            topwater_m=np.float32(0.0),
+            gw_ksat_m_per_s=np.float32(0.0),
+            groundwater_depth_m=np.float32(10.0),
+            deep_soil_temperature_C=np.float32(10.0),
+            interflow_structural_depth_m=np.float32(structural_depth_m),
+        )
+        total = np.float32(np.sum(water_content_m) + results[2] + results[5])
+        assert total == pytest.approx(np.float32(np.sum(w_initial)), abs=1e-6)
+        return water_content_m, float(results[5])
+
+    w_uniform, lateral_uniform = run(100.0)
+    w_decay, lateral_decay = run(0.3)
+    assert 0.0 < lateral_decay < lateral_uniform
+    # Deep layers drain much less laterally with the decay; the topsoil hardly changes.
+    retained_deep = w_decay[-1] - w_uniform[-1]
+    retained_top = w_decay[0] - w_uniform[0]
+    assert retained_deep > 0.0
+    assert retained_deep > 10 * abs(retained_top)
+
+
+def test_fill_soil_below_water_table() -> None:
+    """The soil below the water table is saturated with groundwater, within the supply."""
+    height = np.array([0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 1.00], dtype=np.float32)
+    ws = (0.45 * height).astype(np.float32)
+    w_initial = (0.25 * height).astype(np.float32)
+    heat_per_m = 1000.0 * 4186.0 * 10.0  # J/m2 per m of water at 10 C
+
+    def fill(depth_m: float, supply_m: float) -> tuple[np.ndarray, np.ndarray, float]:
+        w = w_initial.copy()
+        enthalpy = np.zeros(N_SOIL_LAYERS, dtype=np.float32)
+        filled = fill_soil_below_water_table(
+            water_content_m=w,
+            water_content_saturated_m=ws,
+            soil_enthalpy_J_per_m2=enthalpy,
+            soil_layer_height=height,
+            groundwater_depth_m=np.float32(depth_m),
+            groundwater_temperature_C=np.float32(10.0),
+            max_fill_m=np.float32(supply_m),
+        )
+        return w, enthalpy, float(filled)
+
+    # water table below the soil (3 m deep): nothing changes
+    w, enthalpy, filled = fill(3.5, 1.0)
+    assert filled == 0.0
+    np.testing.assert_array_equal(w, w_initial)
+
+    # water table at 1.5 m: the lowest layer is saturated, the layer above it half
+    w, enthalpy, filled = fill(1.5, 1.0)
+    np.testing.assert_array_equal(w[:5], w_initial[:5])
+    assert w[6] == pytest.approx(ws[6])
+    # half of the layer is saturated; its 0.25 m of water is already more than that
+    assert w[5] == pytest.approx(max(0.5 * ws[5], w_initial[5]))
+    assert filled == pytest.approx(float(np.sum(w - w_initial)), rel=1e-5)
+    assert float(np.sum(enthalpy)) == pytest.approx(filled * heat_per_m, rel=1e-4)
+
+    # water table at the surface: the whole soil is saturated
+    w, enthalpy, filled = fill(0.0, 1.0)
+    np.testing.assert_allclose(w, ws, rtol=1e-6)
+
+    # the soil cannot take more groundwater than there is
+    w, enthalpy, filled = fill(0.0, 0.05)
+    assert filled == pytest.approx(0.05)
+    assert float(np.sum(w - w_initial)) == pytest.approx(0.05, rel=1e-4)
+
+
+def test_distribute_soil_water_ross_water_table_in_the_soil() -> None:
+    """A water table in the soil fills the submerged layers, which do not drain sideways.
+
+    The soil does not drain into the groundwater it stands in, the groundwater fills
+    the submerged layers to saturation, that water stays (it leaves through the
+    groundwater drain, not as interflow), and the water balance closes.
+    """
+    height = np.array([0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 1.00], dtype=np.float32)
+    ws = (0.45 * height).astype(np.float32)
+    wr = (0.05 * height).astype(np.float32)
+    wfc = (0.25 * height).astype(np.float32)
+    ksat = np.full(N_SOIL_LAYERS, 0.01 / 3600.0, dtype=np.float32)
+
+    def run(groundwater_depth_m: float) -> tuple[float, float, float, float]:
+        w = wfc.copy()
+        enthalpy = np.full(N_SOIL_LAYERS, 1e7, dtype=np.float32)
+        (_, _, percolation, groundwater_uptake, _, lateral, _) = (
+            distribute_soil_water_ross(
+                timestep_length_s=np.float32(3600.0),
+                water_content_m=w,
+                water_content_residual_m=wr,
+                water_content_saturated_m=ws,
+                water_content_field_capacity_m=wfc,
+                soil_enthalpy_J_per_m2=enthalpy,
+                solid_heat_capacity_J_per_m2_K=np.full(
+                    N_SOIL_LAYERS, 1e6, dtype=np.float32
+                ),
+                vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+                horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
+                soil_layer_height=height,
+                bubbling_pressure_m_positive=np.full(
+                    N_SOIL_LAYERS, 0.3, dtype=np.float32
+                ),
+                lambda_=np.full(N_SOIL_LAYERS, 0.3, dtype=np.float32),
+                slope_m_per_m=np.float32(0.1),
+                hillslope_length_m=np.float32(100.0),
+                interflow_structural_conductivity_m_per_s=np.float32(1e-05),
+                green_ampt_active_layer_idx=np.int32(-1),
+                topwater_m=np.float32(0.0),
+                gw_ksat_m_per_s=np.float32(1e-4),
+                groundwater_depth_m=np.float32(groundwater_depth_m),
+                deep_soil_temperature_C=np.float32(10.0),
+                interflow_structural_depth_m=np.float32(2.0),
+            )
+        )
+        assert (w <= ws + 1e-6).all()
+        change = float(np.sum(w) - np.sum(wfc))
+        assert change == pytest.approx(
+            float(groundwater_uptake - percolation - lateral), rel=1e-4, abs=1e-6
+        )
+        return float(percolation), float(groundwater_uptake), float(lateral), change
+
+    # water table 1 m deep: the two lowest layers (1-3 m) stand in the groundwater
+    percolation, uptake, lateral, _ = run(1.0)
+    assert percolation == 0.0
+    assert uptake == pytest.approx(float(np.sum(ws[5:] - wfc[5:])), rel=1e-4)
+    assert lateral == 0.0
+
+    # water table below the soil: no uptake
+    _, uptake_deep, lateral_deep, _ = run(10.0)
+    assert uptake_deep == 0.0
+    assert lateral_deep == 0.0
+
+
+def test_interflow_release_follows_kinematic_storage_model() -> None:
+    """Interflow rises linearly up to half filling and is constant above it.
+
+    Sloan and Moore (1984): below half filling the wedge is twice as thick at the
+    foot as on average (eq. 9); above it the thickness at the foot is the soil
+    thickness (eq. 11-12), so the outflow no longer grows.
+    """
+    capacity_m = np.float32(0.10)
+    rate_per_s = np.float32(1e-5)
+
+    release, rises = get_interflow_release_m_per_s(
+        np.float32(0.0), capacity_m, rate_per_s
+    )
+    assert release == np.float32(0.0)
+    assert not rises
+
+    release, rises = get_interflow_release_m_per_s(
+        np.float32(0.02), capacity_m, rate_per_s
+    )
+    np.testing.assert_allclose(release, 0.02 * 1e-5, rtol=1e-5)
+    assert rises
+
+    # at half filling and above: the outflow of a wedge that fills the soil at the foot
+    for free_water_m in (0.05, 0.075, 0.10):
+        release, rises = get_interflow_release_m_per_s(
+            np.float32(free_water_m), capacity_m, rate_per_s
+        )
+        np.testing.assert_allclose(release, 0.05 * 1e-5, rtol=1e-5)
+        assert not rises

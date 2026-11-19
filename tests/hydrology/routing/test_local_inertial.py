@@ -21,6 +21,7 @@ from geb.geb_types import ArrayFloat32
 from geb.hydrology.routing import (
     RoutingVariables,
     create_river_network,
+    inertial_kernel,
 )
 from geb.hydrology.routing.local_inertial import (
     LocalInertial,
@@ -161,11 +162,13 @@ def _make_local_inertial(
         retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
         bankfull_river_elevation_m=bankfull_river_elevation_m,
         manning_n=manning_n,
+        floodplain_manning_n=manning_n,
         use_kinematic=use_kinematic,
         rivers_gdf=rivers_gdf,
         min_slope=min_slope,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
         floodplain_profile_widths_m=floodplain_profile_widths_m,
         waterbody_lake_area=waterbody_lake_area,
@@ -174,6 +177,10 @@ def _make_local_inertial(
         waterbody_outflow_bed_elev=waterbody_outflow_bed_elev,
         river_storage_alpha=river_storage_alpha,
         river_storage_beta=river_storage_beta,
+        stream_width_m=np.zeros_like(river_storage_beta),
+        stream_bankfull_depth_m=np.full_like(river_storage_beta, np.inf),
+        stream_floodplain_width_m=np.zeros_like(river_storage_beta),
+        stream_floodplain_conveyance=np.zeros_like(river_storage_beta),
         in_spinup=True,
         max_threads=max_threads,
     )
@@ -219,6 +226,8 @@ def test_local_inertial_basic(
         retention_storage_m3_out,
         retention_inflow_m3,
         retention_outflow_m3,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         river_storage_m3=river_storage,
@@ -282,6 +291,8 @@ def test_local_inertial_with_retention_basins(
         retention_storage_out,
         retention_inflow,
         retention_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         river_storage_m3=river_storage_m3,
@@ -331,6 +342,8 @@ def test_local_inertial_with_longer_dt(
         retention_storage_out,
         retention_inflow,
         retention_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         river_storage_m3=river_storage_m3,
@@ -379,6 +392,8 @@ def test_local_inertial_with_sideflow(
         retention_storage_out,
         retention_inflow,
         retention_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         river_storage_m3=river_storage_m3,
@@ -450,6 +465,8 @@ def test_local_inertial_with_waterbodies(
         retention_storage_out,
         retention_inflow,
         retention_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=Q_initial[mask],
         river_storage_m3=river_storage_m3,
@@ -472,7 +489,7 @@ def test_local_inertial_inverse_ops(
     mask: npt.NDArray[np.bool_],
     Q_initial: npt.NDArray[np.float32],
 ) -> None:
-    """Test if LocalInertial's total_storage and discharge_from_river_storage are inverses."""
+    """Test that calculate_discharge_from_river_storage inverts the storage relation V = alpha * Q^beta * L."""
     river_network = create_river_network(ldd, mask, transform=Affine.identity())
     dt = 3600
     river_length = np.full_like(mask[mask], 100.0, dtype=np.float32)
@@ -500,7 +517,7 @@ def test_local_inertial_inverse_ops(
     alpha = np.full_like(Q, 1.5, dtype=np.float32)
     beta = np.full_like(Q, 0.6, dtype=np.float32)
 
-    storage = router.get_total_storage(Q, alpha, beta)
+    storage = (alpha * Q**beta * river_length).astype(np.float64)
     Q_inv = router.calculate_discharge_from_river_storage(
         storage, alpha, beta, river_length, waterbody_id
     )
@@ -557,6 +574,8 @@ def test_local_inertial_sudden_flood_wave(
             _,
             _,
             outflow_pits_m3,
+            _,
+            _,
             _,
             _,
             _,
@@ -626,6 +645,8 @@ def test_local_inertial_momentum_persistence(
         _,
         _,
         _,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=Q_prev_m3_s,
         river_storage_m3=river_storage_m3,
@@ -683,6 +704,8 @@ def test_local_inertial_reverse_flow_mass_conservation() -> None:
         retention_storage_out,
         retention_inflow,
         retention_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=Q_prev,
         river_storage_m3=river_storage_m3,
@@ -738,6 +761,8 @@ def test_local_inertial_head_gradient_overflow_resilience() -> None:
         _,
         _,
         outflow_at_pits,
+        _,
+        _,
         _,
         _,
         _,
@@ -810,7 +835,11 @@ def test_local_inertial_raises_on_non_finite_inputs() -> None:
 
 
 def test_local_inertial_no_backflow_into_dry_cell() -> None:
-    """Test that downstream water level rise does not cause backflow into an initially dry upstream reach."""
+    """Test backflow into a dry upstream reach from a flooded downstream reach.
+
+    The beds are level, so the downstream water surface is above the upstream bed:
+    water flows back only when reverse flow is enabled.
+    """
     ldd = np.array([[2], [5]], dtype=np.uint8)
     mask = np.ones((2, 1), dtype=bool)
     river_network = create_river_network(ldd, mask, transform=Affine.identity())
@@ -842,6 +871,8 @@ def test_local_inertial_no_backflow_into_dry_cell() -> None:
         _,
         _,
         _,
+        outflow_at_pits,
+        _,
         _,
         _,
         _,
@@ -858,12 +889,20 @@ def test_local_inertial_no_backflow_into_dry_cell() -> None:
         retention_activation_threshold_m3_s=np.zeros(2, dtype=np.float32),
     )
 
-    # Upstream cell must not receive backflow (negative Q and non-zero storage)
-    assert Q_new[0] == 0.0, (
-        f"Expected no backflow (negative discharge), but got Q_new[0] = {Q_new[0]}"
-    )
-    assert river_storage_out[0] == 0.0, (
-        f"Expected upstream cell to not receive water, but got {river_storage_out[0]}"
+    if inertial_kernel.ALLOW_REVERSE_FLOW:
+        assert Q_new[0] < 0.0, f"Expected backflow, but got Q_new[0] = {Q_new[0]}"
+        assert river_storage_out[0] > 0.0
+    else:
+        # Upstream cell must not receive backflow (negative Q and non-zero storage)
+        assert Q_new[0] == 0.0, (
+            f"Expected no backflow (negative discharge), but got Q_new[0] = {Q_new[0]}"
+        )
+        assert river_storage_out[0] == 0.0, (
+            f"Expected upstream cell to not receive water, but got {river_storage_out[0]}"
+        )
+    # Mass balance: water is not created or lost
+    assert np.isclose(
+        float(np.sum(river_storage_out)) + float(outflow_at_pits), 30000.0, rtol=1e-4
     )
 
 
@@ -905,6 +944,8 @@ def test_local_inertial_with_excess_abstraction() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.zeros(2, dtype=np.float32),
         river_storage_m3=river_storage_m3,
@@ -967,6 +1008,8 @@ def test_local_inertial_inertial_reaches_with_waterbodies() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.zeros(4, dtype=np.float32),
         river_storage_m3=river_storage_init.copy(),
@@ -1018,6 +1061,8 @@ def test_local_inertial_channel_evaporation() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.array([0.0, 0.0], dtype=np.float32),
         river_storage_m3=river_storage_init,
@@ -1033,8 +1078,9 @@ def test_local_inertial_channel_evaporation() -> None:
     # Actual evaporation on cell 0 is constrained by available water (<= 500 m3)
     assert actual_evap[0] <= 500.0 + 1e-4
     assert actual_evap[0] > 0.0
-    # Actual evaporation on cell 1 occurs up to demand (<= 1000 m3)
-    assert actual_evap[1] <= 1000.0 + 1e-4
+    # Actual evaporation on cell 1 occurs up to demand (<= 1000 m3, up to float32
+    # rounding of the substep accumulation)
+    assert actual_evap[1] <= 1000.0 * (1.0 + 1e-6)
     assert actual_evap[1] > 0.0
     # Reach storage cannot be negative
     assert (river_storage_out >= 0.0).all()
@@ -1074,6 +1120,8 @@ def test_local_inertial_cascaded_waterbodies() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.zeros(3, dtype=np.float32),
         river_storage_m3=np.zeros(3, dtype=np.float64),
@@ -1123,6 +1171,8 @@ def test_local_inertial_tributary_junction_multidirectional_scaling() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.zeros(n_cells, dtype=np.float32),
         river_storage_m3=river_storage_init,
@@ -1135,9 +1185,16 @@ def test_local_inertial_tributary_junction_multidirectional_scaling() -> None:
         retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
     )
 
-    # Because backflow is currently disabled, no water is transferred from the junction to the tributaries
-    assert river_storage_out[0] == 0.0
-    assert river_storage_out[1] == 0.0
+    if inertial_kernel.ALLOW_REVERSE_FLOW:
+        # The junction water surface is above both tributary beds, so both receive
+        # water, scaled so the junction is not overdrawn
+        assert river_storage_out[0] > 0.0
+        assert river_storage_out[1] > 0.0
+        assert river_storage_out[2] > 0.0
+    else:
+        # Without reverse flow, no water is transferred from the junction to the tributaries
+        assert river_storage_out[0] == 0.0
+        assert river_storage_out[1] == 0.0
     # Mass balance holds exactly
     total_after = float(np.sum(river_storage_out)) + float(outflow_at_pits)
     assert np.isclose(200000.0, total_after, rtol=1e-4)
@@ -1182,6 +1239,8 @@ def test_local_inertial_kinematic_pit_missing_river_id() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.zeros(n_cells, dtype=np.float32),
         river_storage_m3=np.array([1000.0, 500.0], dtype=np.float64),
@@ -1280,6 +1339,8 @@ def test_local_inertial_terminal_waterbody_on_pit() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.zeros(n_cells, dtype=np.float32),
         river_storage_m3=river_storage_init.copy(),
@@ -1313,6 +1374,8 @@ def test_local_inertial_terminal_waterbody_on_pit() -> None:
         wb_storage_out2,
         _,
         outflow_at_pits2,
+        _,
+        _,
         _,
         _,
         _,
@@ -1380,6 +1443,8 @@ def test_compound_channel_floodplain_attenuation_and_mass_balance() -> None:
             _,
             _,
             pit_out,
+            _,
+            _,
             _,
             _,
             _,
@@ -1514,6 +1579,8 @@ def test_floodplain_damping_scenarios_and_plots() -> None:
                 _,
                 _,
                 pit_out,
+                _,
+                _,
                 _,
                 _,
                 _,
@@ -1693,6 +1760,8 @@ def test_floodplain_convective_pulse_dynamics_and_plots() -> None:
                 _,
                 _,
                 _,
+                _,
+                _,
             ) = router.step(
                 Q_prev_m3_s=q,
                 river_storage_m3=storage,
@@ -1801,6 +1870,8 @@ def test_local_inertial_ocean_pit_negative_bed_elevation() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.array([5.0, 5.0], dtype=np.float32),
         river_storage_m3=init_storage.copy(),
@@ -1885,6 +1956,8 @@ def test_local_inertial_inland_pit_with_downstream_id() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.array([10.0, 10.0], dtype=np.float32),
         river_storage_m3=init_storage.copy(),
@@ -1972,6 +2045,8 @@ def test_local_inertial_waterbody_boundary_uses_lake_water_level() -> None:
         _,
         _,
         _,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=np.array([2.0, 0.0], dtype=np.float32),
         river_storage_m3=river_storage.copy(),
@@ -1998,6 +2073,8 @@ def test_local_inertial_waterbody_boundary_uses_lake_water_level() -> None:
         _,
         _,
         inflow_high,
+        _,
+        _,
         _,
         _,
         _,
@@ -2063,6 +2140,8 @@ def test_local_inertial_cfl_under_sudden_upstream_flood() -> None:
         ret_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=q_init,
         river_storage_m3=storage_init.copy(),
@@ -2126,6 +2205,8 @@ def test_local_inertial_zero_flow_startup_stability() -> None:
         _,
         _,
         outflow_at_pits,
+        _,
+        _,
         _,
         _,
         _,
@@ -2249,6 +2330,8 @@ def test_kinematic_overland_flowing_into_downstream_inertial_reach() -> None:
             retention_storage,
             ret_inflow,
             ret_outflow,
+            _,
+            _,
         ) = router.step(
             Q_prev_m3_s=discharge,
             river_storage_m3=storage,
@@ -2321,6 +2404,8 @@ def test_alternating_kinematic_inertial_network() -> None:
             retention_storage,
             ret_inflow,
             ret_outflow,
+            _,
+            _,
         ) = router.step(
             Q_prev_m3_s=discharge,
             river_storage_m3=storage,
@@ -2393,6 +2478,8 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
             retention_storage,
             ret_inflow,
             ret_outflow,
+            _,
+            _,
         ) = router.step(
             Q_prev_m3_s=discharge,
             river_storage_m3=storage,
@@ -2408,7 +2495,10 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
     # Dynamically update river geometry as discharge develops (e.g. from 0.5m to 12.0m)
     updated_widths = np.array([8.0, 12.0, 15.0], dtype=np.float32)
     router.update_channel_geometry(
-        river_width=updated_widths, bankfull_depth_m=router.bankfull_depth
+        river_width=updated_widths,
+        bankfull_depth_m=router.bankfull_depth,
+        levee_depth_m=router.bankfull_depth,
+        manning_n=np.full(updated_widths.size, 0.03, dtype=np.float32),
     )
 
     np.testing.assert_array_almost_equal(
@@ -2429,6 +2519,8 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
             retention_storage,
             ret_inflow,
             ret_outflow,
+            _,
+            _,
         ) = router.step(
             Q_prev_m3_s=discharge,
             river_storage_m3=storage,
@@ -2515,6 +2607,8 @@ def test_local_inertial_dynamic_lake_outflow_substepping() -> None:
         retention_storage,
         ret_inflow,
         ret_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=discharge,
         river_storage_m3=storage,
@@ -2651,6 +2745,7 @@ def test_local_inertial_water_stage_state_variable() -> None:
     is_waterbody_outflow = np.array([False, False, False], dtype=bool)
     river_ids = np.array([101, 102, 103], dtype=np.int32)
     use_kinematic = np.array([False, False, False], dtype=bool)
+    bankfull_depth = np.array([1.0, 1.0, 1.0], dtype=np.float32)
 
     rivers_gdf = gpd.GeoDataFrame(
         {
@@ -2670,10 +2765,13 @@ def test_local_inertial_water_stage_state_variable() -> None:
         is_waterbody_outflow=is_waterbody_outflow,
         use_kinematic=use_kinematic,
         rivers_gdf=rivers_gdf,
-        bankfull_river_elevation_m=bed_elevation,
+        bankfull_river_elevation_m=bed_elevation + bankfull_depth,
+        bankfull_depth_m=bankfull_depth,
     )
 
-    # Initial stage should equal bed elevation + bankfull depth
+    # the bank (DEM river surface) lies one bankfull depth above the bed
+    np.testing.assert_allclose(router.bed_elevation, bed_elevation)
+
     stage_initial = router.get_water_stage()
     assert (stage_initial >= bed_elevation).all()
     assert np.all(np.isfinite(stage_initial))
@@ -2766,6 +2864,7 @@ def test_local_inertial_waterbody_parameters_required(
         "rivers_gdf": rivers_gdf,
         "shape_exponent": shape_exp,
         "bankfull_depth_m": bk_depth,
+        "levee_depth_m": bk_depth,
         "floodplain_width_m": fp_width,
         # Missing waterbody_lake_area, etc.
     }
@@ -2788,10 +2887,12 @@ def test_local_inertial_waterbody_parameters_required(
             retention_basin_release_threshold_factor=0.9,
             bankfull_river_elevation_m=bed_elev,
             manning_n=manning,
+            floodplain_manning_n=manning,
             use_kinematic=use_kin,
             rivers_gdf=rivers_gdf,
             shape_exponent=shape_exp,
             bankfull_depth_m=bk_depth,
+            levee_depth_m=bk_depth,
             floodplain_side_slope_m_per_m=np.full(n_cells, 2.0, dtype=np.float32),
             floodplain_profile_widths_m=np.zeros((n_cells, 10), dtype=np.float32),
             waterbody_lake_area=np.ones(2, dtype=np.float32),  # n_wb is 0
@@ -2800,6 +2901,16 @@ def test_local_inertial_waterbody_parameters_required(
             waterbody_outflow_bed_elev=np.zeros(0, dtype=np.float32),
             river_storage_alpha=np.full(n_cells, 1.0, dtype=np.float32),
             river_storage_beta=np.full(n_cells, 0.6, dtype=np.float32),
+            stream_width_m=np.zeros_like(np.full(n_cells, 0.6, dtype=np.float32)),
+            stream_bankfull_depth_m=np.full_like(
+                np.full(n_cells, 0.6, dtype=np.float32), np.inf
+            ),
+            stream_floodplain_width_m=np.zeros_like(
+                np.full(n_cells, 0.6, dtype=np.float32)
+            ),
+            stream_floodplain_conveyance=np.zeros_like(
+                np.full(n_cells, 0.6, dtype=np.float32)
+            ),
             in_spinup=True,
         )
 
@@ -2869,6 +2980,7 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
             storage_m3=np.zeros(0, dtype=np.float64),
             prescribed_outflow_m3=np.zeros(0, dtype=np.float32),
             inflow_m3=np.zeros(0, dtype=np.float32),
+            outflow_m3=np.zeros(0, dtype=np.float32),
             lake_area=np.zeros(0, dtype=np.float32),
             lake_factor=np.zeros(0, dtype=np.float32),
             outflow_height=np.zeros(0, dtype=np.float32),
@@ -3271,6 +3383,8 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
         curr_discharge=np.float32(20.0),
         min_wet_depth_m=np.float32(1e-3),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
         g_dt_substep=g_dt_substep,
         sqrt_gravity=sqrt_gravity,
         can_reverse=False,
@@ -3288,6 +3402,8 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
         curr_discharge=np.float32(50.0),
         min_wet_depth_m=np.float32(1e-3),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
         g_dt_substep=g_dt_substep,
         sqrt_gravity=sqrt_gravity,
         can_reverse=False,
@@ -3404,7 +3520,7 @@ def test_local_inertial_confluence_flood_pulse_and_recession() -> None:
         river_length=river_lengths,
         river_width=river_widths,
         rivers_gdf=rivers_gdf,
-        bankfull_river_elevation_m=bed_elevations,
+        bankfull_river_elevation_m=bed_elevations + np.float32(5.0),
         manning_n=np.full(n_cells, 0.03, dtype=np.float32),
         shape_exponent=0.5,
         bankfull_depth_m=5.0,
@@ -3827,8 +3943,8 @@ def test_local_inertial_confluence_monster_dam_break_backwater() -> None:
         if discharge[0] < -1.0:
             observed_reverse_flow = True
 
-    # Because reverse flow is currently disabled, no backflow occurs into the tributary
-    assert not observed_reverse_flow
+    # The dam-break surge pushes water back into the tributary only with reverse flow
+    assert observed_reverse_flow == inertial_kernel.ALLOW_REVERSE_FLOW
 
     # Verify overall mass conservation
     final_storage: float = float(np.sum(storage))
@@ -4356,7 +4472,10 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
     # Dynamic channel geometry calibration occurs during spinup
     dynamic_width: ArrayFloat32 = np.array([2.0, 6.0, 9.0, 12.0], dtype=np.float32)
     router_A.update_channel_geometry(
-        river_width=dynamic_width, bankfull_depth_m=bankfull_depth
+        river_width=dynamic_width,
+        bankfull_depth_m=bankfull_depth,
+        levee_depth_m=bankfull_depth,
+        manning_n=np.full(dynamic_width.size, 0.03, dtype=np.float32),
     )
 
     # Take step 5 with updated dynamic channel geometry
@@ -5051,3 +5170,317 @@ def test_local_inertial_parallel_cfl_compilation(
     storage_out: np.ndarray = result[1]
     assert np.all(np.isfinite(q_out))
     assert np.all(np.isfinite(storage_out))
+
+
+def test_lake_releases_into_kinematic_reach() -> None:
+    """A natural lake draining into a kinematic (non-river) cell releases through its weir."""
+    # Topology: Lake 0 (cell 0) -> kinematic cell 1 (pit). No inertial reaches.
+    ldd: np.ndarray = np.array([[2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((2, 1), dtype=bool)
+    network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+    n_cells: int = 2
+    lake_area: float = 10000.0
+    lake_factor: float = 5.0
+    outflow_height: float = 1.0
+
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=network,
+        river_length=np.full(n_cells, 1000.0, dtype=np.float32),
+        river_width=np.full(n_cells, 10.0, dtype=np.float32),
+        waterbody_ids=np.array([0, -1], dtype=np.int32),
+        river_ids=np.array([-1, -1], dtype=np.int32),
+        is_waterbody_outflow=np.array([True, False], dtype=bool),
+        use_kinematic=np.array([False, True], dtype=bool),
+        bankfull_river_elevation_m=np.array([5.0, 0.0], dtype=np.float32),
+        waterbody_lake_area=np.array([lake_area], dtype=np.float32),
+        waterbody_lake_factor=np.array([lake_factor], dtype=np.float32),
+        waterbody_outflow_height=np.array([outflow_height], dtype=np.float32),
+        waterbody_outflow_bed_elev=np.array([5.0], dtype=np.float32),
+        river_storage_alpha=np.full(n_cells, 1.0, dtype=np.float32),
+        river_storage_beta=np.full(n_cells, 0.6, dtype=np.float32),
+    )
+    assert router.n_inertial == 0
+    assert len(router._kinematic_topology.wb_to_kin_wb_id) == 1
+
+    # Head above the sill of 4 m.
+    wb_storage_init: np.ndarray = np.array([50000.0], dtype=np.float64)
+    res = router.step(
+        Q_prev_m3_s=np.zeros(n_cells, dtype=np.float32),
+        river_storage_m3=np.zeros(n_cells, dtype=np.float64),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=wb_storage_init.copy(),
+        outflow_per_waterbody_m3=np.array([np.nan], dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+    river_storage_out: np.ndarray = res[1]
+    wb_storage_out: np.ndarray = res[5]
+    outflow_at_pits: float = float(res[7])
+
+    # Exact solution of dh/dt = -(k / A) h^2 over one hour.
+    h0: float = 4.0
+    drawdown: float = lake_factor * h0 * 3600.0 / lake_area
+    expected_release: float = lake_area * h0 * drawdown / (1.0 + drawdown)
+    np.testing.assert_allclose(
+        wb_storage_init[0] - wb_storage_out[0], expected_release, rtol=1e-5
+    )
+    # The reported waterbody outflow is the released volume.
+    np.testing.assert_allclose(res[11][0], expected_release, rtol=1e-5)
+    # The release is less than the water above the sill and ends up downstream.
+    assert wb_storage_out[0] > lake_area * outflow_height
+    total_final: float = float(
+        wb_storage_out.sum() + river_storage_out.sum() + outflow_at_pits
+    )
+    assert np.isclose(total_final, wb_storage_init.sum(), rtol=1e-5)
+
+
+def test_waterbody_outflow_reports_released_volume() -> None:
+    """Reported outflows are the released volumes; the prescribed input is not modified."""
+    # Reservoir 0 (cell 0) -> kinematic cell 1; lake 1 (cell 2) -> inertial reach 3 (pit).
+    ldd: np.ndarray = np.array([[2], [5], [2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((4, 1), dtype=bool)
+    network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+    n_cells: int = 4
+    rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "downstream_ID": np.array([-1], dtype=np.int32),
+            "slope": np.array([0.001], dtype=np.float32),
+        },
+        index=[0],
+    )
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=network,
+        river_length=np.full(n_cells, 1000.0, dtype=np.float32),
+        river_width=np.full(n_cells, 10.0, dtype=np.float32),
+        waterbody_ids=np.array([0, -1, 1, -1], dtype=np.int32),
+        river_ids=np.array([-1, -1, -1, 0], dtype=np.int32),
+        is_waterbody_outflow=np.array([True, False, True, False], dtype=bool),
+        use_kinematic=np.array([False, True, False, False], dtype=bool),
+        rivers_gdf=rivers_gdf,
+        bankfull_river_elevation_m=np.array([5.0, 0.0, 5.0, 0.0], dtype=np.float32),
+        waterbody_lake_area=np.array([10000.0, 10000.0], dtype=np.float32),
+        waterbody_lake_factor=np.array([5.0, 5.0], dtype=np.float32),
+        waterbody_outflow_height=np.array([1.0, 1.0], dtype=np.float32),
+        waterbody_outflow_bed_elev=np.array([5.0, 5.0], dtype=np.float32),
+        river_storage_alpha=np.full(n_cells, 1.0, dtype=np.float32),
+        river_storage_beta=np.full(n_cells, 0.6, dtype=np.float32),
+    )
+    prescribed: np.ndarray = np.array([1000.0, np.nan], dtype=np.float32)
+    wb_storage_init: np.ndarray = np.array([50000.0, 50000.0], dtype=np.float64)
+    res = router.step(
+        Q_prev_m3_s=np.zeros(n_cells, dtype=np.float32),
+        river_storage_m3=np.zeros(n_cells, dtype=np.float64),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=wb_storage_init.copy(),
+        outflow_per_waterbody_m3=prescribed,
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+    wb_storage_out: np.ndarray = res[5]
+    wb_outflow: np.ndarray = res[11]
+
+    np.testing.assert_allclose(wb_outflow[0], 1000.0, rtol=1e-6)
+    assert wb_outflow[1] > 0.0
+    np.testing.assert_allclose(wb_outflow, wb_storage_init - wb_storage_out, rtol=1e-5)
+    assert prescribed[0] == np.float32(1000.0)
+    assert np.isnan(prescribed[1])
+
+
+def test_outlet_reach_flows_at_normal_depth() -> None:
+    """In uniform steady flow the outlet (pit) reach has the same depth as upstream reaches.
+
+    The outlet boundary uses the bed slope (normal depth) instead of a free drawdown
+    h / dx, which would make the outlet reach much shallower than uniform flow.
+    """
+    n_cells: int = 5
+    ldd: np.ndarray = np.array([[2], [2], [2], [2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((n_cells, 1), dtype=bool)
+    network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+    slope: float = 1e-4
+    length: float = 1000.0
+    bed: np.ndarray = (10.0 - slope * length * np.arange(n_cells)).astype(np.float32)
+    river_ids: np.ndarray = np.arange(n_cells, dtype=np.int32)
+    rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            # The outlet drains into a river outside the domain (inland pit).
+            "downstream_ID": np.array([1, 2, 3, 4, 99], dtype=np.int32),
+            "slope": np.full(n_cells, slope, dtype=np.float32),
+        },
+        index=river_ids,
+    )
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=network,
+        river_length=np.full(n_cells, length, dtype=np.float32),
+        river_width=np.full(n_cells, 20.0, dtype=np.float32),
+        river_ids=river_ids,
+        use_kinematic=np.zeros(n_cells, dtype=bool),
+        rivers_gdf=rivers_gdf,
+        bankfull_river_elevation_m=bed,
+        bankfull_depth_m=5.0,
+        min_slope=slope,
+    )
+
+    inflow_m3_s: float = 10.0
+    sideflow: np.ndarray = np.zeros(n_cells, dtype=np.float32)
+    sideflow[0] = inflow_m3_s * 3600.0
+    q: np.ndarray = np.zeros(n_cells, dtype=np.float32)
+    storage: np.ndarray = np.zeros(n_cells, dtype=np.float64)
+    for _ in range(240):
+        res = router.step(
+            Q_prev_m3_s=q,
+            river_storage_m3=storage,
+            sideflow_m3=sideflow,
+            evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+            transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
+            waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+            outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+            retention_storage_m3=np.zeros(0, dtype=np.float32),
+            retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+        )
+        q = res[0].copy()
+        storage = res[1].copy()
+
+    np.testing.assert_allclose(q[-1], inflow_m3_s, rtol=1e-2)
+    # Uniform flow: the outlet reach holds as much water as the reaches upstream.
+    np.testing.assert_allclose(storage[-1], storage[2], rtol=0.05)
+
+
+def test_momentum_state_is_end_of_timestep_discharge() -> None:
+    """step() returns the end-of-timestep discharge as momentum state, separate from the mean."""
+    n_cells: int = 3
+    ldd: np.ndarray = np.array([[2], [2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((n_cells, 1), dtype=bool)
+    network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+    river_ids: np.ndarray = np.arange(n_cells, dtype=np.int32)
+    rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "downstream_ID": np.array([1, 2, 99], dtype=np.int32),
+            "slope": np.full(n_cells, 1e-3, dtype=np.float32),
+        },
+        index=river_ids,
+    )
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=network,
+        river_length=np.full(n_cells, 1000.0, dtype=np.float32),
+        river_width=np.full(n_cells, 20.0, dtype=np.float32),
+        river_ids=river_ids,
+        use_kinematic=np.zeros(n_cells, dtype=bool),
+        rivers_gdf=rivers_gdf,
+        bankfull_river_elevation_m=np.array([2.0, 1.0, 0.0], dtype=np.float32),
+        bankfull_depth_m=5.0,
+    )
+    # A flood volume starting at rest: discharge accelerates during the hour.
+    res = router.step(
+        Q_prev_m3_s=np.zeros(n_cells, dtype=np.float32),
+        river_storage_m3=np.array([60000.0, 0.0, 0.0], dtype=np.float64),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+    q_mean: np.ndarray = res[0]
+    q_state: np.ndarray = res[12]
+
+    # The state is the discharge after the last substep, in grid order.
+    end_of_substep: np.ndarray = np.empty(n_cells, dtype=np.float32)
+    end_of_substep[router.sorted_idxs] = (
+        router._substep_buffers.substep_discharge_inertial
+    )
+    np.testing.assert_array_equal(q_state, end_of_substep)
+    # Unsteady flow: the end-of-hour discharge differs from the hourly mean.
+    assert not np.allclose(q_state, q_mean, rtol=1e-3)
+
+
+def test_kinematic_inflow_to_inertial_is_time_centred() -> None:
+    """Inflow from a kinematic into an inertial reach is (Q_prev + Q_new) / 2, mass conserving."""
+    n_cells: int = 2
+    # Kinematic cell 0 -> inertial reach 1 (pit).
+    ldd: np.ndarray = np.array([[2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((n_cells, 1), dtype=bool)
+    network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+    rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "downstream_ID": np.array([99], dtype=np.int32),
+            "slope": np.array([1e-3], dtype=np.float32),
+        },
+        index=[0],
+    )
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=network,
+        river_length=np.full(n_cells, 1000.0, dtype=np.float32),
+        river_width=np.full(n_cells, 20.0, dtype=np.float32),
+        river_ids=np.array([-1, 0], dtype=np.int32),
+        use_kinematic=np.array([True, False], dtype=bool),
+        rivers_gdf=rivers_gdf,
+        bankfull_river_elevation_m=np.array([2.0, 1.0], dtype=np.float32),
+        river_storage_alpha=np.full(n_cells, 1.0, dtype=np.float32),
+        river_storage_beta=np.full(n_cells, 0.6, dtype=np.float32),
+    )
+    q_prev_kin: float = 1.0
+    storage_init: np.ndarray = np.array([1000.0, 0.0], dtype=np.float64)
+    # Strong lateral inflow into the kinematic cell: a rising limb.
+    sideflow: np.ndarray = np.array([20.0 * 3600.0, 0.0], dtype=np.float32)
+    res = router.step(
+        Q_prev_m3_s=np.array([q_prev_kin, 0.0], dtype=np.float32),
+        river_storage_m3=storage_init.copy(),
+        sideflow_m3=sideflow,
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        transmission_loss_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+    q_mean: np.ndarray = res[0]
+    storage: np.ndarray = res[1]
+    outflow_at_pits: float = float(res[7])
+    q_state: np.ndarray = res[12]
+
+    q_new_kin: float = float(q_state[0])
+    assert q_new_kin > q_prev_kin
+    # The kinematic outflow over the hour (and the inflow to the inertial reach) is
+    # time-centred, while the state keeps the end-of-hour discharge.
+    np.testing.assert_allclose(q_mean[0], 0.5 * (q_prev_kin + q_new_kin), rtol=1e-5)
+    kin_inflow = router._substep_buffers.kinematic_inflow_rate_inertial[0]
+    np.testing.assert_allclose(kin_inflow, q_mean[0], rtol=1e-6)
+    total_final: float = float(storage.sum()) + outflow_at_pits
+    np.testing.assert_allclose(
+        total_final, storage_init.sum() + sideflow.sum(), rtol=1e-5
+    )
+
+
+def test_channel_bed_elevation_below_bank() -> None:
+    """The bed lies one bankfull depth below the bank and never rises downstream."""
+    from geb.hydrology.routing.local_inertial import get_channel_bed_elevation
+
+    # chain 0 -> 1 -> 2 -> 3 (pit); cell 3 is a waterbody (no channel)
+    bank = np.array([20.0, 18.0, 17.5, 17.0], dtype=np.float32)
+    depth = np.array([2.0, 3.0, 1.0, 4.0], dtype=np.float32)
+    is_channel = np.array([True, True, True, False])
+    downstream = np.array([1, 2, 3, -1], dtype=np.int32)
+    order = np.array([0, 1, 2, 3], dtype=np.int32)
+    bed = get_channel_bed_elevation(bank, depth, is_channel, downstream, order)
+    # 18 - 2 = 18, 18 - 3 = 15, 17.5 - 1 = 16.5 > 15 -> lowered to 15, waterbody keeps its bank
+    np.testing.assert_allclose(bed, [18.0, 15.0, 15.0, 17.0])

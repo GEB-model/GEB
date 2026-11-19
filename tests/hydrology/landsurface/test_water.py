@@ -4,9 +4,11 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 
 from geb.geb_types import ArrayFloat32
 from geb.hydrology.landcovers import (
+    FOREST,
     NON_PADDY_IRRIGATED,
     OPEN_WATER,
     PADDY_IRRIGATED,
@@ -16,9 +18,10 @@ from geb.hydrology.landsurface.water import (
     FORCING_SOURCE_SIGMA_DEFAULTS,
     add_water_to_topwater_and_evaporate_open_water,
     calculate_depression_spillover_runoff,
-    calculate_variable_source_area_fraction,
+    calculate_hillslope_saturated_area_fraction,
     generate_rainfall_lookup_table,
     get_bubbling_pressure_m_positive,
+    get_perched_store_filling,
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
     get_soil_moisture_at_pressure,
@@ -222,11 +225,14 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=initial_enthalpy,
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.full(len(w), initial_enthalpy, dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=rain_temp,
         new_surface_water_input_m=topwater,
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # Check that some water was infiltrated
@@ -252,14 +258,14 @@ def test_infiltration() -> None:
     assert np.all(w >= 0.0)
     assert np.all(w <= ws)
 
-    # Test case 2: Fully frozen top layer with no new liquid heat input.
-    # Use an enthalpy state that is consistent with a fully frozen thin top layer,
-    # otherwise the default zero-enthalpy fallback represents unfrozen conditions.
-    w = np.array([0.002, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+    # Test case 2: Top layer frozen when (nearly) saturated, with no new liquid heat input:
+    # ice fills its pores (frost table). Use an enthalpy state that freezes all water in
+    # every layer, otherwise the default zero-enthalpy fallback represents unfrozen conditions.
+    w = np.array([0.297, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     topwater = np.float32(0.005)
     frozen_fraction_top_layer = np.float32(1.0)
     topwater_pre = topwater
-    soil_enthalpy_top_layer_J_per_m2 = np.float32(-700000.0)
+    soil_enthalpy_top_layer_J_per_m2 = np.float32(-0.297 * 1000.0 * 334000.0 - 500000.0)
     solid_heat_capacity_top_layer_J_per_m2_K = np.float32(100000.0)
 
     (
@@ -289,14 +295,21 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
-        solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+        soil_enthalpy_J_per_m2=np.full(
+            len(w), soil_enthalpy_top_layer_J_per_m2, dtype=np.float32
+        ),
+        solid_heat_capacity_J_per_m2_K=np.full(
+            len(w), solid_heat_capacity_top_layer_J_per_m2_K, dtype=np.float32
+        ),
         rain_temperature_C=np.float32(0.0),
         new_surface_water_input_m=np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
-    # No infiltration on a fully frozen top layer without advected heat input.
+    # No infiltration into an ice-filled top layer without advected heat input.
     assert infiltration_amount < np.float32(1e-8)
     assert groundwater_recharge == 0.0
     # All water should go to direct runoff
@@ -337,11 +350,18 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
-        solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+        soil_enthalpy_J_per_m2=np.full(
+            len(w), soil_enthalpy_top_layer_J_per_m2, dtype=np.float32
+        ),
+        solid_heat_capacity_J_per_m2_K=np.full(
+            len(w), solid_heat_capacity_top_layer_J_per_m2_K, dtype=np.float32
+        ),
         rain_temperature_C=np.float32(0.0),
         new_surface_water_input_m=np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     assert infiltration_amount > 0.0
@@ -388,11 +408,18 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
-        solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+        soil_enthalpy_J_per_m2=np.full(
+            len(w), soil_enthalpy_top_layer_J_per_m2, dtype=np.float32
+        ),
+        solid_heat_capacity_J_per_m2_K=np.full(
+            len(w), solid_heat_capacity_top_layer_J_per_m2_K, dtype=np.float32
+        ),
         rain_temperature_C=np.float32(20.0),
         new_surface_water_input_m=topwater,
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     assert infiltration_amount > 0.0
@@ -432,11 +459,18 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=initial_enthalpy_J_per_m2,
-        solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+        soil_enthalpy_J_per_m2=np.full(
+            len(w), initial_enthalpy_J_per_m2, dtype=np.float32
+        ),
+        solid_heat_capacity_J_per_m2_K=np.full(
+            len(w), solid_heat_capacity_top_layer_J_per_m2_K, dtype=np.float32
+        ),
         rain_temperature_C=np.float32(20.0),
         new_surface_water_input_m=np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     assert updated_enthalpy_without_new_input_J_per_m2 == initial_enthalpy_J_per_m2
@@ -475,11 +509,14 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.zeros(len(w), dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(0.0),
         new_surface_water_input_m=np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # No infiltration on open water; topwater becomes direct runoff.
@@ -517,11 +554,14 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.zeros(len(w), dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(0.0),
         new_surface_water_input_m=np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
     assert infiltration_amount > 0.0
 
@@ -558,11 +598,14 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.zeros(len(w), dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(0.0),
         new_surface_water_input_m=np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # No infiltration possible
@@ -606,11 +649,14 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.zeros(len(w), dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(0.0),
         new_surface_water_input_m=np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # No infiltration on open water; remaining topwater becomes direct runoff.
@@ -652,11 +698,14 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.zeros(len(w), dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(0.0),
         new_surface_water_input_m=np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # Should infiltrate up to capacity, then pond up to 0.05m before runoff
@@ -704,11 +753,14 @@ def test_infiltration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.zeros(len(w), dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(0.0),
         new_surface_water_input_m=np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # Infiltration should happen into lower unsaturated layers
@@ -771,12 +823,15 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         bubbling_pressure_m_positive,
         soil_layer_height_m,
         lambda_param,
-        np.float32(0.0),
-        np.float32(100000.0),
+        np.zeros(len(ws), dtype=np.float32),
+        np.full(len(ws), 100000.0, dtype=np.float32),
         np.float32(0.0),
         very_high_topwater,  # new_surface_water_input_m
         rainfall_lookup_table=DEFAULT_TEST_LUT,
         distribute_rainfall_lognormally=False,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     assert infiltration_amount == 0.0
@@ -817,12 +872,15 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         bubbling_pressure_m_positive,
         soil_layer_height_m,
         lambda_param,
-        np.float32(0.0),
-        np.float32(100000.0),
+        np.zeros(len(ws), dtype=np.float32),
+        np.full(len(ws), 100000.0, dtype=np.float32),
         np.float32(0.0),
         np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
         distribute_rainfall_lognormally=False,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
     runoff_high = res_high[1]
     recharge_high = res_high[2]
@@ -846,11 +904,14 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         bubbling_pressure_m_positive,
         soil_layer_height_m,
         lambda_param,
-        np.float32(0.0),
-        np.float32(100000.0),
+        np.zeros(len(ws), dtype=np.float32),
+        np.full(len(ws), 100000.0, dtype=np.float32),
         np.float32(0.0),
         np.float32(0.0),
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
     runoff_low = res_low[1]
     recharge_low = res_low[2]
@@ -974,11 +1035,14 @@ def test_infiltration_variable_runoff_integration() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        np.float32(0.0),
-        np.float32(100000.0),
+        np.zeros(len(ws), dtype=np.float32),
+        np.full(len(ws), 100000.0, dtype=np.float32),
         np.float32(0.0),
         topwater,
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # Variable runoff is enabled, so runoff expected given spatial variability
@@ -1028,11 +1092,14 @@ def test_infiltration_variable_runoff_plot() -> None:
                 bub_arr,
                 soil_layer_height,
                 lam_arr,
-                np.float32(0.0),
-                np.float32(100000.0),
+                np.zeros(len(ws), dtype=np.float32),
+                np.full(len(ws), 100000.0, dtype=np.float32),
                 np.float32(0.0),
                 np.float32(rainfall_amount),
                 rainfall_lookup_table=DEFAULT_TEST_LUT,
+                dunne_effective_saturation=np.float32(0.0),
+                surface_crust_factor=np.float32(0.2),
+                macropore_infiltration_capacity_m_per_s=np.float32(0.0),
             )
             runoff_results.append(direct_runoff * 1000)  # Convert to mm for plotting
             infiltration_results.append(
@@ -1160,7 +1227,7 @@ def test_pedotransfer_functions_consistency() -> None:
             clay=clay,
             bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
             silt=silt,
-            organic_carbon_percentage=organic_carbon_percentage,
+            organic_matter_percentage=organic_carbon_percentage * 1.724,
             is_topsoil=is_top_soil,
         )
 
@@ -1178,7 +1245,7 @@ def test_pedotransfer_functions_consistency() -> None:
             silt=silt,
             clay=clay,
             bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
-            organic_carbon_percentage=organic_carbon_percentage,
+            organic_matter_percentage=organic_carbon_percentage * 1.724,
             is_topsoil=is_top_soil,
         )
         kv_c = kv_cosby(sand=sand, clay=clay)
@@ -1198,7 +1265,7 @@ def test_pedotransfer_functions_consistency() -> None:
         psi_index_w = get_pore_size_index_wosten(
             clay=clay,
             silt=silt,
-            organic_carbon_percentage=organic_carbon_percentage,
+            organic_matter_percentage=organic_carbon_percentage * 1.724,
             bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
             is_top_soil=is_top_soil,
         )
@@ -1355,11 +1422,14 @@ def test_infiltration_with_custom_lookup_table() -> None:
         bub_arr,
         h_arr,
         lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(50000.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.full(len(w), 50000.0, dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(15.0),
         new_surface_water_input_m=np.float32(0.01),
         rainfall_lookup_table=table_custom,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     assert infiltration_amount > 0.0
@@ -1416,13 +1486,16 @@ def test_infiltration_burst_storm_runoff_and_depression_storage() -> None:
         bubbling_pressure_m_positive=bubbling_m,
         soil_layer_height_m=layer_heights_m,
         lambda_pore_size_distribution=lambda_pore,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(100000.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.full(len(w), 100000.0, dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(18.0),
         new_surface_water_input_m=storm_rain_m,
         rainfall_lookup_table=table_custom,
         distribute_rainfall_lognormally=True,
         slope_m_per_m=np.float32(0.02),
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # 1. Infiltration excess from the burst storm must generate direct runoff
@@ -1436,55 +1509,6 @@ def test_infiltration_burst_storm_runoff_and_depression_storage() -> None:
         topwater_rem_m + direct_runoff_m + groundwater_recharge_m + infiltration_m
     )
     assert abs(total_water_out_m - total_water_input_m) < 1e-6
-
-
-def test_calculate_variable_source_area_fraction() -> None:
-    """Test variable source area fraction calculation for Dunne runoff across boundary conditions."""
-    # 1. Zero or negative shape parameter means homogeneous cell (no variable source area)
-    assert calculate_variable_source_area_fraction(
-        np.float32(0.5), np.float32(0.0)
-    ) == np.float32(0.0)
-    assert calculate_variable_source_area_fraction(
-        np.float32(0.5), np.float32(-0.5)
-    ) == np.float32(0.0)
-
-    # 2. Completely dry soil produces zero saturated area
-    assert calculate_variable_source_area_fraction(
-        np.float32(0.0), np.float32(0.4)
-    ) == np.float32(0.0)
-    assert calculate_variable_source_area_fraction(
-        np.float32(-0.1), np.float32(0.4)
-    ) == np.float32(0.0)
-
-    # 3. Fully saturated soil produces 100% saturated area
-    assert calculate_variable_source_area_fraction(
-        np.float32(1.0), np.float32(0.4)
-    ) == np.float32(1.0)
-    assert calculate_variable_source_area_fraction(
-        np.float32(1.2), np.float32(0.4)
-    ) == np.float32(1.0)
-
-    # 4. Monotonically increasing with soil saturation
-    sats: list[float] = [0.1, 0.3, 0.5, 0.7, 0.9]
-    fractions: list[float] = [
-        float(calculate_variable_source_area_fraction(np.float32(s), np.float32(0.5)))
-        for s in sats
-    ]
-    for i in range(len(fractions) - 1):
-        assert fractions[i] < fractions[i + 1], (
-            "Saturated fraction must increase with soil saturation"
-        )
-
-    # 5. Monotonically increasing with shape parameter beta
-    betas: list[float] = [0.1, 0.3, 0.6, 1.0]
-    fracs_beta: list[float] = [
-        float(calculate_variable_source_area_fraction(np.float32(0.6), np.float32(b)))
-        for b in betas
-    ]
-    for i in range(len(fracs_beta) - 1):
-        assert fracs_beta[i] < fracs_beta[i + 1], (
-            "Saturated fraction must increase with beta"
-        )
 
 
 def test_infiltration_pre_existing_puddle_dry_timestep() -> None:
@@ -1531,11 +1555,14 @@ def test_infiltration_pre_existing_puddle_dry_timestep() -> None:
         bubbling_pressure_m_positive=bub_arr,
         soil_layer_height_m=h_arr,
         lambda_pore_size_distribution=lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(100000.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.full(len(w), 100000.0, dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(15.0),
         new_surface_water_input_m=np.float32(0.0),  # Dry hour!
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
     # The pre-existing puddle should infiltrate into the unsaturated soil
     assert infiltration_amount > np.float32(0.0)
@@ -1573,11 +1600,14 @@ def test_infiltration_pre_existing_puddle_dry_timestep() -> None:
         bubbling_pressure_m_positive=bub_arr,
         soil_layer_height_m=h_arr,
         lambda_pore_size_distribution=lam_arr,
-        soil_enthalpy_top_layer_J_per_m2=np.float32(100000.0),
-        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        soil_enthalpy_J_per_m2=np.full(len(w), 100000.0, dtype=np.float32),
+        solid_heat_capacity_J_per_m2_K=np.full(len(w), 100000.0, dtype=np.float32),
         rain_temperature_C=np.float32(15.0),
         new_surface_water_input_m=np.float32(0.0),  # Dry hour!
         rainfall_lookup_table=DEFAULT_TEST_LUT,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
     # Pre-existing puddle on sealed surfaces can spill or infiltrate, but impervious direct
     # runoff from incoming rain (35% = 0.7mm) must not occur.
@@ -1591,3 +1621,307 @@ def test_infiltration_pre_existing_puddle_dry_timestep() -> None:
         )
         < 1e-6
     )
+
+
+def _rain_on_thawed_soil_over_frozen_subsoil(
+    subsoil_saturation: float,
+) -> tuple[np.float32, np.float32, np.float32, np.float32, np.float32, np.float32]:
+    """30 mm of rain in an hour on a thawed top layer over a frozen subsoil (-5 C).
+
+    Args:
+        subsoil_saturation: Water (all frozen) in layers 1-3 relative to their pore volume (-).
+
+    Returns:
+        Remaining topwater, direct runoff, groundwater recharge, infiltration, wetting front
+        depth and the rainfall (all m).
+    """
+    ws: ArrayFloat32 = np.array([0.02, 0.04, 0.08, 0.16], dtype=np.float32)
+    wres: ArrayFloat32 = np.zeros_like(ws)
+    layer_heights_m: ArrayFloat32 = np.array([0.05, 0.10, 0.20, 0.40], dtype=np.float32)
+    ksat_m_per_s: ArrayFloat32 = np.full_like(ws, np.float32(0.05 / 3600.0))
+    bub_arr: ArrayFloat32 = np.full_like(ws, 0.2)
+    lam_arr: ArrayFloat32 = np.full_like(ws, 0.5)
+
+    # Layer 0 has 10 mm moisture (capacity 20 mm -> 10 mm free space).
+    w: ArrayFloat32 = ws * np.float32(subsoil_saturation)
+    w[0] = np.float32(0.010)
+
+    solid_heat_capacity_J_per_m2_K: ArrayFloat32 = np.full(
+        len(ws), 100000.0, dtype=np.float32
+    )
+    # Layer 0 is thawed (+0.5 C); layers 1-3 are frozen solid at -5 C: all their water is
+    # ice (enthalpy = -latent heat of the water - sensible heat of the solids).
+    soil_enthalpy_J_per_m2: ArrayFloat32 = (
+        -w * np.float32(1000.0 * 334000.0)
+        - np.float32(5.0) * solid_heat_capacity_J_per_m2_K
+    ).astype(np.float32)
+    soil_enthalpy_J_per_m2[0] = np.float32(50000.0)
+
+    rainfall_input_m: np.float32 = np.float32(0.030)
+
+    (
+        topwater_rem,
+        direct_runoff,
+        groundwater_recharge,
+        infiltration_amount,
+        wetting_front_depth,
+        _,
+        _,
+        _,
+        _,
+    ) = infiltration(
+        seed=np.int64(42),
+        ws=ws,
+        wres=wres,
+        saturated_hydraulic_conductivity_m_per_s=ksat_m_per_s,
+        groundwater_toplayer_conductivity_m_per_s=np.float32(0.01 / 3600.0),
+        land_use_type=np.int32(NON_PADDY_IRRIGATED),
+        w=w.copy(),
+        topwater_m=rainfall_input_m,
+        wetting_front_depth_m=np.float32(0.0),
+        wetting_front_suction_head_m=np.float32(0.1),
+        wetting_front_moisture_deficit=np.float32(0.1),
+        green_ampt_active_layer_idx=np.int32(0),
+        variable_runoff_shape_beta=np.float32(0.0),
+        bubbling_pressure_m_positive=bub_arr,
+        soil_layer_height_m=layer_heights_m,
+        lambda_pore_size_distribution=lam_arr,
+        soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2,
+        solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K,
+        rain_temperature_C=np.float32(8.0),
+        new_surface_water_input_m=rainfall_input_m,
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
+        distribute_rainfall_lognormally=False,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
+    )
+    # Total mass balance must be strictly conserved
+    assert (
+        abs(
+            topwater_rem
+            + direct_runoff
+            + groundwater_recharge
+            + infiltration_amount
+            - rainfall_input_m
+        )
+        < 1e-6
+    )
+    return (
+        topwater_rem,
+        direct_runoff,
+        groundwater_recharge,
+        infiltration_amount,
+        wetting_front_depth,
+        rainfall_input_m,
+    )
+
+
+def test_infiltration_frozen_subsoil_blocks_percolation() -> None:
+    """A subsoil whose pores are filled with ice acts as an impermeable frost table.
+
+    When the surface layer has thawed but the subsoil froze when (nearly) saturated (e.g.
+    a rain-on-snow event after a prolonged freeze), infiltration is confined to the pore
+    space above the frost table; once layer 0 is full the rest runs off.
+    """
+    (
+        _,
+        direct_runoff,
+        groundwater_recharge,
+        infiltration_amount,
+        wetting_front_depth,
+        _,
+    ) = _rain_on_thawed_soil_over_frozen_subsoil(subsoil_saturation=0.99)
+    # Layer 0 can only take (0.020 - 0.010) = 0.010 m of water.
+    assert infiltration_amount <= np.float32(0.010 + 1e-6)
+    # Wetting front depth must not advance past layer 0 (0.05 m)
+    assert wetting_front_depth <= np.float32(0.05 + 1e-4)
+    # No recharge through the frost table
+    assert groundwater_recharge == np.float32(0.0)
+    # Excess rainfall (30 mm - 10 mm infil - depression storage) must become direct runoff
+    assert direct_runoff > np.float32(0.015)
+
+
+def test_infiltration_dry_frozen_subsoil_stays_permeable() -> None:
+    """A subsoil that froze when half saturated keeps its air-filled pores open.
+
+    Ice fills only the pores that held water, so water still enters the frozen subsoil
+    (Zhao and Gray, 1999; Niu and Yang, 2006) instead of running off at its surface.
+    """
+    _, direct_runoff_dry, _, infiltration_dry, _, _ = (
+        _rain_on_thawed_soil_over_frozen_subsoil(subsoil_saturation=0.5)
+    )
+    _, direct_runoff_ice, _, infiltration_ice, _, _ = (
+        _rain_on_thawed_soil_over_frozen_subsoil(subsoil_saturation=0.99)
+    )
+    # More than the 10 mm of free space in layer 0 infiltrates.
+    assert infiltration_dry > np.float32(0.010 + 1e-4)
+    assert infiltration_dry > infiltration_ice
+    assert direct_runoff_dry < direct_runoff_ice
+
+
+def test_frozen_soil_permeable_fraction() -> None:
+    """Permeable fraction of Niu and Yang (2006): 1 without ice, 0 with ice-filled pores."""
+    from geb.hydrology.landsurface.water import get_frozen_soil_permeable_fraction
+
+    pores = np.float32(0.3)
+    assert get_frozen_soil_permeable_fraction(np.float32(0.0), pores) == np.float32(1.0)
+    assert get_frozen_soil_permeable_fraction(pores, pores) == np.float32(0.0)
+    # Half of the pores filled with ice: (exp(-1.5) - exp(-3)) / (1 - exp(-3)) impermeable.
+    expected = 1.0 - (np.exp(-1.5) - np.exp(-3.0)) / (1.0 - np.exp(-3.0))
+    np.testing.assert_allclose(
+        get_frozen_soil_permeable_fraction(np.float32(0.15), pores), expected, rtol=1e-5
+    )
+    # More ice, less permeable.
+    assert get_frozen_soil_permeable_fraction(
+        np.float32(0.25), pores
+    ) < get_frozen_soil_permeable_fraction(np.float32(0.1), pores)
+
+
+def test_infiltration_macropores_bypass_matrix() -> None:
+    """Macropores take ponded water that the matrix cannot take.
+
+    The water goes to the layer below the surface layer first; water and heat are conserved.
+    """
+
+    def run(macropore_capacity_mm_per_h: float) -> tuple:
+        n_layers = 6
+        ws = np.full(n_layers, 0.4, dtype=np.float32) * np.float32(0.3)
+        w = np.full(n_layers, 0.15, dtype=np.float32) * np.float32(0.3)
+        enthalpy = np.full(n_layers, 1.0e6, dtype=np.float32)
+        rain_m = np.float32(0.03)  # 30 mm in one hour, far above the matrix capacity
+        result = infiltration(
+            np.int64(42),
+            ws,
+            np.zeros_like(ws),
+            np.full(n_layers, np.float32(0.001 / 3600.0)),  # 1 mm/h matrix conductivity
+            np.float32(0.0),
+            np.int32(FOREST),
+            w,
+            rain_m,
+            np.float32(0.0),
+            np.float32(0.1),
+            np.float32(0.1),
+            np.int32(0),
+            np.float32(0.1),
+            np.full(n_layers, 0.1, dtype=np.float32),
+            np.full(n_layers, 0.3, dtype=np.float32),
+            np.full(n_layers, 0.5, dtype=np.float32),
+            soil_enthalpy_J_per_m2=enthalpy,
+            solid_heat_capacity_J_per_m2_K=np.full(n_layers, 1.0e6, dtype=np.float32),
+            rain_temperature_C=np.float32(10.0),
+            new_surface_water_input_m=rain_m,
+            rainfall_lookup_table=DEFAULT_TEST_LUT,
+            macropore_infiltration_capacity_m_per_s=np.float32(
+                macropore_capacity_mm_per_h / 1000.0 / 3600.0
+            ),
+            dunne_effective_saturation=np.float32(0.0),
+            surface_crust_factor=np.float32(0.2),
+        )
+        topwater, direct_runoff, recharge, infiltrated = result[:4]
+        # Water balance: rain = soil gain + surface water + runoff + recharge.
+        soil_gain = float(np.sum(w) - 0.15 * 0.3 * n_layers)
+        assert soil_gain + topwater + direct_runoff + recharge == pytest.approx(
+            float(rain_m), abs=1e-6
+        )
+        assert infiltrated == pytest.approx(soil_gain, abs=1e-6)
+        return w, direct_runoff + topwater, infiltrated, enthalpy
+
+    w_matrix, surface_matrix, infiltrated_matrix, _ = run(0.0)
+    w_macro, surface_macro, infiltrated_macro, enthalpy_macro = run(20.0)
+    assert infiltrated_macro > infiltrated_matrix
+    assert surface_macro < surface_matrix
+    # The bypassed water ends up below the surface layer, not at the soil base.
+    assert w_macro[1] > w_matrix[1]
+    assert w_macro[-1] == pytest.approx(w_matrix[-1], abs=1e-7)
+    # Its heat moved with it from the top layer.
+    assert enthalpy_macro[1] > 1.0e6
+
+
+def test_calculate_hillslope_saturated_area_fraction() -> None:
+    """The saturated wedge reaches the surface once the store is more than half full."""
+    for saturation, expected in (
+        (0.0, 0.0),
+        (0.3, 0.0),
+        (0.5, 0.0),
+        (0.75, 0.5),
+        (1.0, 1.0),
+        (1.2, 1.0),
+    ):
+        assert float(
+            calculate_hillslope_saturated_area_fraction(np.float32(saturation))
+        ) == pytest.approx(expected, abs=1e-6)
+
+
+def test_get_perched_store_filling() -> None:
+    """Free water counts for the saturated zone only where it rests on filled layers."""
+    height = np.array([0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 2.00], dtype=np.float32)
+    fc = (0.25 * height).astype(np.float32)
+    ws = (0.45 * height).astype(np.float32)
+
+    def filling(free_fraction: list[float], depth: float = 1.0) -> float:
+        water = (fc + np.array(free_fraction, dtype=np.float32) * (ws - fc)).astype(
+            np.float32
+        )
+        return float(
+            get_perched_store_filling(water, fc, ws, height, np.float32(depth))
+        )
+
+    # nothing above field capacity: empty store
+    assert filling([0, 0, 0, 0, 0, 0, 0]) == 0.0
+    # a wet topsoil over a subsoil that still takes up water: the water is on its way
+    # down, nothing is perched
+    assert filling([1, 1, 1, 0, 0, 0, 0]) == pytest.approx(
+        (0.05 + 0.10) / 1.0, abs=1e-6
+    )
+    assert filling([1, 0, 0, 0, 0, 0, 0]) == 0.0
+    # the whole structured metre full over a full layer below: the store is full
+    assert filling([1, 1, 1, 1, 1, 1, 0]) == pytest.approx(1.0)
+    # the structured metre full, but the layer below it still empty: the lowest
+    # layer of the store (0.4 m of the 1.0 m) is not perched
+    assert filling([1, 1, 1, 1, 1, 0, 0]) == pytest.approx(0.6, abs=1e-6)
+    # filled from below (half-full layer under the store): the lowest store layer
+    # counts for half
+    assert filling([0, 0, 0, 0, 1, 0.5, 0]) == pytest.approx(0.4 * 0.5, abs=1e-6)
+    # a shallower structure: the store is the top 0.3 m
+    assert filling([1, 1, 1, 1, 0, 0, 0], depth=0.3) == pytest.approx(1.0)
+
+
+def test_kv_wosten_takes_organic_matter() -> None:
+    """The HYPRES equation is defined on organic matter: more of it lowers Ks here.
+
+    Value check for a topsoil with 20 % clay, 40 % silt, bulk density 1.4 kg/dm3 and
+    2 % organic carbon (3.45 % organic matter): the equation of Wosten et al. (1999)
+    evaluated by hand, in cm/day.
+    """
+    kwargs = dict(
+        silt=np.array([40.0], dtype=np.float32),
+        clay=np.array([20.0], dtype=np.float32),
+        bulk_density_kg_per_dm3=np.array([1.4], dtype=np.float32),
+        is_topsoil=np.array([True]),
+    )
+    organic_matter = np.array([2.0 * 1.724], dtype=np.float32)
+    ks_m_per_s = kv_wosten(organic_matter_percentage=organic_matter, **kwargs)
+    expected_cm_per_day = np.exp(
+        7.755
+        + 0.0352 * 40.0
+        + 0.93
+        - 0.967 * 1.4**2
+        - 0.000484 * 20.0**2
+        - 0.000322 * 40.0**2
+        + 0.001 / 40.0
+        - 0.0748 / 3.448
+        - 0.643 * np.log(40.0)
+        - 0.01398 * 1.4 * 20.0
+        - 0.1673 * 1.4 * 3.448
+        + 0.02986 * 20.0
+        - 0.03305 * 40.0
+    )
+    np.testing.assert_allclose(
+        ks_m_per_s[0] * 100.0 * 86400.0, expected_cm_per_day, rtol=1e-3
+    )
+    # with organic carbon passed as if it were organic matter the result is too high
+    ks_carbon = kv_wosten(
+        organic_matter_percentage=np.array([2.0], dtype=np.float32), **kwargs
+    )
+    assert ks_carbon[0] > 1.3 * ks_m_per_s[0]

@@ -12,6 +12,7 @@ from geb.geb_types import (
     ArrayInt32,
     TwoDArrayInt32,
 )
+from geb.numba_config import NUMBA_CACHE
 
 __all__: list[str] = [
     "BOUNDARY_INTERNAL",
@@ -37,7 +38,7 @@ BOUNDARY_LAKE: int = 1
 """Reach discharging into a downstream lake or reservoir waterbody."""
 
 BOUNDARY_PIT: int = 2
-"""Inland terminal sink or basin boundary edge draining via free slope drawdown."""
+"""Inland terminal sink or basin boundary edge draining at normal depth."""
 
 BOUNDARY_OCEAN: int = 3
 """Coastal terminal sink discharging into the ocean at sea level (0.0 m datum)."""
@@ -60,6 +61,10 @@ class KinematicTopology(NamedTuple):
         inertial_up_kin_reach_idx: Precomputed direct upstream kinematic index array.
         river_storage_alpha: Storage equation alpha parameter array.
         river_storage_beta: Storage equation beta parameter array.
+        stream_width: Bankfull channel width (meters).
+        bankfull_depth: Channel depth when full to the banks (meters); infinite without a valley floor.
+        floodplain_width: Width of the valley floor next to the channel (meters).
+        floodplain_conveyance: Conveyance coefficient of the valley floor (m^(4/3)/s); zero without one.
         river_length: Channel length array (meters).
         retention_node_id: Retention basin index mapping per node (-1 if none).
     """
@@ -77,6 +82,10 @@ class KinematicTopology(NamedTuple):
     inertial_up_kin_reach_idx: ArrayInt32
     river_storage_alpha: ArrayFloat32
     river_storage_beta: ArrayFloat32
+    stream_width: ArrayFloat32
+    bankfull_depth: ArrayFloat32
+    floodplain_width: ArrayFloat32
+    floodplain_conveyance: ArrayFloat32
     river_length: ArrayFloat32
     retention_node_id: ArrayInt32
 
@@ -163,6 +172,56 @@ class RoutingTopology(NamedTuple):
     waterbody_links: WaterbodyLinks
 
 
+def get_downstream_bed_elevation(
+    n_kinematic: int,
+    n_inertial: int,
+    ds_node: ArrayInt32,
+    bed_elevation_perm: ArrayFloat32,
+    river_length_perm: ArrayFloat32,
+    is_pit_perm: ArrayBool,
+    is_ocean_pit_perm: ArrayBool,
+    pit_slope_perm: ArrayFloat32,
+) -> tuple[ArrayFloat32, ArrayFloat32]:
+    """Bed elevation downstream of each inertial reach and the bed elevation of its outflow interface.
+
+    The downstream bed is the bed of the downstream reach or waterbody; at an ocean outlet
+    the bed of the reach itself, and at an inland pit the bed extrapolated one reach length
+    along the pit slope. In the local inertial approximation the flow depth at the interface is
+    max(water_stage_node, water_stage_ds) - max(bed_node, bed_ds): if the water stage does not
+    exceed the higher of the two beds, the interface is dry and flow is blocked.
+
+    Args:
+        n_kinematic: Number of kinematic reaches (inertial reaches follow them).
+        n_inertial: Number of local inertial reaches.
+        ds_node: Downstream node index per reach in permuted order (-1 for pits).
+        bed_elevation_perm: Bed elevation per reach in permuted order (m).
+        river_length_perm: Reach length in permuted order (m).
+        is_pit_perm: Whether a reach is a terminal pit.
+        is_ocean_pit_perm: Whether a pit reach drains to the ocean.
+        pit_slope_perm: Slope used to extrapolate the bed beyond inland pits (m/m).
+
+    Returns:
+        Downstream bed elevation and interface bed elevation per inertial reach (m).
+    """
+    ds_bed_elevation: ArrayFloat32 = np.empty(n_inertial, dtype=np.float32)
+    for k in range(n_inertial):
+        i: int = n_kinematic + k
+        bed_node: np.float32 = bed_elevation_perm[i]
+        if is_pit_perm[i]:
+            if is_ocean_pit_perm[i]:
+                ds_bed_elevation[k] = bed_node
+            else:
+                ds_bed_elevation[k] = np.float32(
+                    bed_node - pit_slope_perm[i] * river_length_perm[i]
+                )
+        else:
+            ds_bed_elevation[k] = bed_elevation_perm[ds_node[i]]
+    interface_bed_elev_max: ArrayFloat32 = np.maximum(
+        bed_elevation_perm[n_kinematic : n_kinematic + n_inertial], ds_bed_elevation
+    ).astype(np.float32)
+    return ds_bed_elevation, interface_bed_elev_max
+
+
 def build_routing_topology(
     n_kinematic: int,
     n_inertial: int,
@@ -181,6 +240,10 @@ def build_routing_topology(
     wb_outflow_indices: ArrayInt32,
     river_storage_alpha_kin: ArrayFloat32,
     river_storage_beta_kin: ArrayFloat32,
+    stream_width_kin: ArrayFloat32,
+    bankfull_depth_kin: ArrayFloat32,
+    floodplain_width_kin: ArrayFloat32,
+    floodplain_conveyance_kin: ArrayFloat32,
 ) -> RoutingTopology:
     """Constructs CSR connectivity graphs, boundary classifications, and cross-domain links.
 
@@ -208,6 +271,10 @@ def build_routing_topology(
         wb_outflow_indices: Permuted indices of waterbody outlet reaches.
         river_storage_alpha_kin: Storage equation alpha parameter array for kinematic reaches.
         river_storage_beta_kin: Storage equation beta parameter array for kinematic reaches.
+        stream_width_kin: Bankfull channel width of the kinematic reaches (meters).
+        bankfull_depth_kin: Bankfull depth of the kinematic reaches (meters).
+        floodplain_width_kin: Valley floor width next to the channel of the kinematic reaches (meters).
+        floodplain_conveyance_kin: Conveyance coefficient of the valley floor of the kinematic reaches (m^(4/3)/s).
 
     Returns:
         Structured RoutingTopology containing all precomputed topology objects.
@@ -233,27 +300,18 @@ def build_routing_topology(
     ds_boundary_type: ArrayInt32 = np.empty(n_inertial, dtype=np.int32)
     ds_inertial_k: ArrayInt32 = np.full(n_inertial, -1, dtype=np.int32)
     ds_waterbody_id: ArrayInt32 = np.full(n_inertial, -1, dtype=np.int32)
-    ds_bed_elevation: ArrayFloat32 = np.empty(n_inertial, dtype=np.float32)
 
     for k in range(n_inertial):
         i: int = n_kinematic + k
         ds: int = int(ds_node[i])
-        bed_node: float = float(bed_elevation_perm[i])
-        reach_length_m: float = float(river_length_perm[i])
-
         if is_pit_perm[i]:
             if is_ocean_pit_perm[i]:
                 # Ocean outlet: water drops to sea level (0.0 m datum).
                 ds_boundary_type[k] = BOUNDARY_OCEAN
-                ds_bed_elevation[k] = np.float32(bed_node)
             else:
                 # Inland pit: extrapolate downstream bed elevation along the reach slope.
                 ds_boundary_type[k] = BOUNDARY_PIT
-                eff_slope: float = float(pit_slope_perm[i])
-                ds_bed_elevation[k] = np.float32(bed_node - eff_slope * reach_length_m)
         elif ds != -1:
-            bed_ds: float = float(bed_elevation_perm[ds])
-            ds_bed_elevation[k] = np.float32(bed_ds)
             wb_ds: int = int(waterbody_ids_perm[ds])
             if wb_ds != -1:
                 # Reach discharges directly into a downstream lake or reservoir waterbody.
@@ -276,19 +334,20 @@ def build_routing_topology(
                 f"Invalid river topology at sorted index {i}: reach is neither a pit nor connected to a downstream node."
             )
 
-    bed_elevation_inertial: ArrayFloat32 = bed_elevation_perm[
-        n_kinematic : n_kinematic + n_inertial
-    ]
     river_length_inertial: ArrayFloat32 = river_length_perm[
         n_kinematic : n_kinematic + n_inertial
     ]
 
-    # Step 2: Compute maximum interface bed elevation (hydraulic sill).
-    # In the local inertial approximation, the flow depth at the cell interface is governed by
-    # max(water_stage_node, water_stage_ds) - max(bed_node, bed_ds). If the water stage does
-    # not exceed this highest bed elevation, the interface is dry and flow is blocked.
-    interface_bed_elev_max: ArrayFloat32 = np.maximum(
-        bed_elevation_inertial, ds_bed_elevation
+    # Step 2: downstream bed elevation and interface bed elevation (hydraulic sill).
+    ds_bed_elevation, interface_bed_elev_max = get_downstream_bed_elevation(
+        n_kinematic=n_kinematic,
+        n_inertial=n_inertial,
+        ds_node=ds_node,
+        bed_elevation_perm=bed_elevation_perm,
+        river_length_perm=river_length_perm,
+        is_pit_perm=is_pit_perm,
+        is_ocean_pit_perm=is_ocean_pit_perm,
+        pit_slope_perm=pit_slope_perm,
     )
 
     # Step 3: Compute reciprocal of the interface distance (inv_dx_interface).
@@ -518,6 +577,10 @@ def build_routing_topology(
         inertial_up_kin_reach_idx=inertial_up_kin_reach_idx,
         river_storage_alpha=river_storage_alpha_kin,
         river_storage_beta=river_storage_beta_kin,
+        stream_width=stream_width_kin,
+        bankfull_depth=bankfull_depth_kin,
+        floodplain_width=floodplain_width_kin,
+        floodplain_conveyance=floodplain_conveyance_kin,
         river_length=river_length_perm[:n_kinematic],
         retention_node_id=retention_node_id_perm[:n_kinematic],
     )
@@ -541,6 +604,7 @@ class WaterbodyCoupling(NamedTuple):
         storage_m3: Current water storage volume per waterbody (m³).
         prescribed_outflow_m3: Outflow volume prescribed by human operations or dams (m³).
         inflow_m3: Cumulative inflow volume accumulator per waterbody (m³).
+        outflow_m3: Cumulative released volume accumulator per waterbody (m³).
         lake_area: Surface area per waterbody (m²).
         lake_factor: Rating curve weir discharge multiplier per waterbody.
         outflow_height: Weir sill elevation height above bed per waterbody (meters).
@@ -557,6 +621,7 @@ class WaterbodyCoupling(NamedTuple):
     storage_m3: ArrayFloat64
     prescribed_outflow_m3: ArrayFloat32
     inflow_m3: ArrayFloat32
+    outflow_m3: ArrayFloat32
     lake_area: ArrayFloat32
     lake_factor: ArrayFloat32
     outflow_height: ArrayFloat32
@@ -596,7 +661,7 @@ class RetentionCoupling(NamedTuple):
     release_threshold_factor: np.float32
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def compute_retention_routing(
     dt: np.float32,
     river_volume_m3: np.float32,

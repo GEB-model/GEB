@@ -91,6 +91,10 @@ def test_build_routing_topology_kinematic_and_inertial_split() -> None:
         wb_outflow_indices=wb_outflow_indices,
         river_storage_alpha_kin=river_storage_alpha_kin,
         river_storage_beta_kin=river_storage_beta_kin,
+        stream_width_kin=np.zeros_like(river_storage_beta_kin),
+        bankfull_depth_kin=np.full_like(river_storage_beta_kin, np.inf),
+        floodplain_width_kin=np.zeros_like(river_storage_beta_kin),
+        floodplain_conveyance_kin=np.zeros_like(river_storage_beta_kin),
     )
 
     assert topo.kinematic_topology.n_kinematic == 1
@@ -142,6 +146,10 @@ def test_build_routing_topology_validation_and_boundaries() -> None:
             wb_outflow_idx,
             alpha,
             beta,
+            np.zeros_like(beta),
+            np.full_like(beta, np.inf),
+            np.zeros_like(beta),
+            np.zeros_like(beta),
         )
 
     # 2. Inertial reach discharging into a kinematic reach must raise ValueError
@@ -168,6 +176,10 @@ def test_build_routing_topology_validation_and_boundaries() -> None:
             wb_outflow_idx,
             alpha,
             beta,
+            np.zeros_like(beta),
+            np.full_like(beta, np.inf),
+            np.zeros_like(beta),
+            np.zeros_like(beta),
         )
 
     # 3. Successful boundary classification
@@ -189,6 +201,10 @@ def test_build_routing_topology_validation_and_boundaries() -> None:
         wb_outflow_idx,
         alpha,
         beta,
+        np.zeros_like(beta),
+        np.full_like(beta, np.inf),
+        np.zeros_like(beta),
+        np.zeros_like(beta),
     )
     # Reach 1 (inertial 0) flows into node 2 (wb_id=5) -> boundary lake
     # Reach 2 (inertial 1) flows into node 3 (inertial 2) -> internal

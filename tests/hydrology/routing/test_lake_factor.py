@@ -5,9 +5,9 @@ import math
 import numpy as np
 
 from geb.hydrology.routing.geometry import (
-    estimate_lake_outflow,
     estimate_outflow_height,
     get_lake_factor,
+    get_lake_outlet_width,
 )
 from geb.hydrology.waterbodies import (
     get_lake_height_above_outflow,
@@ -58,15 +58,26 @@ def test_estimate_outflow_height_and_outflow() -> None:
     )
 
     # Outflow at that water level must match average outflow
-    outflow = estimate_lake_outflow(
-        lake_factor=lake_factor, height_above_outflow=height_above_outflow
-    )
+    outflow = lake_factor * height_above_outflow**2
     np.testing.assert_allclose(outflow, avg_outflow, rtol=1e-5)
 
 
-def test_estimate_lake_outflow_zero_below_sill() -> None:
-    """Test that outflow is zero when stage is at or below sill."""
-    lake_factor = np.array([15.0], dtype=np.float32)
-    height_zero = np.array([0.0], dtype=np.float32)
-    outflow = estimate_lake_outflow(lake_factor, height_zero)
-    assert outflow[0] == 0.0
+def test_get_lake_outlet_width_uses_downstream_river_or_discharge() -> None:
+    """Outlet width is the downstream river width, else alpha * Q^beta."""
+    # Cells: 0 lake outflow -> 1 river; 2 lake outflow -> 3 other lake; 4 pit outflow.
+    downstream = np.array([1, 2, 3, 3, 4], dtype=np.int32)
+    is_river = np.array([False, True, False, False, False])
+    top_width = np.array([0.5, 25.0, 0.5, 0.5, 0.5], dtype=np.float32)
+    outflow_cell = np.array([0, 2, 4], dtype=np.int32)
+    average_q = np.array([10.0, 16.0, 4.0], dtype=np.float32)
+
+    width = get_lake_outlet_width(
+        outflow_cell=outflow_cell,
+        downstream_cell=downstream,
+        is_river_cell=is_river,
+        river_top_width_m=top_width,
+        average_discharge_m3_s=average_q,
+        width_alpha=7.2,
+        width_beta=0.5,
+    )
+    np.testing.assert_allclose(width, [25.0, 7.2 * 4.0, 7.2 * 2.0], rtol=1e-6)

@@ -903,7 +903,14 @@ class Observations(BuildModelBase):
 
     @build_method(depends_on=["setup_hydrography"], required=True)
     def setup_meteorological_stations_observations(self) -> None:
-        """Set up meteorological tower observations. Currently only latent heat."""
+        """Set up eddy covariance (FLUXNET) tower locations and daily latent heat flux.
+
+        Stores the towers in the region (with site name and IGBP land cover class) and
+        a long table of daily latent heat flux (gap-filled and energy-balance
+        corrected, W/m2) with its daily quality fraction. Used to evaluate
+        evapotranspiration (hydrology.evaluate_evapotranspiration) with
+        ``report._meteorological_stations``.
+        """
         # Fetch metadata to find towers in region
         stations, timeseries = self.data_catalog.fetch("fluxnet").read(geom=self.region)
 

@@ -848,6 +848,7 @@ class TestSpecialExportersSingleFile:
         rivers_data = {
             "depth": [1.5, 2.5],
             "width": [10.0, 20.0],
+            "levee_depth": [1.5, 3.5],
             "return_period_2_years_daily_m3_per_s": [50.0, 120.0],
             "floodplain_side_slope_m_per_m": [2.0, 2.0],
         }
@@ -944,3 +945,80 @@ class TestSpecialExportersSingleFile:
         )
         assert list(df_q_rivers.columns) == ["10", "20"]
         assert float(df_q_rivers.iloc[0]["10"]) == 50.0
+
+
+def test_get_groundwater_well_reporters(tmp_path: Path) -> None:
+    """Wells are reported with enough monthly data in the period, inside the domain."""
+    import datetime
+    from unittest.mock import MagicMock
+
+    import geopandas as gpd
+    import pandas as pd
+    from shapely.geometry import Point
+
+    from geb.reporter import MIN_GROUNDWATER_WELL_MONTHS, Reporter
+    from geb.workflows.io import write_geom, write_table
+
+    wells = gpd.GeoDataFrame(
+        index=pd.Index(["in", "few", "outliers", "outside", "masked"], name="GROW_ID"),
+        geometry=[
+            Point(0.5, 0.5),
+            Point(0.5, 0.5),
+            Point(1.5, 0.5),
+            Point(5.5, 0.5),
+            Point(1.5, 1.5),
+        ],
+        crs="EPSG:4326",
+    )
+    months = pd.date_range("2010-01-01", "2010-12-01", freq="MS").strftime("%Y-%m-%d")
+    rows = []
+    for well, n, outlier in [
+        ("in", 12, False),
+        ("few", MIN_GROUNDWATER_WELL_MONTHS - 1, False),
+        ("outliers", 12, True),
+        ("outside", 12, False),
+        ("masked", 12, False),
+    ]:
+        for date in months[:n]:
+            rows.append((well, date, 3.0, outlier))
+    # observations outside the simulation period do not count
+    rows += [("few", "2008-01-01", 3.0, False)] * 5
+    timeseries = pd.DataFrame(
+        rows,
+        columns=[
+            "GROW_ID",
+            "date",
+            "groundwater_depth_from_ground_elevation_m",
+            "outliers_change_points",
+        ],
+    )
+    write_geom(wells, tmp_path / "wells.geoparquet")
+    write_table(timeseries, tmp_path / "wells.parquet")
+
+    model = MagicMock()
+    model.files = {
+        "geom": {
+            "observations/groundwater_well_locations": tmp_path / "wells.geoparquet"
+        },
+        "table": {
+            "observations/groundwater_well_timeseries": tmp_path / "wells.parquet"
+        },
+    }
+    model.simulation_start = datetime.datetime(2010, 1, 1)
+    model.simulation_end = datetime.datetime(2010, 12, 31)
+    # 2 x 2 grid of 1 degree cells, north-up; the cell at row 0, column 1 is masked
+    model.hydrology.grid.gt = (0.0, 1.0, 0.0, 2.0, 0.0, -1.0)
+    model.hydrology.grid.linear_mapping = np.array([[0, -1], [1, 2]], dtype=np.int32)
+
+    reporter = object.__new__(Reporter)
+    reporter.model = model
+    reporters = reporter.get_groundwater_well_reporters()
+
+    assert set(reporters) == {
+        "groundwater_well_head_m_in",
+    }
+    config = reporters["groundwater_well_head_m_in"]
+    assert config["varname"] == ".groundwater_head_top_layer_m"
+    assert config["type"] == "grid"
+    assert config["function"] == "sample_lonlat,0.5,0.5"
+    assert config["_group"] == "groundwater_well_head_m"

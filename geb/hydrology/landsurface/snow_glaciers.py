@@ -3,12 +3,16 @@
 import numpy as np
 from numba import njit
 
+from geb.geb_types import ArrayFloat32, ArrayInt32, TwoDArrayFloat32, TwoDArrayFloat64
+from geb.numba_config import NUMBA_CACHE
+
 from .constants import (
     KELVIN_OFFSET,
     LATENT_HEAT_FUSION_J_PER_KG,
     LATENT_HEAT_SUBLIMATION_J_PER_KG,
     LATENT_HEAT_VAPORIZATION_J_PER_KG,
     MAX_SNOW_DENSITY_KG_PER_M3,
+    MIN_ACTIVE_SNOW_SWE_M,
     RHO_WATER_KG_PER_M3,
     SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
@@ -30,7 +34,7 @@ GRAVITY_M_PER_S2: np.float32 = np.float32(9.81)
 EPSILON_M: np.float64 = np.float64(1e-14)
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def get_snow_enthalpy_from_temperature(
     snow_water_equivalent_m: np.float64,
     snow_temperature_C: np.float32,
@@ -53,7 +57,7 @@ def get_snow_enthalpy_from_temperature(
     )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def get_snow_temperature_from_enthalpy(
     snow_water_equivalent_m: np.float64,
     snow_enthalpy_J_per_m2: np.float32,
@@ -83,7 +87,7 @@ def get_snow_temperature_from_enthalpy(
     return min(np.float32(0.0), temperature_C)
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def calculate_snow_metamorphism_compaction_rate_per_s(
     density_kg_per_m3: np.float32,
     snow_temperature_C: np.float32,
@@ -116,7 +120,7 @@ def calculate_snow_metamorphism_compaction_rate_per_s(
     )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def calculate_snow_overburden_compaction_rate_per_s(
     density_kg_per_m3: np.float32,
     snow_temperature_C: np.float32,
@@ -143,7 +147,7 @@ def calculate_snow_overburden_compaction_rate_per_s(
     return overburden_pressure_Pa / viscosity_Pa_s
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def compact_snow_density(
     density_kg_per_m3: np.float32,
     snow_temperature_C: np.float32,
@@ -183,34 +187,100 @@ def compact_snow_density(
     return min(compacted_density_kg_per_m3, MAX_SNOW_DENSITY_KG_PER_M3)
 
 
-@njit(cache=True, inline="always")
+# Bivariate logistic regression of the snowfall probability on air temperature (degC)
+# and relative humidity (%), fitted to 17.8 million precipitation observations in the
+# Northern Hemisphere (Jennings et al., 2018, Nature Communications 9: 1148).
+SNOW_FRACTION_LOGISTIC_INTERCEPT: np.float32 = np.float32(-10.04)
+SNOW_FRACTION_LOGISTIC_TEMPERATURE_PER_C: np.float32 = np.float32(1.41)
+SNOW_FRACTION_LOGISTIC_HUMIDITY_PER_PERCENT: np.float32 = np.float32(0.09)
+
+
+@njit(cache=NUMBA_CACHE, inline="always")
 def discriminate_precipitation(
     precipitation_m_per_hour: np.float32,
     air_temperature_C: np.float32,
+    relative_humidity_percent: np.float32,
 ) -> tuple[np.float32, np.float32]:
-    """
-    Discriminate between snowfall and rainfall based on temperature.
+    """Split precipitation into snowfall and rainfall.
+
+    The snowfall fraction follows the bivariate logistic regression on air temperature
+    and relative humidity of Jennings et al. (2018). Precipitation falls as a mix of
+    rain and snow between about -1 and +3 degC; in saturated air half of it is snow at
+    about 0.7 degC, and in drier air snow persists to higher temperatures because
+    evaporative cooling keeps the falling hydrometeors frozen.
 
     Args:
         precipitation_m_per_hour: Precipitation rate (m/hour).
-        air_temperature_C: Air temperature (°C).
+        air_temperature_C: Air temperature (degC).
+        relative_humidity_percent: Relative humidity of the air (%).
 
     Returns:
         A tuple of snowfall rate (m/hour) and rainfall rate (m/hour).
     """
-    is_snow: np.bool_ = air_temperature_C <= np.float32(0.0)
-    if is_snow:
-        # If it's snowing, all precipitation is snowfall and there is no rainfall.
-        snowfall_m_per_hour: np.float32 = np.float32(precipitation_m_per_hour)
-        rainfall_m_per_hour: np.float32 = np.float32(0.0)
-    else:
-        # If it's not snowing, all precipitation is rainfall and there is no snowfall.
-        snowfall_m_per_hour: np.float32 = np.float32(0.0)
-        rainfall_m_per_hour: np.float32 = np.float32(precipitation_m_per_hour)
+    snow_fraction: np.float32 = np.float32(1.0) / (
+        np.float32(1.0)
+        + np.exp(
+            SNOW_FRACTION_LOGISTIC_INTERCEPT
+            + SNOW_FRACTION_LOGISTIC_TEMPERATURE_PER_C * air_temperature_C
+            + SNOW_FRACTION_LOGISTIC_HUMIDITY_PER_PERCENT * relative_humidity_percent
+        )
+    )
+    snowfall_m_per_hour: np.float32 = np.float32(
+        precipitation_m_per_hour * snow_fraction
+    )
+    rainfall_m_per_hour: np.float32 = np.float32(
+        precipitation_m_per_hour - snowfall_m_per_hour
+    )
     return snowfall_m_per_hour, rainfall_m_per_hour
 
 
-@njit(cache=True, inline="always")
+SNOW_ALBEDO_FRESH: np.float32 = np.float32(0.85)
+SNOW_ALBEDO_MIN: np.float32 = np.float32(0.5)
+
+
+@njit(cache=NUMBA_CACHE, inline="always")
+def update_snow_albedo(
+    snow_albedo: np.float32,
+    snowfall_m: np.float32,
+    total_snow_water_equivalent_m: np.float32,
+    is_melting: bool,
+    timestep_s: np.float32,
+) -> np.float32:
+    """Update the albedo of the snowpack as snow ages and fresh snow falls.
+
+    Follows Douville et al. (1995), as used in ISBA: dry snow darkens linearly by
+    0.008 per day, melting (wet) snow decays exponentially towards 0.5 with a rate
+    of 0.24 per day, and snowfall restores the albedo towards that of fresh snow
+    (0.85) in proportion to the new snow, with full refresh for 10 mm of water
+    equivalent. Without snow the albedo is reset to that of fresh snow.
+
+    Args:
+        snow_albedo: Current snow albedo (-).
+        snowfall_m: Snowfall during the time step (m water equivalent).
+        total_snow_water_equivalent_m: Snow water equivalent of the snowpack (m).
+        is_melting: Whether the snowpack is melting (wet snow).
+        timestep_s: Time step length (s).
+
+    Returns:
+        Updated snow albedo (-).
+    """
+    if total_snow_water_equivalent_m <= np.float32(0.0):
+        return SNOW_ALBEDO_FRESH
+    days: np.float32 = timestep_s / np.float32(86400.0)
+    if is_melting:
+        albedo: np.float32 = (snow_albedo - SNOW_ALBEDO_MIN) * np.exp(
+            np.float32(-0.24) * days
+        ) + SNOW_ALBEDO_MIN
+    else:
+        albedo = snow_albedo - np.float32(0.008) * days
+    refresh: np.float32 = min(
+        max(snowfall_m, np.float32(0.0)) / np.float32(0.010), np.float32(1.0)
+    )
+    albedo = albedo + (SNOW_ALBEDO_FRESH - albedo) * refresh
+    return min(max(albedo, SNOW_ALBEDO_MIN), SNOW_ALBEDO_FRESH)
+
+
+@njit(cache=NUMBA_CACHE, inline="always")
 def add_snowfall_to_top_layer(
     snow_water_equivalent_m: np.float64,
     snow_enthalpy_J_per_m2: np.float32,
@@ -247,7 +317,7 @@ def add_snowfall_to_top_layer(
     )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def split_snow_enthalpy(
     snow_water_equivalent_m: np.float64,
     snow_enthalpy_J_per_m2: np.float32,
@@ -292,7 +362,7 @@ def split_snow_enthalpy(
     )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def mix_snow_properties(
     swe_1_m: np.float64,
     density_1_kg_per_m3: np.float32,
@@ -335,7 +405,7 @@ def mix_snow_properties(
     return total_swe_m, mixed_density_kg_per_m3, total_liquid_m
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def promote_snow_to_top_layer(
     swe_top_m: np.float64,
     liquid_water_top_m: np.float64,
@@ -425,10 +495,11 @@ def promote_snow_to_top_layer(
     )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def apply_precipitation_compaction_and_top_layer_transfer(
     pr_kg_per_m2_per_s: np.float32,
     air_temperature_C: np.float32,
+    relative_humidity_percent: np.float32,
     swe_top_m: np.float64,
     liquid_water_top_m: np.float64,
     enthalpy_top_J_per_m2: np.float32,
@@ -460,6 +531,7 @@ def apply_precipitation_compaction_and_top_layer_transfer(
     Args:
         pr_kg_per_m2_per_s: Precipitation rate (kg/m²/s).
         air_temperature_C: Air temperature (°C).
+        relative_humidity_percent: Relative humidity of the air (%).
         swe_top_m: Top-layer frozen snow water equivalent (m).
         liquid_water_top_m: Top-layer liquid water storage (m).
         enthalpy_top_J_per_m2: Top-layer snow enthalpy (J/m²).
@@ -538,7 +610,7 @@ def apply_precipitation_compaction_and_top_layer_transfer(
     # Partition precipitation into rain and snow.
     precip_m_hr: np.float32 = pr_kg_per_m2_per_s * np.float32(3.6)
     snowfall_m_hr, rainfall_m_hr = discriminate_precipitation(
-        precip_m_hr, air_temperature_C
+        precip_m_hr, air_temperature_C, relative_humidity_percent
     )
 
     # Add snowfall to top layer and update its density.
@@ -601,7 +673,7 @@ def apply_precipitation_compaction_and_top_layer_transfer(
     )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def melt_snow_from_enthalpy(
     snow_water_equivalent_m: np.float64,
     snow_enthalpy_J_per_m2: np.float32,
@@ -639,8 +711,13 @@ def melt_snow_from_enthalpy(
         snow_water_equivalent_m - updated_swe_m
     )
 
-    # After melting, the snowpack will have 0 enthalpy because it's at the melting point.
-    updated_enthalpy_J_per_m2: np.float32 = np.float32(0.0)
+    # After melting, return any excess positive enthalpy if the layer melted completely.
+    excess_melt_m: np.float64 = max(np.float64(0.0), potential_melt_m - actual_melt_m)
+    updated_enthalpy_J_per_m2: np.float32 = np.float32(
+        excess_melt_m
+        * np.float64(RHO_WATER_KG_PER_M3)
+        * np.float64(LATENT_HEAT_FUSION_J_PER_KG)
+    )
 
     return (
         actual_melt_m_float32,
@@ -649,7 +726,7 @@ def melt_snow_from_enthalpy(
     )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def update_snow_mass_and_phase(
     rainfall_m_per_hour: np.float32,
     swe_top_m: np.float64,
@@ -741,67 +818,104 @@ def update_snow_mass_and_phase(
             wind_10m_m_per_s,
         )
     )
+    # A trace of snow covers only part of the ground, and vapour is exchanged only over
+    # that part. The covered fraction rises linearly to full cover at the SWE from which
+    # the soil counts as snow covered (see limit_evaporation_under_snow). Without this,
+    # wet snow traces at a few degC in humid air condensed many times their own mass
+    # each hour.
+    snow_cover_fraction: np.float32 = np.float32(
+        min(np.float64(1.0), (swe_top_m + swe_bottom_m) / MIN_ACTIVE_SNOW_SWE_M)
+    )
+    latent_heat_flux_W_per_m2 = latent_heat_flux_W_per_m2 * snow_cover_fraction
+    sublimation_rate_m_per_hour = sublimation_rate_m_per_hour * snow_cover_fraction
 
-    # No deposition above freezing
-    if air_temperature_C > np.float32(0.0):
-        sublimation_rate_m_per_hour: np.float32 = np.float32(0.0)
-        latent_heat_flux_W_per_m2: np.float32 = np.float32(0.0)
-
-    if np.float64(-sublimation_rate_m_per_hour) >= swe_top_m - np.float64(
-        1e-12
-    ) and swe_top_m > np.float64(0.0):
-        # Consume remaining snow if sublimation exceeds available mass.
-        applied_sublimation_m_per_hour: np.float32 = np.float32(-swe_top_m)
-        swe_top_m = np.float64(0.0)
-        enthalpy_top_J_per_m2 = np.float32(0.0)
+    if air_temperature_C > np.float32(0.0) and latent_heat_flux_W_per_m2 > np.float32(
+        0.0
+    ):
+        # Condensation above freezing: atmospheric moisture condenses as liquid water onto the snowpack,
+        # releasing latent heat of vaporization (Lv) which drives snowmelt.
+        condensation_liquid_m: np.float64 = np.float64(
+            (
+                latent_heat_flux_W_per_m2
+                / (LATENT_HEAT_VAPORIZATION_J_PER_KG * RHO_WATER_KG_PER_M3)
+            )
+            * np.float32(3600.0)
+        )
+        liquid_water_top_m += condensation_liquid_m
+        enthalpy_top_J_per_m2 += latent_heat_flux_W_per_m2 * np.float32(3600.0)
+        applied_sublimation_m_per_hour: np.float32 = np.float32(condensation_liquid_m)
     else:
-        applied_sublimation_m_per_hour = max(
-            sublimation_rate_m_per_hour, np.float32(-swe_top_m)
-        )
-
-        # Limit cooling to keep snow temperature at or above air temperature.
-        potential_energy_added_J_per_m2: np.float32 = (
-            latent_heat_flux_W_per_m2 * np.float32(3600.0)
-        )
-        if potential_energy_added_J_per_m2 < np.float32(0.0):
-            min_enthalpy: np.float32 = get_snow_enthalpy_from_temperature(
-                swe_top_m, air_temperature_C
-            )
-            max_cooling: np.float32 = max(
-                np.float32(0.0), enthalpy_top_J_per_m2 - min_enthalpy
-            )
-
-            # If the potential cooling exceeds the maximum allowed cooling,
-            # we need to scale back the sublimation rate accordingly.
-            if -potential_energy_added_J_per_m2 > max_cooling:
-                scaling_factor: np.float32 = (
-                    max_cooling / (-potential_energy_added_J_per_m2)
-                    if potential_energy_added_J_per_m2 < np.float32(-1e-9)
-                    else np.float32(0.0)
-                )
-                potential_energy_added_J_per_m2: np.float32 = -max_cooling
-                applied_sublimation_m_per_hour *= scaling_factor
-
-        # Apply mass and enthalpy changes.
-        if applied_sublimation_m_per_hour < 0:
-            # Sublimation: remove mass and proportional enthalpy.
-            enthalpy_top_J_per_m2, _ = split_snow_enthalpy(
-                swe_top_m,
-                enthalpy_top_J_per_m2,
-                np.float64(-applied_sublimation_m_per_hour),
-            )
-        elif applied_sublimation_m_per_hour > 0:
-            # Deposition: add mass and its sensible enthalpy at surface temperature.
-            enthalpy_top_J_per_m2 += get_snow_enthalpy_from_temperature(
-                np.float64(applied_sublimation_m_per_hour), snow_surface_temperature_C
-            )
-
-        swe_top_m += np.float64(applied_sublimation_m_per_hour)
-        if swe_top_m <= EPSILON_M:
+        if np.float64(-sublimation_rate_m_per_hour) >= swe_top_m - np.float64(
+            1e-12
+        ) and swe_top_m > np.float64(0.0):
+            # Consume remaining snow if sublimation exceeds available mass.
+            applied_sublimation_m_per_hour: np.float32 = np.float32(-swe_top_m)
             swe_top_m = np.float64(0.0)
             enthalpy_top_J_per_m2 = np.float32(0.0)
         else:
-            enthalpy_top_J_per_m2 += potential_energy_added_J_per_m2
+            applied_sublimation_m_per_hour = max(
+                sublimation_rate_m_per_hour, np.float32(-swe_top_m)
+            )
+
+            # Limit cooling to keep snow temperature at or above air temperature when below freezing.
+            potential_energy_added_J_per_m2: np.float32 = (
+                latent_heat_flux_W_per_m2 * np.float32(3600.0)
+            )
+            if potential_energy_added_J_per_m2 < np.float32(
+                0.0
+            ) and air_temperature_C <= np.float32(0.0):
+                min_enthalpy: np.float32 = get_snow_enthalpy_from_temperature(
+                    swe_top_m, air_temperature_C
+                )
+                max_cooling: np.float32 = max(
+                    np.float32(0.0), enthalpy_top_J_per_m2 - min_enthalpy
+                )
+
+                # If the potential cooling exceeds the maximum allowed cooling,
+                # we need to scale back the sublimation rate accordingly.
+                if -potential_energy_added_J_per_m2 > max_cooling:
+                    scaling_factor: np.float32 = (
+                        max_cooling / (-potential_energy_added_J_per_m2)
+                        if potential_energy_added_J_per_m2 < np.float32(-1e-9)
+                        else np.float32(0.0)
+                    )
+                    potential_energy_added_J_per_m2 = -max_cooling
+                    applied_sublimation_m_per_hour *= scaling_factor
+
+            # Apply mass and enthalpy changes.
+            if applied_sublimation_m_per_hour < 0:
+                # Sublimation: remove mass and proportional enthalpy.
+                enthalpy_top_J_per_m2, _ = split_snow_enthalpy(
+                    swe_top_m,
+                    enthalpy_top_J_per_m2,
+                    np.float64(-applied_sublimation_m_per_hour),
+                )
+            elif applied_sublimation_m_per_hour > 0:
+                # Deposition: add mass and its sensible enthalpy at surface temperature.
+                enthalpy_top_J_per_m2 += get_snow_enthalpy_from_temperature(
+                    np.float64(applied_sublimation_m_per_hour),
+                    snow_surface_temperature_C,
+                )
+
+            swe_top_m += np.float64(applied_sublimation_m_per_hour)
+            if swe_top_m <= EPSILON_M:
+                swe_top_m = np.float64(0.0)
+                enthalpy_top_J_per_m2 = np.float32(0.0)
+            elif potential_energy_added_J_per_m2 < np.float32(
+                0.0
+            ) and air_temperature_C <= np.float32(0.0):
+                # The cooling limit above is for the mass before sublimation; on the
+                # remaining mass the same energy would cool the snow below the air.
+                floor_enthalpy_J_per_m2: np.float32 = min(
+                    get_snow_enthalpy_from_temperature(swe_top_m, air_temperature_C),
+                    enthalpy_top_J_per_m2,
+                )
+                enthalpy_top_J_per_m2 = max(
+                    enthalpy_top_J_per_m2 + potential_energy_added_J_per_m2,
+                    floor_enthalpy_J_per_m2,
+                )
+            else:
+                enthalpy_top_J_per_m2 += potential_energy_added_J_per_m2
 
     # Refreeze and melt in top layer.
     refreezing_top_m, swe_top_m, liquid_water_top_m, enthalpy_top_J_per_m2 = (
@@ -814,22 +928,26 @@ def update_snow_mass_and_phase(
     )
 
     # Sensible heat advected by rain on snow.
-    if (
-        rainfall_m_per_hour > np.float32(0.0)
-        and air_temperature_C > np.float32(0.0)
-        and swe_top_m > np.float64(0.0)
-    ):
+    if rainfall_m_per_hour > np.float32(0.0) and air_temperature_C > np.float32(0.0):
         rain_sensible_heat_J_per_m2: np.float32 = (
             rainfall_m_per_hour
             * RHO_WATER_KG_PER_M3
             * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
             * air_temperature_C
         )
-        enthalpy_top_J_per_m2 += rain_sensible_heat_J_per_m2
+        if swe_top_m > np.float64(0.0):
+            enthalpy_top_J_per_m2 += rain_sensible_heat_J_per_m2
+        elif swe_bottom_m > np.float64(0.0):
+            enthalpy_bottom_J_per_m2 += rain_sensible_heat_J_per_m2
 
     melt_top_m, swe_top_m, enthalpy_top_J_per_m2 = melt_snow_from_enthalpy(
         swe_top_m, enthalpy_top_J_per_m2
     )
+    # Excess positive enthalpy remaining after melting top snow is transferred to the bottom layer.
+    if enthalpy_top_J_per_m2 > np.float32(0.0) and swe_bottom_m > np.float64(0.0):
+        enthalpy_bottom_J_per_m2 += enthalpy_top_J_per_m2
+        enthalpy_top_J_per_m2 = np.float32(0.0)
+
     liquid_water_top_m += np.float64(melt_top_m) + np.float64(rainfall_m_per_hour)
 
     # Top layer holds liquid water up to its retention capacity (13% of swe_top_m).
@@ -844,6 +962,18 @@ def update_snow_mass_and_phase(
 
     # Add top layer percolation to bottom layer liquid water.
     liquid_water_bottom_m += percolation_to_bottom_m
+
+    # Percolating liquid water carries its sensible heat into the bottom layer.
+    if percolation_to_bottom_m > np.float64(0.0) and air_temperature_C > np.float32(
+        0.0
+    ):
+        percolation_sensible_heat_J_per_m2: np.float32 = np.float32(
+            percolation_to_bottom_m
+            * np.float64(RHO_WATER_KG_PER_M3)
+            * np.float64(SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K)
+            * np.float64(air_temperature_C)
+        )
+        enthalpy_bottom_J_per_m2 += percolation_sensible_heat_J_per_m2
 
     # Refreeze and melt in bottom layer.
     (
@@ -944,7 +1074,7 @@ def update_snow_mass_and_phase(
     )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def calculate_latent_heat_flux_and_sublimation(
     air_temperature_C: np.float32,
     snow_surface_temperature_C: np.float32,
@@ -1012,7 +1142,7 @@ def calculate_latent_heat_flux_and_sublimation(
     return latent_heat_flux_W_per_m2, sublimation_deposition_rate_m_per_hour
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def handle_refreezing(
     snow_enthalpy_J_per_m2: np.float32,
     liquid_water_in_snow_m: np.float64,
@@ -1102,7 +1232,7 @@ def handle_refreezing(
     )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def calculate_runoff(
     liquid_water_in_snow_m: np.float64,
     snow_water_equivalent_m: np.float64,
@@ -1134,3 +1264,175 @@ def calculate_runoff(
         np.float32(0.0), np.float32(runoff_rate_m_per_hour)
     )
     return runoff_rate_m_per_hour, updated_liquid_water_m
+
+
+def get_snow_holding_capacity_m(
+    slope_m_per_m: ArrayFloat32, max_snow_holding_capacity_m: float
+) -> ArrayFloat32:
+    """Get the snow water equivalent a slope can hold before snow moves downslope.
+
+    A slope holds less snow the steeper it is; snow above this capacity moves
+    downslope (redistribute_snow_along_drainage_direction). The capacity is the
+    smaller of two limits:
+
+    - The holding depth curve after SnowSlide (Bernhardt, M., & Schulz, K. (2010).
+      SnowSlide: A simple routine for calculating gravitational snow transport.
+      Geophysical Research Letters, 37, L11502, doi:10.1029/2010GL043086, Fig. 2b):
+      SHD = 3178.4 * slope_deg^-1.998 (m snow depth, vertical). The paper shows the
+      curve but does not print its equation. The coefficients are the defaults of
+      the SnowSlide module of the Canadian Hydrological Model (CHM), which applies
+      them to the vertical snow depth and to slopes above 10 degrees:
+      https://github.com/Chrismarsh/CHM/blob/0bc9c4e170caec61562d650836dc12d0206b5d3e/src/modules/snow_slide.hpp#L84
+      They follow the figure of the paper (8 m at 20 degrees). They are not the values of the original SnowSlide code, which
+      according to a comment in that module (snow_slide.cpp) were 45538 and -2.982
+      (a steeper curve: 6.0 m at 20 and 1.8 m at 30 degrees, against 8.0 and 3.6 m). The
+      depth is converted to water equivalent with a density of 300 kg/m3 (an
+      assumption).
+    - max_snow_holding_capacity_m, a calibrated limit that also applies on flat
+      terrain, so that snow on flat high terrain moves on, as glacier ice does. With
+      the default of 2 m it is the smaller limit on slopes below about 22 degrees.
+
+    Only the holding depth curve is taken from SnowSlide; this is not an
+    implementation of it. SnowSlide works on a 30 m grid, moves snow only on slopes
+    steeper than 25 degrees, and spreads it over all lower neighbouring pixels of the
+    snow surface. Its curve was calibrated on Landsat snow cover of one mountain
+    (Watzmann, Germany), and the authors note it may differ per location. Here the
+    curve is used everywhere with the mean local slope of the HRU, and the snow
+    follows the drainage direction between grid cells.
+
+    Args:
+        slope_m_per_m: Slope per HRU (m/m).
+        max_snow_holding_capacity_m: Upper limit of the holding capacity (m water equivalent).
+
+    Returns:
+        Snow holding capacity per HRU (m water equivalent).
+    """
+    slope_deg = np.degrees(np.arctan(np.maximum(slope_m_per_m, 0.0)))
+    holding_depth_m = 3178.4 * np.maximum(slope_deg, 1.0) ** -1.998
+    return np.minimum(holding_depth_m * 0.3, max_snow_holding_capacity_m).astype(
+        np.float32
+    )
+
+
+@njit(cache=NUMBA_CACHE)
+def redistribute_snow_along_drainage_direction(
+    snow_water_equivalent_m: TwoDArrayFloat64,
+    snow_enthalpy_J_per_m2: TwoDArrayFloat32,
+    snow_holding_capacity_m: ArrayFloat32,
+    hru_area_m2: ArrayFloat32,
+    grid_to_HRU: ArrayInt32,
+    upstream_to_downstream: ArrayInt32,
+    downstream_cell: ArrayInt32,
+) -> np.float64:
+    """Move snow above the holding capacity downslope along the drainage direction.
+
+    Cells are processed from upstream to downstream. In each cell, frozen snow above
+    the holding capacity of its HRUs is taken out (oldest snow first, from the bottom
+    layer), together with its share of the (cold) snow enthalpy. This snow, plus the
+    snow arriving from upstream, is deposited on the top snow layer of HRUs in the
+    cell that have room left, in proportion to that room. What does not fit moves to
+    the downstream cell. At an outlet all remaining snow is deposited, so no snow
+    leaves the domain and snow mass is conserved. Liquid water in the snow stays.
+
+    Args:
+        snow_water_equivalent_m: Frozen snow water equivalent per HRU and layer (m),
+            modified in place.
+        snow_enthalpy_J_per_m2: Snow enthalpy per HRU and layer (J/m2), modified in place.
+        snow_holding_capacity_m: Snow holding capacity per HRU (m water equivalent).
+        hru_area_m2: Area of each HRU (m2).
+        grid_to_HRU: Exclusive end index of each grid cell's HRUs.
+        upstream_to_downstream: Grid cell indices ordered from upstream to downstream.
+        downstream_cell: Downstream grid cell of each grid cell (itself or -1 at outlets).
+
+    Returns:
+        Total volume of snow moved out of the HRU where it lay (m3 water equivalent).
+    """
+    n_grid: int = grid_to_HRU.size
+    incoming_volume_m3 = np.zeros(n_grid, dtype=np.float64)
+    incoming_enthalpy_J = np.zeros(n_grid, dtype=np.float64)
+    total_moved_m3: np.float64 = np.float64(0.0)
+
+    for k in range(upstream_to_downstream.size):
+        grid_cell: int = upstream_to_downstream[k]
+        start: int = 0 if grid_cell == 0 else grid_to_HRU[grid_cell - 1]
+        end: int = grid_to_HRU[grid_cell]
+
+        volume_m3: np.float64 = incoming_volume_m3[grid_cell]
+        enthalpy_J: np.float64 = incoming_enthalpy_J[grid_cell]
+
+        # Take out snow above the holding capacity.
+        for h in range(start, end):
+            total_swe: np.float64 = (
+                snow_water_equivalent_m[h, 0] + snow_water_equivalent_m[h, 1]
+            )
+            excess: np.float64 = total_swe - np.float64(snow_holding_capacity_m[h])
+            if excess <= 0.0:
+                continue
+            for layer in (1, 0):
+                layer_swe: np.float64 = snow_water_equivalent_m[h, layer]
+                if excess <= 0.0 or layer_swe <= 0.0:
+                    continue
+                removed: np.float64 = min(excess, layer_swe)
+                removed_enthalpy: np.float64 = (
+                    np.float64(snow_enthalpy_J_per_m2[h, layer]) * removed / layer_swe
+                )
+                snow_water_equivalent_m[h, layer] = layer_swe - removed
+                snow_enthalpy_J_per_m2[h, layer] = np.float32(
+                    snow_enthalpy_J_per_m2[h, layer] - removed_enthalpy
+                )
+                volume_m3 += removed * hru_area_m2[h]
+                enthalpy_J += removed_enthalpy * hru_area_m2[h]
+                total_moved_m3 += removed * hru_area_m2[h]
+                excess -= removed
+
+        if volume_m3 <= 0.0:
+            continue
+
+        ds: int = downstream_cell[grid_cell]
+        is_outlet: bool = ds < 0 or ds == grid_cell
+
+        # Room left in this cell.
+        room_m3: np.float64 = np.float64(0.0)
+        for h in range(start, end):
+            room: np.float64 = np.float64(snow_holding_capacity_m[h]) - (
+                snow_water_equivalent_m[h, 0] + snow_water_equivalent_m[h, 1]
+            )
+            if room > 0.0:
+                room_m3 += room * hru_area_m2[h]
+
+        cell_area_m2: np.float64 = np.float64(0.0)
+        for h in range(start, end):
+            cell_area_m2 += hru_area_m2[h]
+
+        if is_outlet:
+            deposit_m3: np.float64 = volume_m3
+        else:
+            deposit_m3 = min(volume_m3, room_m3)
+
+        if deposit_m3 > 0.0:
+            deposit_enthalpy_J: np.float64 = enthalpy_J * deposit_m3 / volume_m3
+            for h in range(start, end):
+                if is_outlet and room_m3 < volume_m3:
+                    # Outlet without enough room: spread the rest over the cell area.
+                    share: np.float64 = hru_area_m2[h] / cell_area_m2
+                else:
+                    room = np.float64(snow_holding_capacity_m[h]) - (
+                        snow_water_equivalent_m[h, 0] + snow_water_equivalent_m[h, 1]
+                    )
+                    if room <= 0.0:
+                        continue
+                    share = room * hru_area_m2[h] / room_m3
+                hru_volume_m3: np.float64 = deposit_m3 * share
+                snow_water_equivalent_m[h, 0] += hru_volume_m3 / hru_area_m2[h]
+                snow_enthalpy_J_per_m2[h, 0] = np.float32(
+                    snow_enthalpy_J_per_m2[h, 0]
+                    + deposit_enthalpy_J * share / hru_area_m2[h]
+                )
+            volume_m3 -= deposit_m3
+            enthalpy_J -= deposit_enthalpy_J
+
+        if volume_m3 > 0.0 and not is_outlet:
+            incoming_volume_m3[ds] += volume_m3
+            incoming_enthalpy_J[ds] += enthalpy_J
+
+    return total_moved_m3

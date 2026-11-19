@@ -18,12 +18,16 @@ from geb.hydrology.routing.geometry import (
     GEOM_IN_BANKFULL_AREA,
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_PERIMETER,
+    GEOM_IN_FLOODPLAIN_ROUGHNESS_RATIO,
+    GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
+    GEOM_IN_LEVEE_DEPTH,
     GEOM_IN_MANNING_N_SQUARED,
     GEOM_IN_RIVER_WIDTH,
     GEOM_IN_SHAPE_EXPONENT,
     GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
     compute_cross_section_from_depth,
+    compute_floodplain_flow_section,
 )
 
 __all__ = [
@@ -108,6 +112,8 @@ def solve_inertial_momentum(
     curr_discharge: np.float32,
     min_wet_depth_m: np.float32,
     geom_inbank: TwoDArrayFloat32,
+    geom_floodplain_areas: TwoDArrayFloat32,
+    geom_floodplain_widths: TwoDArrayFloat32,
     g_dt_substep: np.float32,
     sqrt_gravity: np.float32,
     can_reverse: bool,
@@ -124,6 +130,11 @@ def solve_inertial_momentum(
 
         Q^{t+dt} = (Q^t - g * dt * A * dz/dx) / (1 + g * dt * n^2 * |Q^t| / (A * R^(4/3)))
 
+    Above the banks (or the levee crest) the section is divided in the channel and the
+    floodplain, each with its own area, hydraulic radius and roughness (divided channel
+    method; Chow, 1959). The conveyances add up, K = A_c R_c^(2/3) / n_c + A_f R_f^(2/3) / n_f,
+    and the friction term becomes g * A * |Q| * Q / K^2 with A = A_c + A_f.
+
     Args:
         reach_idx: Reach index within local inertial domain.
         effective_depth: Flow depth at the interface between reaches (meters).
@@ -131,6 +142,8 @@ def solve_inertial_momentum(
         curr_discharge: Instantaneous discharge at start of substep Q^t (m³/s).
         min_wet_depth_m: Minimum depth threshold below which reach is treated as dry (meters).
         geom_inbank: Compact 2D in-bank reach geometry table (meters, dimensionless).
+        geom_floodplain_areas: Cumulative cross-sectional areas at the 10 profile depth levels (m²).
+        geom_floodplain_widths: Total top widths at the 10 profile depth levels (meters).
         g_dt_substep: Gravitational acceleration times substep dt: g * dt (m/s).
         sqrt_gravity: Square root of gravitational acceleration sqrt(g) (m^(1/2)/s).
         can_reverse: Whether adverse-slope reverse flow is permitted.
@@ -144,6 +157,7 @@ def solve_inertial_momentum(
         return np.float32(0.0)
 
     bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
+    levee_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
     inv_shape_exponent_plus_one: np.float32 = geom_inbank[
         reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
     ]
@@ -169,6 +183,7 @@ def solve_inertial_momentum(
         width_over_sqrt_bankfull_depth=geom_inbank[
             reach_idx, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH
         ],
+        levee_depth_m=levee_depth_m,
     )
 
     # Semi-implicit Manning friction term: A * R^(4/3) = A * (A / P)^(4/3)
@@ -180,6 +195,40 @@ def solve_inertial_momentum(
         cross_sectional_area * rh_pow_4_3,
         np.float32(1e-12),
     )
+    # Critical discharge of the channel part: sqrt(g) * A * sqrt(A / W)
+    critical_discharge: np.float32 = (
+        sqrt_gravity
+        * cross_sectional_area
+        * np.sqrt(cross_sectional_area / max(interface_top_width, np.float32(1e-3)))
+    )
+
+    # Flow over the floodplain, next to the channel (divided channel method)
+    floodplain_area, floodplain_perimeter = compute_floodplain_flow_section(
+        effective_depth_m=effective_depth,
+        bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=levee_depth_m,
+        bankfull_width_m=bankfull_width_m,
+        floodplain_areas=geom_floodplain_areas[reach_idx],
+        floodplain_widths=geom_floodplain_widths[reach_idx],
+        side_slope_z=geom_inbank[reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M],
+    )
+    if floodplain_area > np.float32(0.0):
+        floodplain_radius: np.float32 = floodplain_area / floodplain_perimeter
+        # conveyance times the Manning n of the channel: A_c R_c^(2/3) + (n_c / n_f) A_f R_f^(2/3)
+        conveyance: np.float32 = cross_sectional_area * np.sqrt(
+            rh_pow_4_3
+        ) + geom_inbank[
+            reach_idx, GEOM_IN_FLOODPLAIN_ROUGHNESS_RATIO
+        ] * floodplain_area * np.sqrt(
+            evaluate_hydraulic_radius_pow_4_3(floodplain_radius)
+        )
+        critical_discharge += (
+            sqrt_gravity * floodplain_area * np.sqrt(floodplain_radius)
+        )
+        cross_sectional_area += floodplain_area
+        friction_denom_term = max(
+            conveyance * conveyance / cross_sectional_area, np.float32(1e-12)
+        )
     gravity_dt_manning_n_sq: np.float32 = (
         g_dt_substep * geom_inbank[reach_idx, GEOM_IN_MANNING_N_SQUARED]
     )
@@ -190,13 +239,8 @@ def solve_inertial_momentum(
         curr_discharge - g_dt_substep * cross_sectional_area * water_slope
     ) / friction_factor
 
-    # Critical flow limiter (Froude <= 1) prevents supercritical runaway over steep drops
-    hydraulic_depth: np.float32 = cross_sectional_area / max(
-        interface_top_width, np.float32(1e-3)
-    )
-    critical_discharge: np.float32 = (
-        sqrt_gravity * cross_sectional_area * np.sqrt(hydraulic_depth)
-    )
+    # Critical flow limiter (Froude <= 1, for the channel and the floodplain each)
+    # prevents supercritical runaway over steep drops
 
     # downward flow
     if computed_discharge >= np.float32(0.0):

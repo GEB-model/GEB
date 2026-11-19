@@ -32,6 +32,7 @@ from geb.geb_types import (
 )
 from geb.hydrology.HRUs import Data
 from geb.module import Module
+from geb.numba_config import NUMBA_CACHE
 from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
 
-@numba.njit(cache=True, parallel=True)
+@numba.njit(cache=NUMBA_CACHE, parallel=True)
 def _sum_landsurface_storage(
     snow_water_equivalent_m: np.ndarray,
     liquid_water_in_snow_m: np.ndarray,
@@ -103,7 +104,7 @@ def _sum_landsurface_storage(
     return total
 
 
-@numba.njit(cache=True, parallel=True)
+@numba.njit(cache=NUMBA_CACHE, parallel=True)
 def _sum_overland_flow_buffer_storage(
     overland_flow_buffer: np.ndarray,
     cell_area: np.ndarray,
@@ -164,9 +165,16 @@ class Hydrology(Data, Module):
         # after groundwater has already stepped. We hold this loss as "pending" storage
         # so it is preserved across midnight water-balance checks and added to groundwater
         # recharge at the start of the next timestep.
-        self.pending_river_transmission_loss_m3: ArrayFloat64 = (
-            self.grid.full_compressed(0, dtype=np.float64)
-        )
+        # Groundwater drained to the rivers during routing (hourly) is taken from the
+        # aquifer in the next groundwater step; until then it is in the rivers and still
+        # in the aquifer, so it is subtracted from the storage.
+        if self.model.in_spinup:
+            self.grid.var.pending_river_transmission_loss_m3 = (
+                self.grid.full_compressed(0, dtype=np.float64)
+            )
+            self.grid.var.pending_groundwater_drainage_m3 = self.grid.full_compressed(
+                0, dtype=np.float64
+            )
 
     def get_landsurface_storage_m3(self) -> np.float64:
         """Get the current water storage in the land surface components.
@@ -187,17 +195,18 @@ class Hydrology(Data, Module):
         )
 
     def get_overland_flow_buffer_storage_m3(self) -> np.float64:
-        """Get the current water storage in the overland flow buffer.
+        """Get the current water storage in the overland flow and interflow buffers.
 
         Uses float64 for accuracy.
 
         Returns:
             Total overland flow buffer storage (m3).
         """
-        return _sum_overland_flow_buffer_storage(
+        storage: np.float64 = _sum_overland_flow_buffer_storage(
             self.grid.var.overland_flow_buffer,
             self.grid.var.cell_area,
         )
+        return storage
 
     def get_routing_storage_m3(self) -> np.float64:
         """Get the current water storage in the river routing network.
@@ -247,7 +256,7 @@ class Hydrology(Data, Module):
         Returns:
             Total pending transmission loss storage (m3).
         """
-        return self.pending_river_transmission_loss_m3.sum(dtype=np.float64)
+        return self.grid.var.pending_river_transmission_loss_m3.sum(dtype=np.float64)
 
     def get_current_storage(self) -> np.float64:
         """Get the current water storage in the hydrological system.
@@ -266,6 +275,7 @@ class Hydrology(Data, Module):
             + self.get_groundwater_storage_m3()
             + self.get_karst_storage_m3()
             + self.get_transmission_loss_storage_m3()
+            - self.grid.var.pending_groundwater_drainage_m3.sum(dtype=np.float64)
         )
 
     def step(self) -> None:
@@ -285,7 +295,7 @@ class Hydrology(Data, Module):
         timer.finish_split("Waterbodies")
 
         (
-            reference_evapotranspiration_water_m,
+            potential_open_water_evaporation_m,
             interflow_m,
             overland_runoff_m,
             groundwater_recharge_m,
@@ -323,12 +333,6 @@ class Hydrology(Data, Module):
         self.grid.var.capillar = capillar_rise_m
 
         groundwater_recharge_m += karst_recharge_m.astype(np.float32)
-
-        river_transmission_recharge_m: ArrayFloat32 = (
-            self.pending_river_transmission_loss_m3 / self.grid.var.cell_area
-        ).astype(np.float32)
-        groundwater_recharge_m += river_transmission_recharge_m
-        self.pending_river_transmission_loss_m3.fill(0.0)
 
         if self.model.config["hazards"]["floods"]["simulate"]:
             self.model.hazard_driver.floods.save_runoff_m(overland_runoff_m)
@@ -375,18 +379,19 @@ class Hydrology(Data, Module):
 
         timer.finish_split("Land surface")
 
-        baseflow_m = self.groundwater.step(
+        self.groundwater.step(
             groundwater_recharge_m=groundwater_recharge_m,
             groundwater_abstraction_m3=groundwater_abstraction_m3,
             capillary_rise_m=capillar_rise_m,
+            river_seepage_m3=self.grid.var.pending_river_transmission_loss_m3,
+            river_drainage_m3=self.grid.var.pending_groundwater_drainage_m3,
         )
+        self.grid.var.pending_river_transmission_loss_m3.fill(0.0)
+        self.grid.var.pending_groundwater_drainage_m3.fill(0.0)
 
         if __debug__:
             invented_water += (
-                -(
-                    baseflow_m * self.grid.var.cell_area
-                ).sum()  # created but still needs to be added to river
-                + (
+                (
                     groundwater_recharge_m * self.grid.var.cell_area
                 ).sum()  # now accounted for
                 - (
@@ -414,12 +419,12 @@ class Hydrology(Data, Module):
         timer.finish_split("GW")
 
         total_runoff_m = self.runoff_concentrator.step(
-            interflow_m=interflow_m, baseflow_m=baseflow_m, runoff_m=overland_runoff_m
+            interflow_m=interflow_m, runoff_m=overland_runoff_m
         ).astype(np.float32)
 
         if __debug__:
             invented_water += (
-                (interflow_m.sum(axis=0) + overland_runoff_m.sum(axis=0) + baseflow_m)
+                (interflow_m.sum(axis=0) + overland_runoff_m.sum(axis=0))
                 * self.grid.var.cell_area
             ).sum()  # added to sinks, so remove from invented water
             invented_water -= (total_runoff_m * self.grid.var.cell_area).sum()
@@ -443,11 +448,14 @@ class Hydrology(Data, Module):
             total_runoff_m,
             channel_abstraction_m3,
             return_flow_m,
-            reference_evapotranspiration_water_m,
+            potential_open_water_evaporation_m,
         )
 
-        self.pending_river_transmission_loss_m3 += (
+        self.grid.var.pending_river_transmission_loss_m3 += (
             self.routing.var.river_transmission_loss_m3.astype(np.float64)
+        )
+        self.grid.var.pending_groundwater_drainage_m3 += (
+            self.routing.groundwater_drainage_m3.astype(np.float64)
         )
 
         if self.model.config["hazards"]["floods"]["simulate"]:
@@ -455,9 +463,8 @@ class Hydrology(Data, Module):
                 discharge_m3_s_per_substep=self.routing.var.discharge_m3_s_per_substep
             )
 
-        current_storage: np.float64 = self.get_current_storage()
-
         if __debug__:
+            current_storage: np.float64 = self.get_current_storage()
             influx += over_abstraction_m3
             influx += total_inflow_m3
 
@@ -491,6 +498,11 @@ class Hydrology(Data, Module):
         self.hillslope_erosion.step(overland_runoff_m.sum(axis=0))
         timer.finish_split("Hill slope erosion")
 
+        # baseflow: the groundwater drained to the rivers, computed hourly in routing
+        baseflow_m = (
+            self.routing.groundwater_drainage_m3 / self.grid.var.cell_area
+        ).astype(np.float32)
+
         if self.model.timing:
             self.model.logger.debug(timer)
 
@@ -502,7 +514,7 @@ class Hydrology(Data, Module):
         if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
             self.groundwater.modflow.finalize()
 
-        if self.model.config["general"]["simulate_forest"]:
+        if self.model.config["hydrology"]["simulate_forest"]:
             assert hasattr(self.model, "plantFATE")
             for plantFATE_model in self.model.plantFATE:
                 if plantFATE_model is not None:

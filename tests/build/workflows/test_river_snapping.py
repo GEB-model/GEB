@@ -13,8 +13,6 @@ from geb.build.workflows.river_snapping import (
 
 def test_select_river_segment_dominant_within_buffer() -> None:
     """Test selecting dominant river within buffer and falling back to closest river when none is within buffer."""
-    point = shapely.geometry.Point(5.0, 50.0)
-
     # Distances in degrees: ~111,139 m per deg latitude
     # river1: distance 0.005 deg (~555 m), small uparea
     # river2: distance 0.015 deg (~1667 m), large uparea (dominant)
@@ -27,6 +25,7 @@ def test_select_river_segment_dominant_within_buffer() -> None:
         {
             "geometry": [geom1, geom2, geom3],
             "station_distance": [0.005, 0.015, 0.050],
+            "station_distance_m": [556.0, 1668.0, 5560.0],
             "uparea_m2": [10_000.0, 1_000_000.0, 10_000_000.0],
             "shreve_stream_order": [1, 3, 4],
             "hydrography_xy": [[(0, 0)], [(1, 1)], [(2, 2)]],
@@ -40,7 +39,6 @@ def test_select_river_segment_dominant_within_buffer() -> None:
         rivers_sorted=rivers,
         max_spatial_difference_degrees=1.0,
         dominant_river_buffer_m=2000.0,
-        point=point,
     )
     assert selected is not None
     assert selected.ID == 102
@@ -51,7 +49,6 @@ def test_select_river_segment_dominant_within_buffer() -> None:
         rivers_sorted=rivers,
         max_spatial_difference_degrees=1.0,
         dominant_river_buffer_m=300.0,
-        point=point,
     )
     assert selected_outside is not None
     assert selected_outside.ID == 101
@@ -61,7 +58,6 @@ def test_select_river_segment_dominant_within_buffer() -> None:
         rivers_sorted=rivers,
         max_spatial_difference_degrees=0.001,
         dominant_river_buffer_m=300.0,
-        point=point,
     )
     assert selected_too_far is None
 
@@ -126,3 +122,65 @@ def test_snap_point_to_river_network_waterbody_handling() -> None:
     assert res_partial is not None
     # Cell (1, 0) should be selected because (0, 0) is inside waterbody 42
     assert res_partial.snapped_grid_pixel_xy == (1, 0)
+
+
+def test_search_radius_is_the_same_in_every_direction() -> None:
+    """A large river 1.6 km to the east is within a 2 km radius, like one 1.6 km to the north.
+
+    At 49 degrees north, 1.6 km is 0.0144 degrees of latitude but 0.0219 degrees of
+    longitude. A small stream runs 500 m south of the point in both cases; the large river
+    must be selected whether it lies to the east or to the north, and not when it lies
+    2.4 km away.
+    """
+    point = shapely.geometry.Point(8.0, 49.0)
+    degrees_per_m_north = 1.0 / 111_195.0
+    degrees_per_m_east = degrees_per_m_north / np.cos(np.radians(49.0))
+    grid = xr.DataArray(
+        np.full((2, 2), 1.0),
+        coords={"y": [49.0, 49.1], "x": [8.0, 8.1]},
+        dims=("y", "x"),
+    )
+    no_waterbodies = xr.full_like(grid, -1).astype(np.int32)
+    small_stream = shapely.geometry.LineString(
+        [
+            (7.9, 49.0 - 500 * degrees_per_m_north),
+            (8.1, 49.0 - 500 * degrees_per_m_north),
+        ]
+    )
+
+    def selected_river(large_river: shapely.geometry.LineString) -> int:
+        rivers = gpd.GeoDataFrame(
+            {
+                "geometry": [small_stream, large_river],
+                "represented_in_grid": [True, True],
+                "uparea_m2": [1e8, 5e10],
+                "shreve_stream_order": [2, 500],
+                "hydrography_xy": [[(0, 0)], [(1, 1)]],
+            },
+            index=[1, 2],
+            crs="EPSG:4326",
+        )
+        result = snap_point_to_river_network(
+            point=point,
+            rivers=rivers,
+            upstream_area_grid=grid,
+            upstream_area_subgrid=grid,
+            waterbody_id_grid=no_waterbodies,
+            max_spatial_difference_degrees=180,
+            dominant_river_buffer_m=2000.0,
+        )
+        assert result is not None
+        return result.closest_river_segment.ID
+
+    def river_to_the_east(distance_m: float) -> shapely.geometry.LineString:
+        x = 8.0 + distance_m * degrees_per_m_east
+        return shapely.geometry.LineString([(x, 48.9), (x, 49.1)])
+
+    def river_to_the_north(distance_m: float) -> shapely.geometry.LineString:
+        y = 49.0 + distance_m * degrees_per_m_north
+        return shapely.geometry.LineString([(7.9, y), (8.1, y)])
+
+    assert selected_river(river_to_the_east(1600.0)) == 2
+    assert selected_river(river_to_the_north(1600.0)) == 2
+    assert selected_river(river_to_the_east(2400.0)) == 1
+    assert selected_river(river_to_the_north(2400.0)) == 1

@@ -1,18 +1,31 @@
 """Soil water flow functions."""
 
 import numpy as np
+import numpy.typing as npt
 from numba import njit
 
 from geb.geb_types import ArrayFloat32, Shape, TwoDArrayFloat32, TwoDArrayFloat64
+from geb.numba_config import NUMBA_CACHE
 
-from ..landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
+from ..landcovers import (
+    FOREST,
+    OPEN_WATER,
+    PADDY_IRRIGATED,
+    SEALED,
+    SEALED_PAVED_FRACTION,
+)
+from .constants import (
+    REGOLITH_LAYER_MAX_THICKNESS_M,
+    REGOLITH_LAYER_MIN_THICKNESS_M,
+    SOILGRIDS_PROFILE_DEPTH_M,
+)
 from .energy import (
     apply_rain_heat_advection,
     get_temperature_and_frozen_fraction_from_enthalpy_scalar,
 )
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def add_water_to_topwater_and_evaporate_open_water(
     natural_available_water_infiltration_m: np.float32,
     actual_irrigation_consumption_m: np.float32,
@@ -56,7 +69,7 @@ def add_water_to_topwater_and_evaporate_open_water(
     return topwater_m, open_water_evaporation_m
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
 def calculate_spatial_infiltration_excess(
     infiltration_capacity_mean: np.float32,
     available_water: np.float32,
@@ -109,48 +122,105 @@ def calculate_spatial_infiltration_excess(
     return infiltration, runoff
 
 
-@njit(cache=True, inline="always", fastmath=True)
-def calculate_variable_source_area_fraction(
-    effective_soil_saturation: np.float32,
-    shape_parameter_beta: np.float32,
+@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
+def get_perched_store_filling(
+    water_content_m: ArrayFloat32,
+    water_content_field_capacity_m: ArrayFloat32,
+    water_content_saturated_m: ArrayFloat32,
+    soil_layer_height_m: ArrayFloat32,
+    structural_depth_m: np.float32,
 ) -> np.float32:
-    """Calculate the saturated variable source area fraction for Dunne runoff.
+    """Filling of the hillslope store with perched water, for the saturated area.
 
-    Computes the fraction of the grid cell / catchment area (A_s) that is saturated
-    to the surface based on the near-surface soil moisture state and topographic shape
-    parameter, following the classical Variable Infiltration Capacity (VIC) and
-    Probability Distributed Model (PDM) formulations (Zhao 1992; Liang et al., 1994;
-    Moore 1985).
-
-    Notes:
-        Under the Pareto storage capacity distribution:
-            A_s = 1 - (1 - S_soil)^b
-        where S_soil is the effective saturation of the upper soil column and b is the
-        calibrated topographic shape parameter.
+    The saturated zone of a hillslope builds up from below: free water (above field
+    capacity) over a layer that still takes up water drains down, it is on its way
+    and not part of a saturated zone. The free water of a layer counts as perched in
+    proportion to the filling of the drainable pores of the layer below; the lowest
+    soil layer rests on the rock. This is the same water that drains sideways as
+    interflow (see distribute_soil_water_ross). The store is the structured soil:
+    the layers within the depth of the soil structure (always the top layer).
 
     Args:
-        effective_soil_saturation: Relative saturation of the upper soil column (-),
-            bounded between 0.0 (dry) and 1.0 (fully saturated).
-        shape_parameter_beta: Topographic roughness / infiltration shape parameter (-).
+        water_content_m: Water content per soil layer (m).
+        water_content_field_capacity_m: Water content at field capacity per layer (m).
+        water_content_saturated_m: Water content at saturation per layer (m).
+        soil_layer_height_m: Thickness per layer (m).
+        structural_depth_m: Depth of the soil structure (m).
 
     Returns:
-        Fraction of the cell area that is saturated and generating Dunne runoff (-).
+        Perched free water as a fraction of the drainable pores of the store (-, 0 to 1).
     """
-    if shape_parameter_beta <= np.float32(
-        0.0
-    ) or effective_soil_saturation <= np.float32(0.0):
-        return np.float32(0.0)
+    n_layers: int = water_content_m.shape[0]
+    perched_m: np.float32 = np.float32(0.0)
+    capacity_m: np.float32 = np.float32(0.0)
+    layer_bottom_m: np.float32 = np.float32(0.0)
+    for layer in range(n_layers):
+        layer_bottom_m += soil_layer_height_m[layer]
+        if layer > 0 and layer_bottom_m > structural_depth_m + np.float32(1e-3):
+            break
+        layer_capacity_m: np.float32 = max(
+            water_content_saturated_m[layer] - water_content_field_capacity_m[layer],
+            np.float32(0.0),
+        )
+        free_water_m: np.float32 = min(
+            max(
+                water_content_m[layer] - water_content_field_capacity_m[layer],
+                np.float32(0.0),
+            ),
+            layer_capacity_m,
+        )
+        filling_below: np.float32 = np.float32(1.0)
+        if layer < n_layers - 1:
+            capacity_below_m: np.float32 = (
+                water_content_saturated_m[layer + 1]
+                - water_content_field_capacity_m[layer + 1]
+            )
+            filling_below = min(
+                max(
+                    (
+                        water_content_m[layer + 1]
+                        - water_content_field_capacity_m[layer + 1]
+                    )
+                    / max(capacity_below_m, np.float32(1e-6)),
+                    np.float32(0.0),
+                ),
+                np.float32(1.0),
+            )
+        perched_m += free_water_m * filling_below
+        capacity_m += layer_capacity_m
+    return min(perched_m / max(capacity_m, np.float32(1e-6)), np.float32(1.0))
 
-    s_soil: np.float32 = min(effective_soil_saturation, np.float32(1.0))
-    # Calibration scaling factor (0.3) applied to terrain shape parameter
-    b: np.float32 = max(np.float32(0.01), shape_parameter_beta * np.float32(0.3))
-    unsaturated_fraction: np.float32 = np.power(np.float32(1.0) - s_soil, b)
-    saturated_area_fraction: np.float32 = np.float32(1.0) - unsaturated_fraction
 
-    return min(max(saturated_area_fraction, np.float32(0.0)), np.float32(1.0))
+@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
+def calculate_hillslope_saturated_area_fraction(
+    effective_soil_saturation: np.float32,
+) -> np.float32:
+    """Calculate the part of a hillslope that is saturated to the surface.
+
+    Follows from the kinematic storage model of the hillslope that also gives the
+    lateral subsurface flow (Sloan and Moore, 1984): the saturated zone is a wedge
+    that is thickest at the foot of the slope. While the store is less than half
+    full the wedge stays below the surface. Above that the wedge reaches the surface
+    over the lower part a of the slope, and the relative storage is S = (1 + a) / 2,
+    so a = 2 S - 1. There is no shape parameter.
+
+    Args:
+        effective_soil_saturation: Relative filling of the drainable pores of the
+            structured soil (-), between 0 (field capacity) and 1 (saturated).
+
+    Returns:
+        Fraction of the area that is saturated to the surface (-).
+    """
+    return min(
+        max(
+            np.float32(2.0) * effective_soil_saturation - np.float32(1.0),
+            np.float32(0.0),
+        ),
+        np.float32(1.0),
+    )
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
 def calculate_green_ampt_time_from_infiltration(
     cumulative_infiltration: np.float32,
     saturated_hydraulic_conductivity_m_per_s: np.float32,
@@ -206,7 +276,7 @@ def calculate_green_ampt_time_from_infiltration(
     return max(t, np.float32(0.0))
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
 def calculate_green_ampt_potential_cumulative_infiltration(
     seconds_since_start: np.float32,
     saturated_hydraulic_conductivity_m_per_s: np.float32,
@@ -216,22 +286,33 @@ def calculate_green_ampt_potential_cumulative_infiltration(
 ) -> np.float32:
     """Calculate cumulative infiltration using the Sadeghi et al. (2024) explicit Green-Ampt formula.
 
-    The reported maximum error of this formula is 0.3 percent across a wide range of conditions.
+    F = K_s t (0.70635 + 0.32415 sqrt(1 + 9.43456 S^2 / (K_s^2 t)))  (their eq. 13),
+    with S the sorptivity, S^2 = 2 K_s psi dtheta (their eq. 3).
+
+    Accuracy against the implicit Green-Ampt solution, as reported in the paper:
+    - The relative error stays within 0.3 percent as long as K_s t / F <= 0.904. That
+      limit is reached after t = 17.254 (S / K_s)^2 (their eq. 19a): about 6 hours of
+      continuous ponded infiltration in sand, 0.8 day in loamy sand, 3 days or more
+      in sandy loam and finer soils (their Table 1).
+    - Beyond the limit the error grows: 1.6 percent for sand after 24 hours and
+      1.9 percent for a very coarse sand after 60 hours.
+    - With the linear adjustment F_adj = 0.9796 F + 0.335 S^2 / K_s for
+      K_s t / F > 0.904 (their eq. 21) the error stays within 0.3 percent up to
+      K_s t / F = 0.983 (2.4 days in sand).
 
     Based on:
         Sadeghi, S. H., Loescher, H. W., Jacoby, P. W., & Sullivan, P. L. (2024).
         A simple, accurate, and explicit form of the Green–Ampt model to estimate infiltration,
-        sorptivity, and hydraulic conductivity. Vadose Zone Journal,  23, e20341
+        sorptivity, and hydraulic conductivity. Vadose Zone Journal, 23, e20341,
+        doi:10.1002/vzj2.20341
 
     Args:
         seconds_since_start: Seconds since the start of the infiltration event.
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity (m/s).
         wetting_front_suction_head_m: Wetting front suction head ψ (m).
         moisture_deficit: Moisture deficit [-].
-        adjust_for_coarse_soils: Whether to apply adjustment for coarse soils. For coarse soils,
-            and very long times, the Sageghi et al. formula can be slightly more off than the
-            0.3 percent error. Setting this to True applies an empirical adjustment to improve accuracy
-            in those situations.
+        adjust_for_coarse_soils: Whether to apply the adjustment (their eq. 21) when
+            K_s t / F > 0.904, which only coarse soils reach in long events.
 
     Returns:
         Cumulative infiltration amount in meters.
@@ -246,9 +327,9 @@ def calculate_green_ampt_potential_cumulative_infiltration(
     ) or moisture_deficit <= np.float32(0.0):
         return saturated_hydraulic_conductivity_m_per_s * seconds_since_start
 
-    # Sorptivity can be calculated as per Philip (1969):
+    # Sorptivity (Sadeghi et al., 2024, eq. 3; Philip, J.R., 1969. Theory of infiltration.
+    # In Advances in hydroscience (Vol. 5, pp. 215-296). Elsevier):
     # S^2 = 2 K_s * psi * dtheta
-    # Reference: Philip, J.R., 1969. Theory of infiltration. In Advances in hydroscience (Vol. 5, pp. 215-296). Elsevier.
     # Since the Sadeghi formula uses S^2 directly, we do not need to take the square root.
     sorptivity_squared: np.float32 = (
         np.float32(2.0)
@@ -285,7 +366,7 @@ def calculate_green_ampt_potential_cumulative_infiltration(
     return np.float32(cumulative_infiltration)
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
 def get_soil_water_potential_van_genuchten(
     w: np.float32,
     wres: np.float32,
@@ -330,7 +411,7 @@ def get_soil_water_potential_van_genuchten(
     return -phi
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def calculate_effective_wetting_front_suction(
     bubbling_pressure_m_positive: np.float32,
     lambda_pore_size_distribution: np.float32,
@@ -382,7 +463,7 @@ def calculate_effective_wetting_front_suction(
     return max(psi_f, np.float32(1e-4))
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def get_green_ampt_params(
     wetting_front_depth_m: np.float32,
     soil_layer_height_m: ArrayFloat32,
@@ -480,8 +561,66 @@ def get_green_ampt_params(
         lambda_pore_size_distribution=lambda_pore_size_distribution[idx],
         effective_saturation=effective_saturation,
     )
+    # The capillary drive of Green-Ampt is psi * delta_theta. It vanishes when the soil
+    # ahead of the front is saturated because delta_theta goes to zero; the suction
+    # head itself stays finite (half the bubbling pressure, Rawls et al., 1983).
 
     return idx, psi, delta_theta
+
+
+# Conductivity of the wetted zone behind an infiltration front as a fraction of the
+# saturated conductivity. Water that infiltrates from the surface traps air in part
+# of the pores, so the wetted zone does not become fully saturated. The Green-Ampt
+# conductivity is taken as half the saturated conductivity (Bouwer, H. (1966). Rapid
+# field measurement of air entry value and hydraulic conductivity of soil as
+# significant parameters in flow system analysis. Water Resources Research, 2,
+# 729-738), as in Rawls, W. J., Brakensiek, D. L., & Miller, N. (1983). Green-Ampt
+# infiltration parameters from soils data. Journal of Hydraulic Engineering, 109(1),
+# 62-70 (eq. 6: K = Ks / 2). It applies to infiltration from above only; water that
+# is redistributed, drains or flows sideways within the soil uses the saturated
+# conductivity itself.
+WETTED_ZONE_CONDUCTIVITY_FRACTION: np.float32 = np.float32(0.5)
+
+# Shape of the sub-grid distribution of ice in frozen soil (Niu and Yang, 2006; as in CLM 3.5-4).
+FROZEN_SOIL_IMPERMEABLE_SHAPE: np.float32 = np.float32(3.0)
+
+
+@njit(cache=NUMBA_CACHE, inline="always")
+def get_frozen_soil_permeable_fraction(
+    ice_m: np.float32, saturated_water_content_m: np.float32
+) -> np.float32:
+    """Fraction of a soil layer that still conducts water when part of its pores hold ice.
+
+    Ice blocks the pores it fills, but the air-filled pores of a frozen soil stay open:
+    a soil that froze when dry still takes up water, a soil that froze when wet hardly
+    does (Zhao and Gray, 1999; Demand et al., 2019). The ice content varies within a
+    cell, so the impermeable part grows with the ice saturation of the pores
+    (ice volume / porosity) along the distribution of Niu and Yang (2006):
+
+        F_imp = (exp(-a (1 - S_ice)) - exp(-a)) / (1 - exp(-a)), a = 3
+
+    Niu, G.-Y., and Yang, Z.-L. (2006). Effects of frozen soil on snowmelt runoff and soil
+    water storage at a continental scale. J. Hydrometeorol., 7, 937-952.
+
+    Args:
+        ice_m: Ice in the layer (m water equivalent).
+        saturated_water_content_m: Water content of the layer at saturation, the pore volume (m).
+
+    Returns:
+        Permeable fraction of the layer (-), 1 without ice and 0 when ice fills all pores.
+    """
+    ice_saturation: np.float32 = min(
+        max(ice_m / max(saturated_water_content_m, np.float32(1e-9)), np.float32(0.0)),
+        np.float32(1.0),
+    )
+    exp_shape: np.float32 = np.exp(-FROZEN_SOIL_IMPERMEABLE_SHAPE)
+    impermeable_fraction: np.float32 = (
+        np.exp(-FROZEN_SOIL_IMPERMEABLE_SHAPE * (np.float32(1.0) - ice_saturation))
+        - exp_shape
+    ) / (np.float32(1.0) - exp_shape)
+    return np.float32(1.0) - min(
+        max(impermeable_fraction, np.float32(0.0)), np.float32(1.0)
+    )
 
 
 @njit(inline="always")
@@ -542,7 +681,7 @@ def generate_rainfall_lookup_table(
     return table
 
 
-@njit(cache=True, inline="always", fastmath=True)
+@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
 def calculate_depression_spillover_runoff(
     topwater_m: np.float32,
     depression_storage_capacity_m: np.float32 = np.float32(0.0025),
@@ -591,7 +730,7 @@ def calculate_depression_spillover_runoff(
     return retained_topwater_m, direct_runoff_m
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def infiltration(
     seed: np.int64,
     ws: ArrayFloat32,
@@ -609,11 +748,14 @@ def infiltration(
     bubbling_pressure_m_positive: ArrayFloat32,
     soil_layer_height_m: ArrayFloat32,
     lambda_pore_size_distribution: ArrayFloat32,
-    soil_enthalpy_top_layer_J_per_m2: np.float32,
-    solid_heat_capacity_top_layer_J_per_m2_K: np.float32,
+    soil_enthalpy_J_per_m2: ArrayFloat32,
+    solid_heat_capacity_J_per_m2_K: ArrayFloat32,
     rain_temperature_C: np.float32,
     new_surface_water_input_m: np.float32,
     rainfall_lookup_table: TwoDArrayFloat32,
+    dunne_effective_saturation: np.float32,
+    surface_crust_factor: np.float32,
+    macropore_infiltration_capacity_m_per_s: np.float32,
     distribute_rainfall_lognormally: bool = True,
     slope_m_per_m: np.float32 = np.float32(0.0),
 ) -> tuple[
@@ -629,7 +771,7 @@ def infiltration(
 ]:
     """Simulates vertical transport of water in the soil for a single cell.
 
-    Uses an explicit Green-Ampt approximation (Salvucci, 1994) combined with the
+    Uses an explicit Green-Ampt approximation (Sadeghi et al., 2024) combined with the
     PDM variable infiltration capacity curve and depression storage spillover runoff.
 
     The function uses `wetting_front_suction_head_m` which is a state variable
@@ -654,14 +796,21 @@ def infiltration(
         bubbling_pressure_m_positive: Bubbling pressure for each soil layer [m], shape (N_SOIL_LAYERS,).
         soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
         lambda_pore_size_distribution: Van Genuchten parameter lambda for each soil layer, shape (N_SOIL_LAYERS,).
-        soil_enthalpy_top_layer_J_per_m2: Top-layer soil enthalpy relative to 0°C liquid water (J/m2).
-        solid_heat_capacity_top_layer_J_per_m2_K: Areal heat capacity of the top-layer solid soil fraction (J/m2/K).
+        soil_enthalpy_J_per_m2: Soil enthalpy per layer relative to 0°C liquid water (J/m2), shape (N_SOIL_LAYERS,).
+        solid_heat_capacity_J_per_m2_K: Areal heat capacity of the solid soil fraction per layer (J/m2/K), shape (N_SOIL_LAYERS,).
         rain_temperature_C: Temperature of liquid water entering the soil surface (C).
         new_surface_water_input_m: Newly arriving liquid water reaching the surface
             during this timestep from rain, melt, or irrigation (m).
         rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
         distribute_rainfall_lognormally: Whether to distribute rainfall across substeps using a log-normal distribution to simulate temporal variability. If False, rainfall is distributed evenly.
         slope_m_per_m: Hillslope slope for modulating depression storage capacity (m/m).
+        dunne_effective_saturation: Filling of the drainable pores of the structured soil
+            (-, 0 at field capacity, 1 at saturation), which sets the saturated area.
+        surface_crust_factor: Factor on the saturated conductivity of the surface layer
+            for crusting by raindrop impact (1 = no crust).
+        macropore_infiltration_capacity_m_per_s: Rate (m/s) at which ponded water on the unsaturated
+            area enters macropores (biopores, cracks), bypassing the surface layer to the
+            unfrozen layers below it, filled from the top down; 0 = no macropore infiltration.
 
     Returns:
         A tuple containing:
@@ -691,20 +840,86 @@ def infiltration(
             np.float32(0.0),  # wetting_front_suction_head_m
             np.float32(0.0),  # wetting_front_moisture_deficit
             -1,
-            soil_enthalpy_top_layer_J_per_m2,
+            soil_enthalpy_J_per_m2[0],
         )
 
     if no_topwater_available:
+        if wetting_front_depth_m > np.float32(0.0):
+            # Continuous wetting front recession (decay) during rain hiatus (Chu 1978; Ogden & Saghafian 1997).
+            # Mobile water stored behind the front drains downward under normal gravity drainage.
+            cos_alpha: np.float32 = np.float32(1.0) / np.sqrt(
+                np.float32(1.0) + slope_m_per_m * slope_m_per_m
+            )
+            # Drainable porosity (approx. 40% of pore space between sat and res)
+            delta_theta_drain: np.float32 = max(
+                np.float32(0.05),
+                (ws[0] - wres[0]) / soil_layer_height_m[0] * np.float32(0.4),
+            )
+            # Drainage recession depth over 1 hour (3600 seconds)
+            q_drain: np.float32 = (
+                saturated_hydraulic_conductivity_m_per_s[0]
+                * cos_alpha
+                * np.float32(3600.0)
+            )
+            delta_L: np.float32 = q_drain / delta_theta_drain
+            decayed_depth: np.float32 = max(
+                np.float32(0.0), wetting_front_depth_m - delta_L
+            )
+
+            # Cap decayed depth by the water actually present in the soil column
+            # to prevent piston flow mass inversion when drainage empties layers.
+            # The wetted zone behind the front is near saturation, so the front can
+            # be no deeper than the saturated-equivalent depth of the water above it,
+            # accumulated from the top down to the first layer that is not full.
+            max_depth_from_water: np.float32 = np.float32(0.0)
+            for layer in range(soil_layer_height_m.size):
+                pore_space: np.float32 = ws[layer] - wres[layer]
+                if pore_space <= np.float32(0.0):
+                    break
+                fill: np.float32 = min(
+                    np.float32(1.0),
+                    max(np.float32(0.0), (w[layer] - wres[layer]) / pore_space),
+                )
+                max_depth_from_water += fill * soil_layer_height_m[layer]
+                if fill < np.float32(0.999) or max_depth_from_water >= decayed_depth:
+                    break
+            wetting_front_depth_m = min(decayed_depth, max_depth_from_water)
+
+            if wetting_front_depth_m > np.float32(1e-4):
+                (
+                    green_ampt_active_layer_idx,
+                    wetting_front_suction_head_m,
+                    wetting_front_moisture_deficit,
+                ) = get_green_ampt_params(
+                    wetting_front_depth_m,
+                    soil_layer_height_m,
+                    w,
+                    ws,
+                    wres,
+                    bubbling_pressure_m_positive,
+                    lambda_pore_size_distribution,
+                )
+            else:
+                wetting_front_depth_m = np.float32(0.0)
+                wetting_front_suction_head_m = np.float32(0.0)
+                wetting_front_moisture_deficit = np.float32(0.0)
+                green_ampt_active_layer_idx = -1
+        else:
+            wetting_front_depth_m = np.float32(0.0)
+            wetting_front_suction_head_m = np.float32(0.0)
+            wetting_front_moisture_deficit = np.float32(0.0)
+            green_ampt_active_layer_idx = -1
+
         return (
             np.float32(0.0),  # topwater_m
             np.float32(0.0),  # direct_runoff
             np.float32(0.0),  # groundwater_recharge
             np.float32(0.0),  # infiltration
-            np.float32(0.0),  # wetting_front_depth_m
-            np.float32(0.0),  # wetting_front_suction_head_m
-            np.float32(0.0),  # wetting_front_moisture_deficit
-            -1,
-            soil_enthalpy_top_layer_J_per_m2,
+            wetting_front_depth_m,
+            wetting_front_suction_head_m,
+            wetting_front_moisture_deficit,
+            green_ampt_active_layer_idx,
+            soil_enthalpy_J_per_m2[0],
         )
 
     # Initialize accumulators for the timestep
@@ -750,6 +965,27 @@ def infiltration(
     for i in range(green_ampt_active_layer_idx + 1):
         current_layer_depth_limit += soil_layer_height_m[i]
 
+    # Total soil depth is invariant during infiltration; computing it here hoists the sum out of the substep loop.
+    total_soil_depth: np.float32 = np.sum(soil_layer_height_m)
+
+    # Conductivity of the wetted zone: that of its most restrictive layer, at the
+    # fraction of the saturated conductivity that a soil wetted from above reaches
+    # (WETTED_ZONE_CONDUCTIVITY_FRACTION, trapped air). The surface layer also has the
+    # crust factor for raindrop impact and surface sealing.
+    # Initializing here and updating only when the wetting front crosses a layer boundary avoids redundant
+    # scanning loops over layers during each Green-Ampt temporal substep.
+    saturated_conductivity_of_most_restrictive_layer: np.float32 = (
+        WETTED_ZONE_CONDUCTIVITY_FRACTION
+        * saturated_hydraulic_conductivity_m_per_s[0]
+        * surface_crust_factor
+    )
+    for i in range(1, green_ampt_active_layer_idx + 1):
+        saturated_conductivity_of_most_restrictive_layer = min(
+            saturated_conductivity_of_most_restrictive_layer,
+            WETTED_ZONE_CONDUCTIVITY_FRACTION
+            * saturated_hydraulic_conductivity_m_per_s[i],
+        )
+
     # Steeper slopes hold less puddle storage before spilling over.
     # Sealed surfaces have lower storage (0.4 - 1.5 mm) than natural ground (0.8 - 2.5 mm).
     if land_use_type == PADDY_IRRIGATED:
@@ -777,34 +1013,18 @@ def infiltration(
             np.float32(1.0) / (np.float32(1.0) + variable_runoff_shape_beta),
         )
 
-    # Calculate effective saturation of the upper root-zone soil profile (top 3 layers, ~30 cm)
-    # for variable source area (Dunne saturation-excess) runoff generation.
-    upper_layers_to_consider: int = min(3, len(w))
-    total_water_upper: np.float32 = np.float32(0.0)
-    total_res_upper: np.float32 = np.float32(0.0)
-    total_sat_upper: np.float32 = np.float32(0.0)
-    for i in range(upper_layers_to_consider):
-        total_water_upper += w[i]
-        total_res_upper += wres[i]
-        total_sat_upper += ws[i]
-
-    delta_capacity_upper: np.float32 = max(
-        total_sat_upper - total_res_upper, np.float32(1e-6)
-    )
+    # Saturated area (Dunne saturation excess): rain on land that is saturated to the
+    # surface cannot enter the soil and runs off. The caller supplies the filling of
+    # the drainable pores of the structured soil.
     s_soil_effective: np.float32 = min(
-        max(
-            (total_water_upper - total_res_upper) / delta_capacity_upper,
-            np.float32(0.0),
-        ),
-        np.float32(1.0),
+        max(dunne_effective_saturation, np.float32(0.0)), np.float32(1.0)
     )
 
     if land_use_type in (SEALED, PADDY_IRRIGATED, OPEN_WATER):
         saturated_area_fraction: np.float32 = np.float32(0.0)
     else:
-        saturated_area_fraction = calculate_variable_source_area_fraction(
+        saturated_area_fraction = calculate_hillslope_saturated_area_fraction(
             effective_soil_saturation=s_soil_effective,
-            shape_parameter_beta=variable_runoff_shape_beta,
         )
     unsaturated_area_fraction: np.float32 = np.float32(1.0) - saturated_area_fraction
 
@@ -821,6 +1041,8 @@ def infiltration(
         rainfall_lookup_table_row: ArrayFloat32 = np.full(
             n_substeps, 1.0 / n_substeps, dtype=np.float32
         )
+    # Allocated once, refilled every substep.
+    permeable_fractions = np.empty_like(w)
     for substep_i in range(n_substeps):
         # Calculate the amount of water available for infiltration in this substep based on the rainfall distribution.
         rainfall_ratio_substep: np.float32 = rainfall_lookup_table_row[substep_i]
@@ -828,9 +1050,9 @@ def infiltration(
             new_surface_water_input_m * rainfall_ratio_substep
         )
         if land_use_type == SEALED:
-            # Direct impervious fraction for sealed surfaces (e.g., roofs/gutters routed directly to drainage)
+            # Rain on the paved part of sealed land (roofs, roads) drains directly.
             sealed_impervious_step: np.float32 = water_input_substep_m * np.float32(
-                0.35
+                SEALED_PAVED_FRACTION
             )
             impervious_direct_runoff_m += sealed_impervious_step
             rain_step: np.float32 = water_input_substep_m - sealed_impervious_step
@@ -839,29 +1061,42 @@ def infiltration(
 
         # Partition incoming rain into Dunne saturation-excess on saturated riparian areas
         # and precipitation falling on the unsaturated hillslope area.
+        # On the saturated area rain ponds (the soil below can still drain).
         step_sat_excess: np.float32 = rain_step * saturated_area_fraction
         p_unsat: np.float32 = rain_step * unsaturated_area_fraction
 
         # Add enthalpy from newly reaching rain/irrigation to the top-soil control volume.
         # This water enters at rain_temperature_C and equilibrates with the top layer.
-        soil_enthalpy_top_layer_J_per_m2 = apply_rain_heat_advection(
-            soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
+        soil_enthalpy_J_per_m2[0] = apply_rain_heat_advection(
+            soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_J_per_m2[0],
             liquid_water_input_m=water_input_substep_m,
             rain_temperature_C=max(rain_temperature_C, np.float32(0.0)),
         )
 
-        _, substep_frozen_fraction_top_layer = (
-            get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-                enthalpy_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
-                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
-                water_content_m=w[0],
-                topwater_m=water_input_substep_m,
+        for layer_idx in range(len(w)):
+            topw = water_input_substep_m if layer_idx == 0 else np.float32(0.0)
+            _, frozen_frac = get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+                enthalpy_J_per_m2=soil_enthalpy_J_per_m2[layer_idx],
+                solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[
+                    layer_idx
+                ],
+                water_content_m=w[layer_idx],
+                topwater_m=topw,
             )
-        )
-        liquid_fraction_top_layer = np.float32(1.0) - np.minimum(
-            np.maximum(substep_frozen_fraction_top_layer, np.float32(0.0)),
-            np.float32(1.0),
-        )
+            ice_m: np.float32 = min(
+                max(frozen_frac, np.float32(0.0)), np.float32(1.0)
+            ) * (w[layer_idx] + topw)
+            permeable_fractions[layer_idx] = get_frozen_soil_permeable_fraction(
+                ice_m, ws[layer_idx]
+            )
+
+        # Effective permeable fraction across the active wetting front layers:
+        # governed by the most restrictive (most ice-filled) layer.
+        transmission_permeable_fraction: np.float32 = np.float32(1.0)
+        for layer_idx in range(green_ampt_active_layer_idx + 1):
+            transmission_permeable_fraction = min(
+                transmission_permeable_fraction, permeable_fractions[layer_idx]
+            )
 
         # Check if the wetting front has moved into a new layer
         # and if so, update Green-Ampt parameters. Otherwise, keep existing parameters.
@@ -883,28 +1118,20 @@ def infiltration(
                 bubbling_pressure_m_positive,
                 lambda_pore_size_distribution,
             )
-            # Update limit for the new layer
+            # Update limit and restrictive conductivity for the new layer
             current_layer_depth_limit = np.float32(0.0)
             for i in range(green_ampt_active_layer_idx + 1):
                 current_layer_depth_limit += soil_layer_height_m[i]
+            saturated_conductivity_of_most_restrictive_layer = min(
+                saturated_conductivity_of_most_restrictive_layer,
+                WETTED_ZONE_CONDUCTIVITY_FRACTION
+                * saturated_hydraulic_conductivity_m_per_s[green_ampt_active_layer_idx],
+            )
 
         # Calculate current cumulative infiltration implied by the wetting front depth
         current_cumulative_infiltration: np.float32 = (
             wetting_front_depth_m * wetting_front_moisture_deficit
         )
-
-        saturated_conductivity_of_most_restrictive_layer = (
-            saturated_hydraulic_conductivity_m_per_s[0]
-        ) * np.float32(
-            0.2
-        )  # Apply a crust factor to the top layer to account for surface sealing.
-
-        # Loop through other layers up to the active layer to find the most restrictive conductivity.
-        for i in range(1, green_ampt_active_layer_idx + 1):
-            saturated_conductivity_of_most_restrictive_layer = min(
-                saturated_conductivity_of_most_restrictive_layer,
-                saturated_hydraulic_conductivity_m_per_s[i],
-            )
 
         # Calculate effective time since start of infiltration event
         # If wetting_front_depth is negligible, we start at t=0
@@ -941,7 +1168,7 @@ def infiltration(
             np.float32(0.0),
             potential_cumulative_infiltration - current_cumulative_infiltration,
         )
-        infiltration_capacity_m_step *= liquid_fraction_top_layer
+        infiltration_capacity_m_step *= transmission_permeable_fraction
 
         # Available infiltration capacity on the unsaturated portion of the cell
         f_unsat_step: np.float32 = (
@@ -949,20 +1176,33 @@ def infiltration(
         )
 
         # Determine how deep we can infiltrate:
-        # Scan for the first layer with available space starting from active layer.
+        # Water cannot penetrate into or past a frozen soil layer (frost table).
+        # We find the first layer with available space, bounded by the frost table.
         end_layer_idx = min(len(w), green_ampt_active_layer_idx + 1)
         for i in range(green_ampt_active_layer_idx, len(w)):
-            if (ws[i] - w[i]) > np.float32(1e-4):
+            if permeable_fractions[i] < np.float32(0.1):
+                # Ice fills (nearly) all pores of layer i (frost table); stop search
+                end_layer_idx = i
+                break
+            if ws[i] - w[i] > np.float32(1e-4):
                 end_layer_idx = i + 1
                 break
             end_layer_idx = i + 1
 
-        # Calculate available space up to the target layer
+        # Calculate available space up to the target layer: the air-filled pore space, also in
+        # layers that hold some ice
         space_available: np.float32 = np.float32(0.0)
         for i in range(end_layer_idx):
             space_available += max(np.float32(0.0), ws[i] - w[i])
 
-        total_soil_depth: np.float32 = np.sum(soil_layer_height_m)
+        # Bound the wetting front depth so it cannot advance past the impermeable frost table
+        frost_depth_limit: np.float32 = np.float32(0.0)
+        for i in range(len(w)):
+            if permeable_fractions[i] < np.float32(0.1):
+                break
+            frost_depth_limit += soil_layer_height_m[i]
+        wetting_front_depth_m = min(wetting_front_depth_m, frost_depth_limit)
+
         wetting_front_at_bottom: bool = bool(
             wetting_front_depth_m >= total_soil_depth - np.float32(1e-4)
         )
@@ -982,58 +1222,72 @@ def infiltration(
         step_horton_excess += pot_infil_rain - infil_from_rain
 
         # Pre-existing ponded surface water can infiltrate if unsaturated soil has spare infiltration capacity
+        # or can transmit through saturated surface soil via gravity into lower unsaturated layers.
+        saturated_transmission_step: np.float32 = (
+            saturated_conductivity_of_most_restrictive_layer
+            * substep_time_s
+            * transmission_permeable_fraction
+        )
         spare_capacity: np.float32 = max(
             np.float32(0.0), f_unsat_step - infil_from_rain
         )
         puddle_space: np.float32 = max(
             np.float32(0.0), space_available - infil_from_rain
         )
+        available_infil_capacity: np.float32 = max(
+            spare_capacity,
+            saturated_transmission_step
+            if puddle_space > np.float32(0.0)
+            else np.float32(0.0),
+        )
         puddle_infil: np.float32 = min(
-            current_topwater_m, min(spare_capacity, puddle_space)
+            current_topwater_m, min(available_infil_capacity, puddle_space)
         )
         current_topwater_m -= puddle_infil
         step_infiltration: np.float32 = infil_from_rain + puddle_infil
 
-        excess_surface_water: np.float32 = step_sat_excess + step_horton_excess
+        # Rain where groundwater reaches the surface cannot infiltrate or be held in
+        # depressions there (they are full): it leaves as overland flow directly.
+
+        # Saturation excess from soil moisture and infiltration excess add to the surface
+        # pool, from which they can still infiltrate later or spill over as runoff.
+        current_topwater_m += step_sat_excess + step_horton_excess
+
+        # When the wetting front has reached the bottom of the soil column, the saturated
+        # profile can transmit steady vertical drainage to groundwater. The maximum drainage
+        # rate is governed by the minimum transmission capacity of the soil column and the
+        # aquifer, scaled by the permeable (not ice-blocked) fraction.
+        # Drainage is drawn from ponded surface water, which passes through to recharge.
+        # Any surface water that cannot drain or infiltrate remains on the surface and contributes
+        # to surface runoff.
         if wetting_front_at_bottom:
-            water_available_for_recharge: np.float32 = (
-                excess_surface_water + current_topwater_m
+            drainage_ksat_m_per_s: np.float32 = (
+                min(
+                    saturated_conductivity_of_most_restrictive_layer,
+                    max(np.float32(0.0), groundwater_toplayer_conductivity_m_per_s),
+                )
+                * transmission_permeable_fraction
             )
             recharge_capacity_m_step: np.float32 = (
-                max(np.float32(0.0), groundwater_toplayer_conductivity_m_per_s)
-                * substep_time_s
+                drainage_ksat_m_per_s * substep_time_s
             )
             step_groundwater_recharge_m: np.float32 = min(
-                water_available_for_recharge, recharge_capacity_m_step
+                current_topwater_m, recharge_capacity_m_step
             )
             groundwater_recharge_m += step_groundwater_recharge_m
-
-            # Recharging water is drawn first from surface excess, then from current_topwater_m
-            recharge_from_excess: np.float32 = min(
-                excess_surface_water, step_groundwater_recharge_m
-            )
-            recharge_from_topwater: np.float32 = min(
-                current_topwater_m,
-                step_groundwater_recharge_m - recharge_from_excess,
-            )
             current_topwater_m = max(
-                np.float32(0.0), current_topwater_m - recharge_from_topwater
+                np.float32(0.0), current_topwater_m - step_groundwater_recharge_m
             )
-            step_excess_unabsorbed: np.float32 = (
-                excess_surface_water - recharge_from_excess
-            )
-        else:
-            step_excess_unabsorbed = excess_surface_water
 
         total_infiltration_amount += step_infiltration
 
-        # Update wetting front depth
+        # Update wetting front depth bounded by frost table
         # L_new = L_old + Infiltration / DeltaTheta
         if step_infiltration > np.float32(
             0.0
         ) and wetting_front_moisture_deficit > np.float32(1e-6):
             wetting_front_depth_m += step_infiltration / wetting_front_moisture_deficit
-            wetting_front_depth_m = min(wetting_front_depth_m, total_soil_depth)
+            wetting_front_depth_m = min(wetting_front_depth_m, frost_depth_limit)
 
         # Update soil layers sequentially from top to bottom
         remaining_infiltration: np.float32 = step_infiltration
@@ -1052,9 +1306,66 @@ def infiltration(
 
             remaining_infiltration -= infiltration_to_layer
 
-        # Unabsorbed surface water generated in this substep (Dunne saturation excess,
-        # Hortonian infiltration excess, and profile saturation excess) adds to the surface puddle pool
-        current_topwater_m += step_excess_unabsorbed
+        # After the matrix infiltration has been stored in the layers (so that both use the
+        # space actually left): macropore (preferential) infiltration: water ponding on the unsaturated part of the
+        # cell that the soil matrix cannot take enters macropores (earthworm and root channels,
+        # cracks) and bypasses the surface layer. It fills the layers below the surface layer from
+        # the top down, above the frost table (Beven and Germann, 1982; Jarvis, 2007). The shallow
+        # subsoil then wets up towards saturation, where it drains sideways as fast interflow
+        # (subsurface stormflow; Weiler and McDonnell, 2007) instead of reaching the soil base.
+        # The surface layer takes what the layers below cannot hold. Saturated areas, frozen soil
+        # and sealed, paddy and water surfaces have no macropore flow.
+        if (
+            macropore_infiltration_capacity_m_per_s > np.float32(0.0)
+            and current_topwater_m > np.float32(0.0)
+            and land_use_type != SEALED
+            and land_use_type != PADDY_IRRIGATED
+            and land_use_type != OPEN_WATER
+        ):
+            macropore_water_m: np.float32 = min(
+                current_topwater_m,
+                macropore_infiltration_capacity_m_per_s
+                * substep_time_s
+                * transmission_permeable_fraction
+                * unsaturated_area_fraction,
+            )
+            # Macropores end at the frost table (first layer with its pores filled with ice).
+            n_unfrozen_layers: int = len(w)
+            for layer_idx in range(len(w)):
+                if permeable_fractions[layer_idx] < np.float32(0.1):
+                    n_unfrozen_layers = layer_idx
+                    break
+            remaining_macropore_m: np.float32 = macropore_water_m
+            macropore_heat_J_per_m3: np.float32 = (
+                np.float32(1000.0)  # RHO_WATER
+                * np.float32(4186.0)  # C_WATER
+                * max(rain_temperature_C, np.float32(0.0))
+            )
+            for fill_idx in range(n_unfrozen_layers):
+                if remaining_macropore_m <= np.float32(1e-9):
+                    break
+                # Layers 1, 2, ... down to the frost table, then the surface layer.
+                layer_idx: int = fill_idx + 1 if fill_idx < n_unfrozen_layers - 1 else 0
+                to_layer_m: np.float32 = min(
+                    remaining_macropore_m,
+                    max(
+                        np.float32(0.0),
+                        ws[layer_idx] - w[layer_idx],
+                    ),
+                )
+                w[layer_idx] += to_layer_m
+                remaining_macropore_m -= to_layer_m
+                if layer_idx > 0:
+                    # The water (and its heat, added to the top layer above) moves down.
+                    soil_enthalpy_J_per_m2[0] -= to_layer_m * macropore_heat_J_per_m3
+                    soil_enthalpy_J_per_m2[layer_idx] += (
+                        to_layer_m * macropore_heat_J_per_m3
+                    )
+            macropore_infiltration_m: np.float32 = (
+                macropore_water_m - remaining_macropore_m
+            )
+            current_topwater_m -= macropore_infiltration_m
+            total_infiltration_amount += macropore_infiltration_m
 
         # Partition accumulated surface pool into retained puddle storage and spillover direct runoff
         if land_use_type == PADDY_IRRIGATED:
@@ -1086,8 +1397,8 @@ def infiltration(
             top_layer_temp_C,
             _,
         ) = get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-            enthalpy_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
-            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+            enthalpy_J_per_m2=soil_enthalpy_J_per_m2[0],
+            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[0],
             water_content_m=w[0],
             topwater_m=topwater_m + total_direct_runoff,
         )
@@ -1099,7 +1410,7 @@ def infiltration(
             * np.float32(4186.0)  # C_WATER
             * runoff_advection_temp_C
         )
-        soil_enthalpy_top_layer_J_per_m2 -= advected_runoff_enthalpy_J_per_m2
+        soil_enthalpy_J_per_m2[0] -= advected_runoff_enthalpy_J_per_m2
 
     return (
         topwater_m,
@@ -1110,12 +1421,12 @@ def infiltration(
         wetting_front_suction_head_m,
         wetting_front_moisture_deficit,
         green_ampt_active_layer_idx,
-        soil_enthalpy_top_layer_J_per_m2,
+        soil_enthalpy_J_per_m2[0],
     )
 
 
 @njit(
-    cache=True,
+    cache=NUMBA_CACHE,
     inline="always",
 )
 def get_soil_moisture_at_pressure(
@@ -1220,7 +1531,7 @@ def thetas_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
-    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_matter_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculates the saturated water content (theta_S) based on the provided equation.
@@ -1231,7 +1542,8 @@ def thetas_wosten(
         clay: Clay percentage (C).
         bulk_density_kg_per_dm3: Bulk density (D).
         silt: Silt percentage (S).
-        organic_carbon_percentage: Organic matter percentage (OM).
+        organic_matter_percentage: Organic matter percentage (OM), not organic
+            carbon: organic carbon * ORGANIC_MATTER_PER_ORGANIC_CARBON.
         is_topsoil: 1 for topsoil, 0 for subsoil.
 
     Returns:
@@ -1239,16 +1551,16 @@ def thetas_wosten(
     """
     theta_s = (
         0.7919
-        + 0.00169 * clay
+        + 0.001691 * clay
         - 0.29619 * bulk_density_kg_per_dm3
         - 0.000001491 * silt**2
-        + 0.0000821 * organic_carbon_percentage**2
+        + 0.0000821 * organic_matter_percentage**2
         + 0.02427 * (1 / clay)
         + 0.01113 * (1 / silt)
         + 0.01472 * np.log(silt)
-        - 0.0000733 * organic_carbon_percentage * clay
+        - 0.0000733 * organic_matter_percentage * clay
         - 0.000619 * bulk_density_kg_per_dm3 * clay
-        - 0.001183 * bulk_density_kg_per_dm3 * organic_carbon_percentage
+        - 0.001183 * bulk_density_kg_per_dm3 * organic_matter_percentage
         - 0.0001664 * is_topsoil * silt
     ).astype(np.float32)
 
@@ -1383,7 +1695,7 @@ def get_pore_size_index_brakensiek(
 def get_pore_size_index_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
-    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_matter_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
     is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
@@ -1394,7 +1706,8 @@ def get_pore_size_index_wosten(
     Args:
         clay: clay percentage [%].
         silt: silt percentage [%].
-        organic_carbon_percentage: soil organic carbon content [%].
+        organic_matter_percentage: soil organic matter content [%], not organic
+            carbon: organic carbon * ORGANIC_MATTER_PER_ORGANIC_CARBON.
         bulk_density_kg_per_dm3: bulk density [kg/dm3].
         is_top_soil: top soil flag.
 
@@ -1405,19 +1718,19 @@ def get_pore_size_index_wosten(
         -25.23
         - 0.02195 * clay
         + 0.0074 * silt
-        - 0.1940 * organic_carbon_percentage
+        - 0.1940 * organic_matter_percentage
         + 45.5 * bulk_density_kg_per_dm3
         - 7.24 * bulk_density_kg_per_dm3**2
         + 0.0003658 * clay**2
-        + 0.002855 * organic_carbon_percentage**2
+        + 0.002885 * organic_matter_percentage**2
         - 12.81 * bulk_density_kg_per_dm3**-1
         - 0.1524 * silt**-1
-        - 0.01958 * organic_carbon_percentage**-1
+        - 0.01958 * organic_matter_percentage**-1
         - 0.2876 * np.log(silt)
-        - 0.0709 * np.log(organic_carbon_percentage)
+        - 0.0709 * np.log(organic_matter_percentage)
         - 44.6 * np.log(bulk_density_kg_per_dm3)
         - 0.02264 * bulk_density_kg_per_dm3 * clay
-        + 0.0896 * bulk_density_kg_per_dm3 * organic_carbon_percentage
+        + 0.0896 * bulk_density_kg_per_dm3 * organic_matter_percentage
         + 0.00718 * is_top_soil * clay
     ).astype(np.float32)
 
@@ -1467,19 +1780,29 @@ def kv_wosten(
     silt: np.ndarray[Shape, np.dtype[np.float32]],
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
-    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_matter_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
-    """Calculates the saturated value based on the provided equation.
+    """Saturated hydraulic conductivity from the HYPRES pedotransfer function.
 
-    From: https://doi.org/10.1016/S0016-7061(98)00132-3
+    Wösten, J. H. M., Lilly, A., Nemes, A., & Le Bas, C. (1999). Development and use of
+    a database of hydraulic properties of European soils. Geoderma, 90, 169-185,
+    https://doi.org/10.1016/S0016-7061(98)00132-3. The equation gives Ks* = ln(Ks),
+    Ks in cm/day, from the percentages of clay (C) and silt (S), the percentage of
+    organic matter (OM), the bulk density (D) and whether the layer is topsoil
+    (Table 5). The regression explains 19 % of the variance of ln(Ks) in the HYPRES
+    data, so the conductivity of a single soil is uncertain. The measured
+    conductivities include the effect of macropores and cracks, in particular in
+    coarse and very fine soils. The functions were derived for European soils and
+    the authors advise against using them outside Europe.
 
     Args:
         silt: Silt percentage (S).
         is_topsoil: 1 for topsoil, 0 for subsoil.
         bulk_density_kg_per_dm3: Bulk density (D).
         clay: Clay percentage (C).
-        organic_carbon_percentage: Organic matter percentage (OM).
+        organic_matter_percentage: Organic matter percentage (OM), not organic
+            carbon: organic carbon * ORGANIC_MATTER_PER_ORGANIC_CARBON.
 
     Returns:
         float: The calculated Ks* value [m/s].
@@ -1492,10 +1815,10 @@ def kv_wosten(
         - 0.000484 * clay**2
         - 0.000322 * silt**2
         + 0.001 * (1 / silt)
-        - 0.0748 * (1 / organic_carbon_percentage)
+        - 0.0748 * (1 / organic_matter_percentage)
         - 0.643 * np.log(silt)
         - 0.01398 * bulk_density_kg_per_dm3 * clay
-        - 0.1673 * bulk_density_kg_per_dm3 * organic_carbon_percentage
+        - 0.1673 * bulk_density_kg_per_dm3 * organic_matter_percentage
         + 0.02986 * np.float32(is_topsoil) * clay
         - 0.03305 * np.float32(is_topsoil) * silt
     ) / (100 * 86400)  # convert to m/s
@@ -1530,3 +1853,177 @@ def kv_cosby(
     kv = ks_in_hr * INCH_TO_M / HOUR_TO_S
 
     return kv.astype(np.float32)
+
+
+@njit(cache=NUMBA_CACHE, inline="always")
+def get_soil_cover_fraction(
+    land_use_type: np.int32,
+    leaf_area_index: np.float32,
+) -> np.float32:
+    """Fraction of the soil surface that is protected from raindrop impact.
+
+    A forest floor is fully covered by litter. Elsewhere the canopy covers
+    1 - exp(-0.7 LAI) of the soil. On sealed land only the unpaved part (gardens,
+    verges) has a soil surface; its grass has the leaf area of that part alone.
+
+    Args:
+        land_use_type: Land use type of the HRU.
+        leaf_area_index: Leaf area index of the HRU (-); for sealed land the mean over
+            the paved and the unpaved part.
+
+    Returns:
+        Covered fraction of the soil surface (0-1).
+    """
+    if land_use_type == FOREST:
+        return np.float32(1.0)
+    if land_use_type == SEALED:
+        leaf_area_index = leaf_area_index / np.float32(1.0 - SEALED_PAVED_FRACTION)
+    return np.float32(1.0) - np.exp(
+        np.float32(-0.7) * max(leaf_area_index, np.float32(0.0))
+    )
+
+
+@njit(cache=NUMBA_CACHE, inline="always")
+def get_surface_crust_factor(
+    land_use_type: np.int32,
+    leaf_area_index: np.float32,
+    crust_rain_m: np.float32,
+    bare_soil_crust_factor: np.float32,
+    crust_formation_rain_m: np.float32,
+) -> np.float32:
+    """Factor on the surface saturated conductivity for crusting by raindrop impact.
+
+    Crusts form where raindrops hit exposed soil (Assouline, 2004); a litter layer
+    or a closed canopy protects the surface. A crust develops with the rain that has
+    fallen on the exposed soil since the surface was last loosened by frost or
+    tillage: the conductivity of exposed soil falls from that of loose soil to the
+    fully crusted value c as c + (1 - c) * exp(-rain / formation rain), the form used
+    for the seal development after tillage in WEPP (Risse et al., 1995). The factor
+    of the HRU weights exposed and covered soil.
+
+    Args:
+        land_use_type: Land use type of the HRU.
+        leaf_area_index: Leaf area index of the HRU (-); for sealed land the mean over
+            the paved and the unpaved part.
+        crust_rain_m: Rain on the exposed soil since the surface was last loosened (m).
+        bare_soil_crust_factor: Crust factor of bare soil with a fully developed crust (-).
+        crust_formation_rain_m: Rain on exposed soil over which the crust develops (m).
+
+    Returns:
+        Crust factor (bare-soil factor to 1).
+    """
+    cover: np.float32 = get_soil_cover_fraction(land_use_type, leaf_area_index)
+    exposed_soil_factor: np.float32 = bare_soil_crust_factor + (
+        np.float32(1.0) - bare_soil_crust_factor
+    ) * np.exp(-max(crust_rain_m, np.float32(0.0)) / crust_formation_rain_m)
+    return exposed_soil_factor + (np.float32(1.0) - exposed_soil_factor) * cover
+
+
+def get_regolith_layer_thickness_m(depth_to_bedrock_m: ArrayFloat32) -> ArrayFloat32:
+    """Thickness of the weathered-rock (regolith) layer below the SoilGrids profile.
+
+    The layer spans from the bottom of the 2 m SoilGrids profile to the depth to
+    bedrock, but is at most REGOLITH_LAYER_MAX_THICKNESS_M thick. Where bedrock is
+    shallower than 2 m, a minimal thickness is kept so all layers stay valid.
+
+    Args:
+        depth_to_bedrock_m: Depth to bedrock (m).
+
+    Returns:
+        Regolith layer thickness (m).
+    """
+    return np.clip(
+        depth_to_bedrock_m - SOILGRIDS_PROFILE_DEPTH_M,
+        REGOLITH_LAYER_MIN_THICKNESS_M,
+        REGOLITH_LAYER_MAX_THICKNESS_M,
+    ).astype(np.float32)
+
+
+def get_coarse_fragment_factors(
+    coarse_fragments_percentage: TwoDArrayFloat32,
+) -> tuple[TwoDArrayFloat32, TwoDArrayFloat32]:
+    """Fine-earth fraction and conductivity factor of stony soil layers.
+
+    Stones hold no water, so water contents per unit layer volume scale with the
+    fine-earth fraction 1 - coarse_fragment_fraction (volumetric).
+    Saturated conductivity of the bulk soil follows Peck & Watson (1979) for
+    non-porous inclusions: Ks_bulk / Ks_fine = 2 (1 - coarse_fragment_fraction) / (2 + coarse_fragment_fraction).
+
+    Args:
+        coarse_fragments_percentage: Volumetric coarse fragment content (% of layer volume).
+
+    Returns:
+        Fine-earth fraction (0.1 to 1) and the saturated conductivity factor.
+    """
+    coarse_fragment_fraction: TwoDArrayFloat32 = np.clip(
+        coarse_fragments_percentage / np.float32(100.0),
+        np.float32(0.0),
+        np.float32(0.9),
+    ).astype(np.float32)
+    fine_earth_fraction = (np.float32(1.0) - coarse_fragment_fraction).astype(
+        np.float32
+    )
+    conductivity_factor = (
+        np.float32(2.0)
+        * (np.float32(1.0) - coarse_fragment_fraction)
+        / (np.float32(2.0) + coarse_fragment_fraction)
+    ).astype(np.float32)
+    return fine_earth_fraction, conductivity_factor
+
+
+def get_slope_soil_depth_factor(
+    slope_m_per_m: npt.NDArray[np.float32], slope_factor: float
+) -> npt.NDArray[np.float32]:
+    """Thinning factor for the subsoil and weathered rock on slopes.
+
+    On steep slopes erosion keeps soil and weathered rock thin above the hard bedrock.
+    The subsoil layers (30-200 cm) and the weathered-rock layer below them are scaled by
+        f = max(0.1, 1 / (1 + c * slope)),
+    while the topsoil (0-30 cm) is kept for infiltration and saturation excess.
+
+    Args:
+        slope_m_per_m: Local terrain slope (m/m).
+        slope_factor: c in the equation above (> 0).
+
+    Returns:
+        Thinning factor (0.1 to 1.0), same shape as the slope.
+    """
+    return np.maximum(
+        np.float32(0.1),
+        np.float32(1.0)
+        / (
+            np.float32(1.0)
+            + np.float32(slope_factor) * slope_m_per_m.astype(np.float32)
+        ),
+    ).astype(np.float32)
+
+
+def get_regolith_vertical_conductivity_factor(
+    divisor: float, karst_multiplier: float, karst_fraction: ArrayFloat32
+) -> ArrayFloat32:
+    """Factor on the vertical saturated conductivity of the weathered-rock layer.
+
+    Weathered rock (schist, shale, sandstone) below the soil conducts water downward
+    much more slowly than the soil, so water perches on it and drains laterally as
+    interflow. Karst (epikarst) drains faster through fissures and shafts. The karst
+    and non-karst parts drain side by side, so the factor is their area-weighted mean
+    karst_share * karst_multiplier + (1 - karst_share) / divisor, with karst_share the
+    karst fraction of the cell.
+
+    Args:
+        divisor: How much lower the conductivity of non-karst weathered rock is (>= 1).
+        karst_multiplier: How much higher the conductivity of the epikarst is (>= 1).
+        karst_fraction: Fraction of each HRU underlain by karst (0-1).
+
+    Returns:
+        Conductivity factor per HRU.
+    """
+    assert divisor >= 1.0, "divisor must be >= 1"
+    assert karst_multiplier >= 1.0, "karst_multiplier must be >= 1"
+    karst_share = np.clip(karst_fraction, np.float32(0.0), np.float32(1.0)).astype(
+        np.float32
+    )
+    return (
+        karst_share * np.float32(karst_multiplier)
+        + (np.float32(1.0) - karst_share) / np.float32(divisor)
+    ).astype(np.float32)

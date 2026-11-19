@@ -367,7 +367,7 @@ class HillSlopeErosion(Module):
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
-        self.simulate = self.model.config["hazards"]["erosion"]["simulate"]
+        self.simulate = self.model.config["hydrology"]["erosion"]["simulate"]
 
         if self.model.in_spinup:
             self.spinup()

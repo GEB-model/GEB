@@ -165,22 +165,17 @@ class ReservoirOperators(AgentBaseClass):
         """
         super().__init__(model)
         self.agents: Agents = agents
-        self.config = (
-            self.model.config["agent_settings"]["reservoir_operators"]
-            if "reservoir_operators" in self.model.config["agent_settings"]
-            else {}
-        )
+        self.config = self.model.config["agents"]["reservoir_operators"]
         self.environmental_flow_requirement = 0.0
-        self.water_conveyance_efficiency = 1.0
-        self.hydrological_year_start_month = self.model.config["general"][
+        self.hydrological_year_start_month = self.model.config["hydrology"][
             "hydrological_year_start_month"
         ]
         if self.model.in_spinup:
             self.spinup()
 
-        self.reservoir_release_factor = self.model.config["parameters"][
-            "reservoir_release_factor"
-        ]
+        self.reservoir_release_factor = self.model.config["agents"][
+            "reservoir_operators"
+        ]["reservoir_release_factor"]
 
     @property
     def name(self) -> str:
@@ -288,15 +283,12 @@ class ReservoirOperators(AgentBaseClass):
         self.command_area_release_m3 = np.minimum(
             usable_release_m3, gross_irrigation_demand_m3
         )
-        self.usable_command_area_release_m3: ArrayFloat64 = (
-            self.command_area_release_m3 * self.water_conveyance_efficiency
-        )
         self.remaining_command_area_release = self.command_area_release_m3.copy()
         self.gross_irrigation_demand_m3: ArrayFloat64 = gross_irrigation_demand_m3
 
         self.var.multi_year_monthly_usable_command_area_release_m3[
             :, self.current_month_index, 0
-        ] += self.usable_command_area_release_m3
+        ] += self.command_area_release_m3
 
         # print(
         #     "fullfillment",
@@ -306,7 +298,30 @@ class ReservoirOperators(AgentBaseClass):
         #     ),
         # )
 
-        return self.usable_command_area_release_m3
+        return self.command_area_release_m3
+
+    def set_command_area_abstraction(
+        self, command_area_abstraction_m3: ArrayFloat32
+    ) -> None:
+        """Limit the command area release to the water that farmers actually abstracted.
+
+        Only the abstracted water leaves the reservoir towards the command area. The
+        rest of the planned release flows into the main channel instead (see
+        ``release``), so no water is lost when farmers use less than was released.
+
+        Args:
+            command_area_abstraction_m3: Water abstracted by farmers per reservoir (m3).
+        """
+        assert command_area_abstraction_m3.shape == self.command_area_release_m3.shape
+        assert (
+            command_area_abstraction_m3
+            <= self.command_area_release_m3 * (1 + 1e-9) + 1e-6
+        ).all(), "Farmers abstracted more than the command area release"
+        self.command_area_release_m3 = np.minimum(
+            command_area_abstraction_m3.astype(np.float64),
+            self.command_area_release_m3,
+        )
+        self.remaining_command_area_release = self.command_area_release_m3.copy()
 
     def get_maximum_abstraction_m3_by_farmer(
         self,

@@ -116,24 +116,37 @@ class Fluxnet(Adapter):
         return self
 
     def read(self, geom: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
-        """Read the processed station metadata and the latent heat time series.
+        """Read the station metadata and daily latent heat flux of the towers in a region.
+
+        Uses the daily FLUXMET files. LE_F_MDS is the gap-filled latent heat flux,
+        LE_CORR the same flux corrected for the energy balance closure gap. Their
+        quality flag (LE_F_MDS_QC) is the fraction of measured and good-quality
+        gap-filled half hours in the day.
 
         Args:
             geom: A GeoDataFrame representing the geometry of interest.
 
         Returns:
             A tuple of:
-            - A GeoDataFrame of station metadata for stations within the input geometry.
-            - A DataFrame of latent heat flux time series for those stations.
+            - A GeoDataFrame of station metadata (site name, IGBP land cover class)
+              indexed by station_id, for stations within the input geometry.
+            - A long DataFrame with columns station_id, date,
+              latent_heat_flux_W_per_m2, latent_heat_flux_corrected_W_per_m2 and
+              latent_heat_flux_quality_fraction.
         """
         stations: gpd.GeoDataFrame = read_geom(
             self.path, bbox=geom.total_bounds
         ).set_index("station_id")  # ty:ignore[invalid-assignment]
-        stations: gpd.GeoDataFrame = stations[
-            stations.geometry.within(geom.union_all())
-        ]
+        stations = stations[stations.geometry.within(geom.union_all())]
 
         stations_timeseries: list[pd.DataFrame] = []
+        site_names: dict[str, str] = {}
+        igbp_classes: dict[str, str] = {}
+        columns: dict[str, str] = {
+            "LE_F_MDS": "latent_heat_flux_W_per_m2",
+            "LE_CORR": "latent_heat_flux_corrected_W_per_m2",
+            "LE_F_MDS_QC": "latent_heat_flux_quality_fraction",
+        }
 
         for station_id, tower in tqdm(
             stations.iterrows(),
@@ -141,65 +154,60 @@ class Fluxnet(Adapter):
             leave=False,
             total=len(stations),
         ):
-            zip_path: str = tower["zip_path"]
+            with zipfile.ZipFile(self.root / tower["zip_path"], "r") as z:
+                names: list[str] = [info.filename for info in z.infolist()]
+                bif: list[str] = [
+                    n for n in names if "_BIF_" in n and n.endswith(".csv")
+                ]
+                if bif:
+                    with z.open(bif[0]) as f:
+                        df_bif: pd.DataFrame = pd.read_csv(f)
+                    for variable, target in (
+                        ("SITE_NAME", site_names),
+                        ("IGBP", igbp_classes),
+                    ):
+                        values = df_bif.loc[
+                            df_bif["VARIABLE"] == variable, "DATAVALUE"
+                        ].values
+                        if values.size > 0:
+                            target[str(station_id)] = str(values[0])
 
-            with zipfile.ZipFile(self.root / zip_path, "r") as z:
-                for file_info in z.infolist():
-                    name = file_info.filename
-                    if name.endswith(".csv") and "FLUXNET_FLUXMET_HH" in name:
-                        with z.open(name) as f:
-                            df: pd.DataFrame = pd.read_csv(f, engine="pyarrow")[
-                                [
-                                    "TIMESTAMP_START",
-                                    "TIMESTAMP_END",
-                                    "LE_F_MDS",
-                                    "LE_F_MDS_QC",
-                                ]
-                            ]
-                            df["station_id"] = station_id
-                            start: pd.Series = pd.to_datetime(
-                                df["TIMESTAMP_START"], format="%Y%m%d%H%M"
-                            )
-                            end: pd.Series = pd.to_datetime(
-                                df["TIMESTAMP_END"], format="%Y%m%d%H%M"
-                            )
-                            df["date"] = start + (end - start) / 2
-                            df["latent_heat_flux_W_per_m2"] = df["LE_F_MDS"]
-
-                            # set any non measurement points to NA
-                            df.loc[
-                                df["LE_F_MDS_QC"] != 0, "latent_heat_flux_W_per_m2"
-                            ] = pd.NA
-
-                            # drop original columns
-                            df: pd.DataFrame = df.drop(
-                                columns=[
-                                    "TIMESTAMP_START",
-                                    "TIMESTAMP_END",
-                                    "LE_F_MDS",
-                                    "LE_F_MDS_QC",
-                                ]
-                            )
-
-                            stations_timeseries.append(df)
-
-                        break
-
-                else:
+                daily: list[str] = [
+                    n for n in names if "FLUXNET_FLUXMET_DD" in n and n.endswith(".csv")
+                ]
+                if not daily:
                     self.logger.warning(
-                        f"No FLUXMET CSV found in zip for station {station_id}"
+                        f"No daily FLUXMET CSV found in zip for station {station_id}"
                     )
+                    continue
+                with z.open(daily[0]) as f:
+                    header: list[str] = pd.read_csv(f, nrows=0).columns.tolist()
+                with z.open(daily[0]) as f:
+                    df: pd.DataFrame = pd.read_csv(
+                        f,
+                        usecols=["TIMESTAMP"] + [c for c in columns if c in header],
+                        na_values=[-9999],
+                    )
+            df = df.rename(columns=columns)
+            for column in columns.values():
+                if column not in df:
+                    df[column] = np.nan
+            df["date"] = pd.to_datetime(df["TIMESTAMP"].astype(str), format="%Y%m%d")
+            df["station_id"] = str(station_id)
+            stations_timeseries.append(
+                df[["station_id", "date", *columns.values()]].dropna(
+                    subset=["latent_heat_flux_W_per_m2"]
+                )
+            )
 
         if stations_timeseries:
-            stations_timeseries: pd.DataFrame = pd.concat(
-                stations_timeseries, axis=1, ignore_index=True
-            )
+            timeseries: pd.DataFrame = pd.concat(stations_timeseries, ignore_index=True)
         else:
-            stations_timeseries: pd.DataFrame = pd.DataFrame(
-                [],
-                columns=np.array(["date", "station_id", "latent_heat_flux_W_per_m2"]),
+            timeseries = pd.DataFrame(
+                columns=np.array(["station_id", "date", *columns.values()])
             )
 
-        stations: gpd.GeoDataFrame = stations.drop("zip_path", axis=1)  # ty:ignore[invalid-assignment]
-
-        return stations, stations_timeseries
+        stations = stations.drop("zip_path", axis=1)
+        stations["site_name"] = [site_names[str(s)] for s in stations.index]
+        stations["igbp"] = [igbp_classes[str(s)] for s in stations.index]
+        return stations, timeseries

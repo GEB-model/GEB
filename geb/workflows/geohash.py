@@ -6,11 +6,13 @@ import numba as nb
 import numpy as np
 from numba import njit, prange
 
+from geb.numba_config import NUMBA_CACHE
+
 RADIUS_EARTH_EQUATOR = 40075017  # m
 DISTANCE_1_DEGREE_LATITUDE = RADIUS_EARTH_EQUATOR / 360  # m
 
 
-@njit(parallel=True, cache=True)
+@njit(parallel=True, cache=NUMBA_CACHE)
 def encode_locations(
     locations: np.ndarray, minx: float, maxx: float, miny: float, maxy: float
 ) -> np.ndarray:
@@ -32,7 +34,7 @@ def encode_locations(
     return hashcodes
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def reduce_precision(
     geohashes: np.ndarray, bits: int, inplace: bool = False
 ) -> np.ndarray:
@@ -56,7 +58,7 @@ def reduce_precision(
     return geohashes_reduced_precision
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def get_precision_tag(bits: int) -> np.int64:
     """Get a 64-bit integer that can be ORed with a geohash. This is done by setting the most-significant bit to 1.
 
@@ -69,7 +71,7 @@ def get_precision_tag(bits: int) -> np.int64:
     return np.int64(0x4000000000000000) | np.int64(0x1) << bits
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def widen(bitstring: np.int64) -> np.int64:
     """To interleave the x and y pair of the geohash we `widen` the bit-values by inserting a 0 value to the left of each of the bits.
 
@@ -92,7 +94,7 @@ def widen(bitstring: np.int64) -> np.int64:
     return bitstring
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def unwiden(bitstring: np.int64) -> np.int64:
     """To unpack a geohash in its x and y pair, the inverse of widen needs to happen. This function removes a bit from the left of each other bit.
 
@@ -116,7 +118,7 @@ def unwiden(bitstring: np.int64) -> np.int64:
     return bitstring
 
 
-@njit(cache=True, locals={"y": nb.float64, "x": nb.float64, "bits": nb.int16})
+@njit(cache=NUMBA_CACHE, locals={"y": nb.float64, "x": nb.float64, "bits": nb.int16})
 def encode_precision(
     x: float,
     y: float,
@@ -143,7 +145,7 @@ def encode_precision(
     return encode(x, y, minx, maxx, miny, maxy) >> (61 - bits) | get_precision_tag(bits)
 
 
-@njit(cache=True, locals={"y": nb.float64, "x": nb.float64})
+@njit(cache=NUMBA_CACHE, locals={"y": nb.float64, "x": nb.float64})
 def encode(
     x: float,
     y: float,
@@ -184,7 +186,7 @@ def encode(
     return ys >> 1 | xs
 
 
-@njit(cache=True, locals={"shifted": nb.int64})
+@njit(cache=NUMBA_CACHE, locals={"shifted": nb.int64})
 def decode(
     gh: np.int64,
     bits: int,
@@ -223,7 +225,7 @@ def decode(
     return x, y
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def shift(gh: np.int64, bits: int, dx: int, dy: int) -> np.int64:
     """Shifts a geohash by number of windows in given x and y-direction.
 
@@ -247,7 +249,7 @@ def shift(gh: np.int64, bits: int, dx: int, dy: int) -> np.int64:
     ) | get_precision_tag(bits)
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def shift_multiple(gh: np.int64, bits: int, shifts: np.ndarray) -> np.ndarray:
     """Shifts a geohash by number of windows in given x and y-directions.
 
@@ -276,7 +278,7 @@ def shift_multiple(gh: np.int64, bits: int, shifts: np.ndarray) -> np.ndarray:
     return ghs
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def window(
     bits: int,
     minx: int | float = -180,
