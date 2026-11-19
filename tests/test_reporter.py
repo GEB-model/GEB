@@ -412,6 +412,9 @@ class TestSpecialExportersSingleFile:
             [20.5, 21.0], dtype=np.float32
         )
 
+        for config in routing_reporters.values():
+            config["_var_index"] = len(config["_data_array"])
+
         reporter.finalize()
 
         file_101: Path = (
@@ -479,6 +482,9 @@ class TestSpecialExportersSingleFile:
             np.array([3.0, 4.0], dtype=np.float32)
         )
 
+        for config in routing_reporters.values():
+            config["_var_index"] = len(config["_data_array"])
+
         reporter.finalize()
 
         output_file: Path = (
@@ -529,6 +535,7 @@ class TestSpecialExportersSingleFile:
         rep = reporter.variables_to_report["hydrology.routing"]["test_var"]
         rep["_time_array"] = np.array([1609459200], dtype=np.int64)
         rep["_data_array"] = np.array([1.0], dtype=np.float32)
+        rep["_var_index"] = len(rep["_data_array"])
 
         with pytest.raises(
             ValueError,
@@ -564,6 +571,7 @@ class TestSpecialExportersSingleFile:
         rep = reporter.variables_to_report["hydrology.routing"]["test_var"]
         rep["_time_array"] = np.array([1609459200], dtype=np.int64)
         rep["_data_array"] = np.array([1.0], dtype=np.float32)
+        rep["_var_index"] = len(rep["_data_array"])
 
         with pytest.raises(
             KeyError,
