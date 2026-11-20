@@ -131,6 +131,10 @@ class FloodsConfig(BaseModel):
         None,
         description="Optional path to a folder with existing SFINCS root models. If set, root models are only read from this folder (never built or overwritten), while simulations are stored in the simulation root of the current model.",
     )
+    reuse_finished_simulations: bool = Field(
+        False,
+        description="Whether to re-use SFINCS return-period simulations that finished in a previous (e.g., interrupted) run instead of running them again. The flood depth is then read from the existing sfincs_map.nc. Only enable this when the forcing settings have not changed since that run.",
+    )
     representative_year: int | None = Field(
         None,
         ge=1,

@@ -27,7 +27,9 @@ from geb.hazards.floods.workflows.initial_water_level import (
 from geb.hazards.floods.workflows.utils import (
     SpilledRaster,
     get_start_point,
+    is_sfincs_simulation_finished,
     merge_spilled_rasters_max,
+    read_flood_depth,
 )
 from geb.hydrology.routing import (
     get_discharge_per_river,
@@ -846,6 +848,24 @@ class Floods(Module):
 
             if coastal:
                 for return_period in return_periods_to_simulate:
+                    coastal_tile_path: Path = (
+                        tile_dir
+                        / f"{sfincs_coastal_root_model.name}_rp{return_period}.npy"
+                    )
+                    finished_coastal_simulation_path: Path | None = (
+                        self._get_finished_simulation_path(
+                            sfincs_coastal_root_model, f"rp_{return_period}_coastal"
+                        )
+                    )
+                    if finished_coastal_simulation_path is not None:
+                        self._spill_finished_max_flood_depth(
+                            sfincs_coastal_root_model,
+                            finished_coastal_simulation_path,
+                            coastal_tile_path,
+                            tiles_by_return_period[return_period],
+                        )
+                        continue
+
                     sfincs_coastal_simulation: SFINCSSimulation = sfincs_coastal_root_model.create_coastal_return_period_simulation(
                         self.model.output_folder,
                         return_period,
@@ -859,8 +879,7 @@ class Floods(Module):
                     )
                     self._run_and_spill_max_flood_depth(
                         sfincs_coastal_simulation,
-                        tile_dir
-                        / f"{sfincs_coastal_root_model.name}_rp{return_period}.npy",
+                        coastal_tile_path,
                         tiles_by_return_period[return_period],
                     )
                     del sfincs_coastal_simulation
@@ -926,24 +945,45 @@ class Floods(Module):
                 )
                 del region_rivers, region_subbasins
 
-                if discharge_for_return_periods is None:
-                    discharge_for_return_periods = (
-                        self._load_discharge_for_return_periods(run_name)
+                # simulations of a previous (interrupted) run that finished can be
+                # re-used instead of being run again
+                finished_simulation_paths: dict[int, Path] = {}
+                for return_period in return_periods_to_simulate:
+                    finished_simulation_path: Path | None = (
+                        self._get_finished_simulation_path(
+                            sfincs_inland_root_model, f"rp_{return_period}"
+                        )
                     )
-
-                _shape_config = self.config.get("hydrograph_shape", {})
-                sfincs_inland_root_model.estimate_discharge_for_return_periods(
-                    discharge_by_river=discharge_for_return_periods,
-                    return_periods=self.config["return_periods"],
-                    p_value_threshold=self.config["p_value_threshold"],
-                    selection_strategy=self.config["selection_strategy"],
-                    fixed_shape=self.config["fixed_shape"],
-                    write_figures=self.config["write_figures"],
-                    hydrograph_shape=_shape_config.get("method", "triangular"),
-                    shape_window_days=_shape_config.get("window_days", 3.5),
-                    shape_tolerance=_shape_config.get("tolerance", 0.1),
-                    output_root=self.simulation_root / sfincs_inland_root_model.name,
+                    if finished_simulation_path is not None:
+                        finished_simulation_paths[return_period] = (
+                            finished_simulation_path
+                        )
+                all_simulations_finished: bool = bool(return_periods_to_simulate) and (
+                    len(finished_simulation_paths) == len(return_periods_to_simulate)
                 )
+
+                # the discharge for the return periods is only needed to force new
+                # simulations
+                if not all_simulations_finished:
+                    if discharge_for_return_periods is None:
+                        discharge_for_return_periods = (
+                            self._load_discharge_for_return_periods(run_name)
+                        )
+
+                    _shape_config = self.config.get("hydrograph_shape", {})
+                    sfincs_inland_root_model.estimate_discharge_for_return_periods(
+                        discharge_by_river=discharge_for_return_periods,
+                        return_periods=self.config["return_periods"],
+                        p_value_threshold=self.config["p_value_threshold"],
+                        selection_strategy=self.config["selection_strategy"],
+                        fixed_shape=self.config["fixed_shape"],
+                        write_figures=self.config["write_figures"],
+                        hydrograph_shape=_shape_config.get("method", "triangular"),
+                        shape_window_days=_shape_config.get("window_days", 3.5),
+                        shape_tolerance=_shape_config.get("tolerance", 0.1),
+                        output_root=self.simulation_root
+                        / sfincs_inland_root_model.name,
+                    )
 
                 if figure_root_model_location is None:
                     figure_root_model_location = (
@@ -951,7 +991,17 @@ class Floods(Module):
                         sfincs_inland_root_model.name,
                     )
 
-                if return_periods_to_simulate:
+                if all_simulations_finished:
+                    for return_period in return_periods_to_simulate:
+                        self._spill_finished_max_flood_depth(
+                            sfincs_inland_root_model,
+                            finished_simulation_paths[return_period],
+                            tile_dir
+                            / f"{sfincs_inland_root_model.name}_rp{return_period}.npy",
+                            tiles_by_return_period[return_period],
+                        )
+                elif return_periods_to_simulate:
+                    assert discharge_for_return_periods is not None
                     inflow_nodes: gpd.GeoDataFrame = (
                         sfincs_inland_root_model.active_rivers.copy()
                     )
@@ -960,6 +1010,19 @@ class Floods(Module):
                     )
 
                     for return_period in return_periods_to_simulate:
+                        inland_tile_path: Path = (
+                            tile_dir
+                            / f"{sfincs_inland_root_model.name}_rp{return_period}.npy"
+                        )
+                        if return_period in finished_simulation_paths:
+                            self._spill_finished_max_flood_depth(
+                                sfincs_inland_root_model,
+                                finished_simulation_paths[return_period],
+                                inland_tile_path,
+                                tiles_by_return_period[return_period],
+                            )
+                            continue
+
                         sfincs_inland_simulation: SFINCSSimulation = self._create_inland_return_period_simulation(
                             sfincs_inland_root_model=sfincs_inland_root_model,
                             return_period=return_period,
@@ -969,8 +1032,7 @@ class Floods(Module):
                         )
                         self._run_and_spill_max_flood_depth(
                             sfincs_inland_simulation,
-                            tile_dir
-                            / f"{sfincs_inland_root_model.name}_rp{return_period}.npy",
+                            inland_tile_path,
                             tiles_by_return_period[return_period],
                         )
                         del sfincs_inland_simulation
@@ -1141,6 +1203,63 @@ class Floods(Module):
         # they are only freed by the cyclic garbage collector.
         del max_flood_depth
         simulation.sfincs_root_model.close()
+        gc.collect()
+
+    def _get_finished_simulation_path(
+        self, sfincs_root_model: SFINCSRootModel, simulation_name: str
+    ) -> Path | None:
+        """Gets the folder of a finished simulation that can be re-used.
+
+        Simulations are only re-used when `reuse_finished_simulations` is enabled in
+        the flood configuration. This allows continuing an interrupted run (e.g., a job
+        that hit its time limit) without running the finished simulations again.
+
+        Args:
+            sfincs_root_model: The root model of the simulation.
+            simulation_name: The name of the simulation (i.e., the name of its folder).
+
+        Returns:
+            The path of the simulation folder if the simulation finished and may be
+            re-used, None otherwise.
+        """
+        if not self.config.get("reuse_finished_simulations", False):
+            return None
+        simulation_path: Path = (
+            self.get_simulations_root(sfincs_root_model) / simulation_name
+        )
+        if is_sfincs_simulation_finished(simulation_path):
+            return simulation_path
+        return None
+
+    def _spill_finished_max_flood_depth(
+        self,
+        sfincs_root_model: SFINCSRootModel,
+        simulation_path: Path,
+        tile_path: Path,
+        tiles: list[SpilledRaster],
+    ) -> None:
+        """Reads the maximum flood depth of a finished simulation and spills it to disk.
+
+        Args:
+            sfincs_root_model: The root model of the simulation.
+            simulation_path: Path of the folder of the finished simulation.
+            tile_path: Path of the .npy file to spill the maximum flood depth to.
+            tiles: List to which the spilled maximum flood depth is appended.
+        """
+        self.model.logger.info(
+            f"Re-using finished SFINCS simulation at {simulation_path}"
+        )
+        max_flood_depth: xr.DataArray = read_flood_depth(
+            model_root=sfincs_root_model.path,
+            simulation_root=simulation_path,
+            method="max",
+            minimum_flood_depth=self.config["minimum_flood_depth"],
+            mask=sfincs_root_model.area_of_interest,
+        )
+        tiles.append(SpilledRaster.spill(max_flood_depth, tile_path))
+        # DataArrays with a cached .rio accessor form a reference cycle, so
+        # they are only freed by the cyclic garbage collector.
+        del max_flood_depth
         gc.collect()
 
     def _write_return_period_map(

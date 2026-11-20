@@ -73,7 +73,7 @@ def read_flood_depth(
     simulation_root: Path,
     method: str,
     minimum_flood_depth: float,
-    end_time: datetime,
+    end_time: datetime | None = None,
     mask: xr.DataArray | None = None,
 ) -> xr.DataArray:
     """Read the maximum flood depth from the SFINCS model results.
@@ -94,16 +94,19 @@ def read_flood_depth(
         minimum_flood_depth: The minimum flood depth to apply during downscaling (in meters).
         method: The method to use for calculating flood depth. Options are 'max' for maximum flood depth
             and 'final' for flood depth at the final time step.
-        end_time: The end time of the simulation.
+        end_time: The end time of the simulation. Required when method is 'final'.
         mask: Optional xarray DataArray mask to apply to the flood depth. Defaults to None.
 
     Returns:
         The maximum flood depth downscaled to subgrid resolution.
 
     Raises:
-        ValueError: If an unknown method is provided.
+        ValueError: If an unknown method is provided, or if method is 'final' and no end_time is given.
         KeyError: If the specified end_time is not in the results time dimension.
     """
+    if method == "final" and end_time is None:
+        raise ValueError("end_time is required when method is 'final'.")
+
     # Read SFINCS model, config and results
     model: SfincsModel = SfincsModel(
         str(simulation_root),
@@ -595,6 +598,35 @@ def detect_gpu() -> bool:
         gpu_ids: str | None = os.getenv(key="CUDA_VISIBLE_DEVICES")
         return gpu_ids is not None and len(gpu_ids) > 0
     return True
+
+
+# Lines that SFINCS writes to stdout (and thus to sfincs.log) at the very end of a run.
+SFINCS_FINISHED_LOG_LINES: tuple[str, ...] = (
+    "Simulation finished",
+    "Closing off SFINCS",
+)
+
+
+def is_sfincs_simulation_finished(simulation_root: Path) -> bool:
+    """Check whether a SFINCS simulation in a folder ran until the end.
+
+    A simulation is considered finished when its map output file exists and its
+    log file contains the lines that SFINCS writes at the end of a run. A simulation
+    that was interrupted (e.g., because a job hit its time limit) does not have
+    these lines in its log.
+
+    Args:
+        simulation_root: Path to the simulation folder.
+
+    Returns:
+        True if the simulation finished, False otherwise.
+    """
+    map_file: Path = simulation_root / "sfincs_map.nc"
+    log_file: Path = simulation_root / "sfincs.log"
+    if not map_file.is_file() or not log_file.is_file():
+        return False
+    log: str = log_file.read_text(errors="replace")
+    return all(line in log for line in SFINCS_FINISHED_LOG_LINES)
 
 
 def run_sfincs_simulation(

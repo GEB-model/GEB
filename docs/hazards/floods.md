@@ -80,7 +80,9 @@ We distinguish two parts of a SFINCS model: the static data and dynamic data:
 
 - To re-use a root model that was built in another model run, set `hazards.floods.base_model_path` to the folder that contains the SFINCS root models (e.g., `/path/to/other_run/simulation_root/SFINCS`). The root models are then only read from this folder (they are never built or overwritten, regardless of `overwrite`, and an error is raised if they do not exist), while the SFINCS simulations are stored in the simulation root of the current run. By default (`null`), root models are built in and read from the simulation root of the current run.
 
-- The dynamic data (e.g., forcing data) created in the [`SFINCS simulation`][geb.hazards.floods.sfincs.SFINCSSimulation] is different for each SFINCS simulation (and usually much smaller) and never saved between SFINCS runs.
+- The dynamic data (e.g., forcing data) created in the [`SFINCS simulation`][geb.hazards.floods.sfincs.SFINCSSimulation] is different for each SFINCS simulation (and usually much smaller) and by default never re-used between SFINCS runs.
+
+- To continue return-period flood map generation that was interrupted (e.g., a job that hit its time limit), set `hazards.floods.reuse_finished_simulations` to `true`. Simulations whose folder contains a `sfincs_map.nc` and whose `sfincs.log` shows that SFINCS ran until the end are then not run again; their maximum flood depth is read from the existing output. Unfinished simulations are run as usual. Note that the simulations are stored inside the root model folder, so they are deleted when the root model is rebuilt. With `overwrite: auto`, this also happens after any code change in `geb.hazards.floods` (e.g., after updating GEB), so set `overwrite: false` when continuing a run with a different GEB version. Only enable this option when the forcing settings (e.g., `return_periods`, `p_value_threshold`, `hydrograph_shape`) did not change since the interrupted run, because finished simulations are re-used without checking their forcing.
 
 ## Model runs
 
