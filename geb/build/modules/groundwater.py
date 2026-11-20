@@ -100,7 +100,7 @@ class GroundWater(BuildModelBase):
         coverage.data = coverage_values
         self.set_grid(coverage, name="groundwater/karst_fraction")
 
-    @build_method(depends_on=["setup_elevation"], required=True)
+    @build_method(depends_on=["setup_elevation", "setup_grid_elevation"], required=True)
     def setup_groundwater(
         self,
         minimum_thickness_confined_layer: int | float = 50,

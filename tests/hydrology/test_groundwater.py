@@ -238,7 +238,7 @@ def test_step() -> None:
     """Test single time step execution of MODFLOW simulation.
 
     Verifies that the simulation step maintains water balance
-    between groundwater content, recharge, and drainage.
+    between groundwater content, recharge and boundary flow.
     """
     parameters = deepcopy(default_params)
 
@@ -247,16 +247,10 @@ def test_step() -> None:
     groundwater_content_prev = sim.groundwater_content_m3.sum()
     sim.step()
 
-    drainage_m3 = sim.drainage_m3.sum()
     groundwater_content = sim.groundwater_content_m3.sum()
     recharge_m3 = sim.recharge_m3.sum()
 
-    balance_pre = (
-        groundwater_content_prev
-        + recharge_m3
-        - drainage_m3
-        + sim.boundary_flow_m3.sum()
-    )
+    balance_pre = groundwater_content_prev + recharge_m3 + sim.boundary_flow_m3.sum()
     balance_post = groundwater_content
 
     assert math.isclose(balance_pre, balance_post, rel_tol=1e-5)
@@ -283,86 +277,15 @@ def test_recharge() -> None:
     sim.set_recharge_m3(compress(recharge_m3, sim.basin_mask))
     sim.step()
 
-    drainage_m3 = np.nansum(sim.drainage_m3)
-    assert np.nansum(drainage_m3) == 0
     groundwater_content = np.nansum(sim.groundwater_content_m3)
 
     assert np.nansum(sim.recharge_m) == np.nansum(sim.recharge_m3 / sim.area)
 
     recharge_m3 = np.nansum(sim.recharge_m3)
-    balance_pre = (
-        groundwater_content_prev
-        + recharge_m3
-        - drainage_m3
-        + sim.boundary_flow_m3.sum()
-    )
+    balance_pre = groundwater_content_prev + recharge_m3 + sim.boundary_flow_m3.sum()
     balance_post = groundwater_content
 
     assert math.isclose(balance_pre, balance_post, abs_tol=1, rel_tol=1e-5)
-
-    sim.finalize()
-
-
-def test_drainage() -> None:
-    """Test groundwater drainage functionality.
-
-    Verifies that drainage occurs when water table is at surface
-    and that drainage is zero when heads are below drainage level.
-    """
-    parameters = deepcopy(default_params)
-    layer_boundary_elevation = parameters["layer_boundary_elevation"]
-    topography = np.full((YSIZE, XSIZE), 0)
-
-    parameters["topography"] = np.zeros_like(parameters["topography"])
-
-    layer_boundary_elevation[0] = compress(topography - 2, basin_mask)
-    layer_boundary_elevation[1] = compress(topography - 10, basin_mask)
-    layer_boundary_elevation[2] = compress(topography - 20, basin_mask)
-
-    parameters["heads"][0] = layer_boundary_elevation[0]
-    parameters["heads"][1] = layer_boundary_elevation[0]
-    parameters["boundary_heads"] = parameters["boundary_heads"] - 2
-
-    sim = ModFlowSimulation(**parameters)
-
-    groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
-
-    recharge_m = np.full((YSIZE, XSIZE), 0.1)
-    recharge_m[9, 11] = 0.0  # Do not recharge constant-head boundary cell
-    recharge_m3 = recharge_m * cell_area
-
-    sim.set_recharge_m3(compress(recharge_m3, sim.basin_mask))
-    sim.step()
-
-    drainage = np.nansum(sim.drainage_m3)
-    assert drainage.sum() > 0
-
-    assert math.isclose(np.nansum(sim._drainage_m * sim.area), np.nansum(drainage))
-
-    groundwater_content = np.nansum(sim.groundwater_content_m3)
-
-    balance_pre = (
-        groundwater_content_prev
-        - drainage
-        + sim.recharge_m3.sum()
-        + sim.boundary_flow_m3.sum()
-    )
-    balance_post = groundwater_content
-
-    assert math.isclose(balance_pre, balance_post, rel_tol=1e-5)
-
-    sim.finalize()
-
-    parameters["heads"][0] = layer_boundary_elevation[0] - 1
-    parameters["heads"][1] = layer_boundary_elevation[0] - 1
-    parameters["boundary_heads"] = np.full_like(parameters["boundary_heads"], -3.0)
-
-    sim = ModFlowSimulation(**parameters)
-
-    sim.step()
-
-    drainage = np.nansum(sim.drainage_m3)
-    assert drainage == 0
 
     sim.finalize()
 
@@ -376,7 +299,7 @@ def test_wells() -> None:
     parameters = deepcopy(default_params)
     parameters["heads"][:,] = compress(
         topography - 2, basin_mask
-    )  # set head lower than drainage
+    )  # set head below the land surface
 
     sim = ModFlowSimulation(**parameters)
 
@@ -399,9 +322,6 @@ def test_wells() -> None:
 
     sim.set_groundwater_abstraction_m3(groundwater_abstracton)
     sim.step()
-
-    drainage = np.nansum(sim.drainage_m3)
-    assert drainage.sum() == 0
 
     groundwater_content = sim.groundwater_content_m3.sum()
 
@@ -428,8 +348,8 @@ def visualize_modflow_results(
 ) -> None:
     """This function is used to visualize the current state of a ModFlowSimulation.
 
-    Plots the topography, groundwater head, groundwater depth, and drainage, on
-    axes 1 to 5 respectively.
+    Plots the topography, groundwater head of both layers, groundwater depth and
+    recharge, on axes 1 to 5 respectively.
 
     Args:
         sim: The ModFlowSimulation object. This contains the current state of the simulation.
@@ -462,12 +382,10 @@ def visualize_modflow_results(
     ax4.set_title("Groundwater Depth")
     plt.colorbar(im4, ax=ax4, label="Depth (m)")
 
-    # Plot drainage
-    drainage_m3 = decompress(sim.drainage_m3, sim.basin_mask)
-    drainage = drainage_m3 / cell_area
-    im5 = ax5.imshow(drainage, cmap="Blues")
-    ax5.set_title("Drainage")
-    plt.colorbar(im5, ax=ax5, label="Drainage (m/day)")
+    # Plot recharge
+    im5 = ax5.imshow(decompress(sim.recharge_m, sim.basin_mask), cmap="Blues")
+    ax5.set_title("Recharge")
+    plt.colorbar(im5, ax=ax5, label="Recharge (m/day)")
 
 
 def test_modflow_simulation_with_visualization() -> None:
@@ -477,7 +395,8 @@ def test_modflow_simulation_with_visualization() -> None:
     generating visualization plots of the results.
     """
     parameters = deepcopy(default_params)
-    parameters["heads"][:,] = compress(topography, basin_mask)
+    # below the land surface: there is no drain in MODFLOW to remove water above it
+    parameters["heads"][:,] = compress(topography - 2, basin_mask)
     sim = ModFlowSimulation(**parameters)
 
     fig, axes = plt.subplots(5, 5, figsize=(15, 10))
@@ -512,7 +431,8 @@ def test_modflow_simulation_with_restore() -> None:
     state and continue simulation correctly.
     """
     parameters = deepcopy(default_params)
-    parameters["heads"][:,] = compress(topography, basin_mask)
+    # below the land surface: there is no drain in MODFLOW to remove water above it
+    parameters["heads"][:,] = compress(topography - 2, basin_mask)
     sim = ModFlowSimulation(**parameters)
 
     recharge_m = np.random.uniform(0, 0.001, size=(YSIZE, XSIZE))
@@ -857,11 +777,8 @@ def test_modflow_boundary_flows_inflow_and_water_balance() -> None:
     # Water balance closure in absolute volumetric terms (m3)
     storage_change_m3: float = final_storage_m3 - initial_storage_m3
     recharge_volume_m3: float = float(sim.recharge_m3.sum())
-    drainage_volume_m3: float = float(sim.drainage_m3.sum())
     total_boundary_flux_m3: float = float(boundary_flows_m3.sum())
-    net_flux_m3: float = (
-        recharge_volume_m3 - drainage_volume_m3 + total_boundary_flux_m3
-    )
+    net_flux_m3: float = recharge_volume_m3 + total_boundary_flux_m3
     water_balance_discrepancy_m3: float = abs(storage_change_m3 - net_flux_m3)
 
     assert storage_change_m3 > 0.0
@@ -912,11 +829,8 @@ def test_modflow_boundary_flows_outflow_and_water_balance() -> None:
     # Water balance closure in absolute volumetric terms (m3)
     storage_change_m3: float = final_storage_m3 - initial_storage_m3
     recharge_volume_m3: float = float(sim.recharge_m3.sum())
-    drainage_volume_m3: float = float(sim.drainage_m3.sum())
     total_boundary_flux_m3: float = float(boundary_flows_m3.sum())
-    net_flux_m3: float = (
-        recharge_volume_m3 - drainage_volume_m3 + total_boundary_flux_m3
-    )
+    net_flux_m3: float = recharge_volume_m3 + total_boundary_flux_m3
     water_balance_discrepancy_m3: float = abs(storage_change_m3 - net_flux_m3)
 
     assert storage_change_m3 < 0.0
@@ -985,11 +899,8 @@ def test_modflow_boundary_flows_simultaneous_inflow_outflow_water_balance() -> N
 
     storage_change_m3: float = final_storage_m3 - initial_storage_m3
     recharge_volume_m3: float = float(sim.recharge_m3.sum())
-    drainage_volume_m3: float = float(sim.drainage_m3.sum())
     total_boundary_flux_m3: float = float(boundary_flows_m3.sum())
-    net_flux_m3: float = (
-        recharge_volume_m3 - drainage_volume_m3 + total_boundary_flux_m3
-    )
+    net_flux_m3: float = recharge_volume_m3 + total_boundary_flux_m3
     water_balance_discrepancy_m3: float = abs(storage_change_m3 - net_flux_m3)
 
     assert math.isclose(storage_change_m3, net_flux_m3, rel_tol=1e-5, abs_tol=1e-3)
@@ -1045,7 +956,6 @@ def test_modflow_boundary_flows_combined_fluxes_and_dynamic_update() -> None:
         step_balance_pre_m3: float = (
             step_storage_pre_m3
             + float(sim.recharge_m3.sum())
-            - float(sim.drainage_m3.sum())
             + float(boundary_flows_m3.sum())
         )
         discrepancy_m3: float = abs(step_balance_pre_m3 - step_storage_post_m3)
@@ -1069,10 +979,10 @@ def test_groundwater_step_epsilon_safeguard() -> None:
     gw.modflow = MagicMock()
     gw.modflow.available_groundwater_m3 = np.array([100.0, 200.0], dtype=np.float64)
     gw.modflow.groundwater_content_m3 = np.array([500.0, 500.0], dtype=np.float64)
-    gw.modflow.drainage_m3 = np.array([0.0, 0.0], dtype=np.float64)
     gw.modflow.boundary_inflow_m3 = np.array([0.0, 0.0], dtype=np.float64)
     gw.modflow.boundary_outflow_m3 = np.array([0.0, 0.0], dtype=np.float64)
     gw.report = MagicMock()
+    gw.model = MagicMock(timing=False)
 
     # 1. Minor excess within epsilon (e.g. 1e-6 m3 over available_groundwater_m3)
     recharge: ArrayFloat32 = np.array([0.0, 0.0], dtype=np.float32)
@@ -1083,6 +993,8 @@ def test_groundwater_step_epsilon_safeguard() -> None:
         groundwater_recharge_m=recharge,
         groundwater_abstraction_m3=abstraction,
         capillary_rise_m=capillary,
+        river_seepage_m3=np.zeros(2, dtype=np.float64),
+        river_drainage_m3=np.zeros(2, dtype=np.float64),
     )
     # The set_groundwater_abstraction_m3 should have received clamped value 100.0
     passed_abstraction: ArrayFloat64 = (
@@ -1098,4 +1010,177 @@ def test_groundwater_step_epsilon_safeguard() -> None:
             groundwater_recharge_m=recharge,
             groundwater_abstraction_m3=large_abstraction,
             capillary_rise_m=capillary,
+            river_seepage_m3=np.zeros(2, dtype=np.float64),
+            river_drainage_m3=np.zeros(2, dtype=np.float64),
         )
+
+
+def test_get_groundwater_storage_m_thin_full_layer() -> None:
+    """A full layer thinner than the minimum remaining storage gives no negative storage.
+
+    Two-layer models can have an upper layer of 0.1 m (in float32 just below 0.1),
+    the same as the minimum remaining storage used for available groundwater.
+    """
+    layer_boundary_elevation = np.array([[100.0], [np.float32(99.9)], [50.0]])
+    heads = np.array([[100.5], [100.5]])  # both layers full
+    specific_yield = np.array([[0.1], [0.1]])
+    specific_storage = np.zeros((2, 1))
+    available = get_groundwater_storage_m(
+        layer_boundary_elevation,
+        heads,
+        specific_yield,
+        specific_storage,
+        min_remaining_layer_storage_m=0.1,
+    )
+    lower_layer_available = (99.9 - 50.0 - 0.1) * 0.1
+    assert available[0] >= 0.0
+    assert available[0] == pytest.approx(lower_layer_available, abs=1e-6)
+
+
+def test_hydraulic_conductivity_multiplier_applied_at_run_time() -> None:
+    """The stored conductivity has no multiplier; every user gets the configured one."""
+    from types import SimpleNamespace
+
+    from geb.hydrology.groundwater import GroundWater
+
+    groundwater = GroundWater.__new__(GroundWater)
+    groundwater.model = SimpleNamespace(  # ty:ignore[invalid-assignment]
+        config={
+            "hydrology": {"groundwater": {"hydraulic_conductivity_multiplier": 3.0}}
+        }
+    )
+    groundwater.grid = SimpleNamespace(  # ty:ignore[invalid-assignment]
+        var=SimpleNamespace(
+            groundwater_hydraulic_conductivity_m_per_day=np.array(
+                [[1.0, 2.0]], dtype=np.float32
+            )
+        )
+    )
+    conductivity = groundwater.hydraulic_conductivity_m_per_day
+    assert conductivity.dtype == np.float32
+    np.testing.assert_allclose(conductivity, [[3.0, 6.0]])
+    # the stored value is unchanged
+    np.testing.assert_allclose(
+        groundwater.grid.var.groundwater_hydraulic_conductivity_m_per_day, [[1.0, 2.0]]
+    )
+
+
+def test_drain_groundwater_to_rivers_exact_exponential() -> None:
+    """The head above the drain level decays exponentially and never drops below it."""
+    from geb.hydrology.groundwater import drain_groundwater_to_rivers
+
+    head = np.array([12.0, 9.0, 15.0], dtype=np.float64)
+    drain = np.array([10.0, 10.0, 10.0], dtype=np.float64)
+    # cell 0: conductance = storage coefficient -> exp(-1); cell 2: huge conductance
+    conductance = np.array([1000.0, 1000.0, 1e9], dtype=np.float64)
+    storage = np.array([1000.0, 1000.0, 1000.0], dtype=np.float64)
+    drainage = np.zeros(3, dtype=np.float64)
+    remaining = np.full(3, 1e9, dtype=np.float64)
+    drain_groundwater_to_rivers(head, drain, conductance, storage, drainage, remaining)
+    np.testing.assert_allclose(head[0], 10.0 + 2.0 * np.exp(-1.0), rtol=1e-6)
+    np.testing.assert_allclose(
+        drainage[0], 2.0 * (1 - np.exp(-1.0)) * 1000.0, rtol=1e-5
+    )
+    # head below the drain level: no drainage (the river may seep into the aquifer)
+    assert head[1] == 9.0 and drainage[1] == 0.0
+    # stiff drain: head reaches the drain level, the drained volume is the excess storage
+    np.testing.assert_allclose(head[2], 10.0, atol=1e-5)
+    np.testing.assert_allclose(drainage[2], 5.0 * 1000.0, rtol=1e-6)
+    np.testing.assert_allclose(remaining[2], 1e9 - 5.0 * 1000.0, rtol=1e-9)
+
+
+def test_response_time_conductance_drains_in_the_response_time() -> None:
+    """With the response-time conductance the head above the drain falls to 1/e in that time."""
+    from geb.hydrology.groundwater import (
+        drain_groundwater_to_rivers,
+        get_response_time_conductance,
+    )
+
+    specific_yield = np.array([0.03, 0.075, 0.28], dtype=np.float32)
+    cell_area_m2 = np.array([2.0e5, 3.0e5, 4.0e5], dtype=np.float32)
+    response_time_days = 10.0
+    conductance_m2_per_day = get_response_time_conductance(
+        specific_yield, cell_area_m2, response_time_days
+    )
+    assert conductance_m2_per_day.dtype == np.float32
+    head = np.array([12.0, 11.0, 14.0], dtype=np.float64)
+    drain = np.full(3, 10.0, dtype=np.float64)
+    excess_start = head - drain
+    storage = (specific_yield * cell_area_m2).astype(np.float64)
+    drainage = np.zeros(3, dtype=np.float64)
+    remaining = np.full(3, 1e12, dtype=np.float64)
+    conductance_m2_per_hour = conductance_m2_per_day.astype(np.float64) / 24.0
+    for _ in range(int(response_time_days * 24)):
+        drain_groundwater_to_rivers(
+            head, drain, conductance_m2_per_hour, storage, drainage, remaining
+        )
+    # the same share is left in every cell, whatever its specific yield and area
+    np.testing.assert_allclose((head - drain) / excess_start, np.exp(-1.0), rtol=1e-5)
+
+
+def test_karst_drain_conductance_follows_the_karst_fraction() -> None:
+    """The karst part of a cell drains with the karst conductance, the rest with the matrix."""
+    from geb.hydrology.groundwater import get_karst_drain_conductance
+
+    conductance = get_karst_drain_conductance(
+        matrix_conductance_m2_per_day=np.full(4, 10.0, dtype=np.float32),
+        karst_conductance_m2_per_day=np.full(4, 100.0, dtype=np.float32),
+        karst_fraction=np.array([0.0, 0.5, 1.0, 1.2], dtype=np.float32),
+    )
+    np.testing.assert_allclose(conductance, [10.0, 55.0, 100.0, 100.0], rtol=1e-6)
+    assert conductance.dtype == np.float32
+
+
+def test_drain_groundwater_to_rivers_limited_by_storage() -> None:
+    """A cell does not drain more than the groundwater it still holds."""
+    from geb.hydrology.groundwater import drain_groundwater_to_rivers
+
+    head = np.array([15.0], dtype=np.float64)
+    drain = np.array([10.0], dtype=np.float64)
+    conductance = np.array([1e9], dtype=np.float64)
+    storage = np.array([1000.0], dtype=np.float64)
+    drainage = np.zeros(1, dtype=np.float64)
+    # 5 m above the drain level would give 5000 m3, but only 2000 m3 can be taken
+    remaining = np.array([2000.0], dtype=np.float64)
+    drain_groundwater_to_rivers(head, drain, conductance, storage, drainage, remaining)
+    np.testing.assert_allclose(drainage[0], 2000.0, rtol=1e-9)
+    np.testing.assert_allclose(head[0], 13.0, rtol=1e-9)
+    assert remaining[0] == 0.0
+    # nothing left: no drainage in the next hour
+    drain_groundwater_to_rivers(head, drain, conductance, storage, drainage, remaining)
+    assert drainage[0] == 0.0 and head[0] == 13.0
+
+
+def test_get_conductivity_depth_decay_factor() -> None:
+    """The conductivity of a layer decreases with its depth and with the slope."""
+    from geb.hydrology.groundwater import get_conductivity_depth_decay_factor
+
+    slope = np.array([0.0, 0.1, 0.3])
+    # one layer of 100 m
+    boundaries = np.array([[100.0, 100.0, 100.0], [0.0, 0.0, 0.0]])
+    factor = get_conductivity_depth_decay_factor(boundaries, slope)
+    assert factor.shape == (1, 3)
+    # flat: e-folding depth 120 m; steep: 7.5 m; very steep: 5 m
+    expected = [
+        (1.5 + 120.0 * (1.0 - math.exp(-98.5 / 120.0))) / 100.0,
+        (1.5 + 7.5 * (1.0 - math.exp(-98.5 / 7.5))) / 100.0,
+        (1.5 + 5.0 * (1.0 - math.exp(-98.5 / 5.0))) / 100.0,
+    ]
+    np.testing.assert_allclose(factor[0], expected, rtol=1e-6)
+    assert (np.diff(factor[0]) < 0).all()
+
+    # a layer within the upper 1.5 m keeps its conductivity
+    shallow = get_conductivity_depth_decay_factor(
+        np.array([[10.0], [9.0]]), np.array([0.1])
+    )
+    np.testing.assert_allclose(shallow, 1.0)
+
+    # two layers have the same transmissivity as one layer over the same depth
+    two = get_conductivity_depth_decay_factor(
+        np.array([[100.0], [60.0], [0.0]]), np.array([0.1])
+    )
+    one = get_conductivity_depth_decay_factor(
+        np.array([[100.0], [0.0]]), np.array([0.1])
+    )
+    np.testing.assert_allclose(two[0] * 40.0 + two[1] * 60.0, one[0] * 100.0)
+    assert two[1, 0] < two[0, 0]

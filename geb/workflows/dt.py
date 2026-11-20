@@ -27,3 +27,29 @@ def round_up_to_start_of_next_day_unless_midnight(dt_object: datetime) -> dateti
             hour=0, minute=0, second=0, microsecond=0
         )
         return next_day_start
+
+
+def map_date_to_dekad(dt: datetime) -> int:
+    """Map a date to a dekadal index (0-35).
+
+    Args:
+        dt: Date to map.
+
+    Returns:
+        Dekadal index (0-35).
+    """
+    month: int = dt.month
+    day: int = dt.day
+
+    # find dekadal index for start of month
+    dekadal_index = (month - 1) * 3
+
+    # adjust for day of month
+    if day <= 10:
+        dekadal_index += 0
+    elif day <= 20:
+        dekadal_index += 1
+    else:
+        dekadal_index += 2
+
+    return dekadal_index

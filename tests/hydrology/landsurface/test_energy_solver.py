@@ -20,7 +20,7 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
     """Test that the implicit enthalpy solver conserves energy and behaves reasonably."""
     # The optimized solver is specialized for the configured soil discretization.
     n_layers = N_SOIL_LAYERS
-    layer_thickness_m = np.array([0.1, 0.2, 0.4, 0.8, 1.6, 3.2], dtype=np.float32)
+    layer_thickness_m = np.array([0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4], dtype=np.float32)
 
     # Properties
     porosity = np.full(n_layers, 0.4, dtype=np.float32)
@@ -109,6 +109,7 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
         snow_enthalpy_J_per_m2=no_snow_enthalpy_J_per_m2.copy(),
         snow_density_kg_per_m3=no_snow_density_kg_per_m3.copy(),
         topwater_m=np.float32(0.0),
+        snow_albedo=np.float32(0.9),
     )
 
     # Check 1: Equilibrium should be maintained (approx)
@@ -147,6 +148,7 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
         snow_enthalpy_J_per_m2=no_snow_enthalpy_J_per_m2.copy(),
         snow_density_kg_per_m3=no_snow_density_kg_per_m3.copy(),
         topwater_m=np.float32(0.0),
+        snow_albedo=np.float32(0.9),
     )
 
     # Enthalpy should increase (total)
@@ -206,6 +208,7 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
         snow_enthalpy_J_per_m2=no_snow_enthalpy_J_per_m2.copy(),
         snow_density_kg_per_m3=no_snow_density_kg_per_m3.copy(),
         topwater_m=np.float32(0.0),
+        snow_albedo=np.float32(0.9),
     )
 
     assert enthalpies_extreme[0] > initial_enthalpy_J_per_m2[0]
@@ -216,7 +219,7 @@ def test_solve_soil_enthalpy_column_energy_balance() -> None:
 def test_solve_soil_enthalpy_column_tiny_snow_stays_stable() -> None:
     """Test that trace snow cover does not over-couple the soil thermally."""
     n_layers = N_SOIL_LAYERS
-    layer_thickness_m = np.array([0.1, 0.2, 0.4, 0.8, 1.6, 3.2], dtype=np.float32)
+    layer_thickness_m = np.array([0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4], dtype=np.float32)
     porosity = np.full(n_layers, 0.4, dtype=np.float32)
     sand_percentage = np.full(n_layers, 50.0, dtype=np.float32)
     volumetric_water_content = np.full(n_layers, 0.2, dtype=np.float32)
@@ -284,6 +287,7 @@ def test_solve_soil_enthalpy_column_tiny_snow_stays_stable() -> None:
         snow_enthalpy_J_per_m2=trace_snow_enthalpy_J_per_m2,
         snow_density_kg_per_m3=trace_snow_density_kg_per_m3,
         topwater_m=np.float32(0.0),
+        snow_albedo=np.float32(0.9),
     )
 
     assert np.all(np.isfinite(new_enthalpies_J_per_m2))

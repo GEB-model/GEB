@@ -46,9 +46,14 @@ from .base import BuildModelBase
 # CROP_DATA from Siebert et al. (2010)
 # source doi: 10.1016/j.jhydrol.2009.07.031
 # license: Creative Commons Attribution 4.0 International
+# base_temperature_C: base temperature for crop development from heat units. It has
+# no effect for crops with one stage over the whole season (perennials). The source
+# of each value is in base_temperature_C_reference.
 CROP_DATA = [
     {
         "name": "wheat",
+        "base_temperature_C": 0.0,
+        "base_temperature_C_reference": "SWAT+ wwht/swht (winter/spring wheat) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 0,
         "is_paddy": False,
         "a": 0.9885,
@@ -70,6 +75,8 @@ CROP_DATA = [
     },
     {
         "name": "maize",
+        "base_temperature_C": 8.0,
+        "base_temperature_C_reference": "SWAT+ corn tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 1,
         "is_paddy": False,
         "a": 1.2929,
@@ -91,6 +98,8 @@ CROP_DATA = [
     },
     {
         "name": "rice",
+        "base_temperature_C": 10.0,
+        "base_temperature_C_reference": "SWAT+ rice tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 2,
         "is_paddy": True,
         "a": 1.0,
@@ -112,6 +121,8 @@ CROP_DATA = [
     },
     {
         "name": "barley",
+        "base_temperature_C": 0.0,
+        "base_temperature_C_reference": "SWAT+ barl tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 3,
         "is_paddy": False,
         "a": 1.478,
@@ -133,6 +144,8 @@ CROP_DATA = [
     },
     {
         "name": "rye",
+        "base_temperature_C": 0.0,
+        "base_temperature_C_reference": "SWAT+ rye tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 4,
         "is_paddy": False,
         "a": 1.0,
@@ -154,6 +167,8 @@ CROP_DATA = [
     },
     {
         "name": "millet",
+        "base_temperature_C": 10.0,
+        "base_temperature_C_reference": "SWAT+ pmil (pearl millet) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 5,
         "is_paddy": False,
         "a": 1.0,
@@ -175,6 +190,8 @@ CROP_DATA = [
     },
     {
         "name": "sorghum",
+        "base_temperature_C": 11.0,
+        "base_temperature_C_reference": "SWAT+ grsg (grain sorghum) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 6,
         "is_paddy": False,
         "a": 0.8681,
@@ -196,6 +213,8 @@ CROP_DATA = [
     },
     {
         "name": "soybeans",
+        "base_temperature_C": 10.0,
+        "base_temperature_C_reference": "SWAT+ soyb tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 7,
         "is_paddy": False,
         "a": 0.8373,
@@ -217,6 +236,8 @@ CROP_DATA = [
     },
     {
         "name": "sunflower",
+        "base_temperature_C": 6.0,
+        "base_temperature_C_reference": "SWAT+ sunf tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 8,
         "is_paddy": False,
         "a": 1.0,
@@ -238,6 +259,8 @@ CROP_DATA = [
     },
     {
         "name": "potatoes",
+        "base_temperature_C": 7.0,
+        "base_temperature_C_reference": "SWAT+ pota tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 9,
         "is_paddy": False,
         "a": 1.0,
@@ -259,6 +282,8 @@ CROP_DATA = [
     },
     {
         "name": "cassava",
+        "base_temperature_C": 15.0,
+        "base_temperature_C_reference": "LPJmL tropical roots (parameterized as cassava) basetemp; SWAT+ cass has the potato value: https://github.com/PIK-LPJmL/LPJmL/blob/4595764150e981da2dd5672621544c41e77b1c6a/par/pft.cjson",
         "id": 10,
         "is_paddy": False,
         "a": 1.0,
@@ -280,6 +305,8 @@ CROP_DATA = [
     },
     {
         "name": "sugar cane",
+        "base_temperature_C": 11.0,
+        "base_temperature_C_reference": "SWAT+ sugc tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 11,
         "is_paddy": False,
         "a": 1.0,
@@ -301,6 +328,8 @@ CROP_DATA = [
     },
     {
         "name": "sugar beets",
+        "base_temperature_C": 4.0,
+        "base_temperature_C_reference": "SWAT+ sgbt tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 12,
         "is_paddy": False,
         "a": 1.0,
@@ -322,6 +351,8 @@ CROP_DATA = [
     },
     {
         "name": "oil palm",
+        "base_temperature_C": 7.0,
+        "base_temperature_C_reference": "SWAT+ oilp tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 13,
         "is_paddy": False,
         "a": 1.0,
@@ -343,6 +374,8 @@ CROP_DATA = [
     },
     {
         "name": "rapeseed",
+        "base_temperature_C": 5.0,
+        "base_temperature_C_reference": "SWAT+ canp/cana (spring canola) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 14,
         "is_paddy": False,
         "a": 1.0,
@@ -364,6 +397,8 @@ CROP_DATA = [
     },
     {
         "name": "groundnuts",
+        "base_temperature_C": 14.0,
+        "base_temperature_C_reference": "SWAT+ pnut tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 15,
         "is_paddy": False,
         "a": 1.0,
@@ -385,6 +420,8 @@ CROP_DATA = [
     },
     {
         "name": "pulses",
+        "base_temperature_C": 1.0,
+        "base_temperature_C_reference": "LPJmL pulses basetemp (same as SWAT+ fpea, field peas): https://github.com/PIK-LPJmL/LPJmL/blob/4595764150e981da2dd5672621544c41e77b1c6a/par/pft.cjson",
         "id": 16,
         "is_paddy": False,
         "a": 1.3,
@@ -406,6 +443,8 @@ CROP_DATA = [
     },
     {
         "name": "citrus",
+        "base_temperature_C": 7.0,
+        "base_temperature_C_reference": "SWAT+ oran (orange) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 17,
         "is_paddy": False,
         "a": 1.0,
@@ -427,6 +466,8 @@ CROP_DATA = [
     },
     {
         "name": "date palm",
+        "base_temperature_C": 10.0,
+        "base_temperature_C_reference": "not in SWAT+ or LPJmL; SWAT+ value of the other tropical tree crops (bana, coct, coff, papa) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 18,
         "is_paddy": False,
         "a": 1.0,
@@ -448,6 +489,8 @@ CROP_DATA = [
     },
     {
         "name": "grapes",
+        "base_temperature_C": 10.0,
+        "base_temperature_C_reference": "SWAT+ grap tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 19,
         "is_paddy": False,
         "a": 1.0,
@@ -469,6 +512,8 @@ CROP_DATA = [
     },
     {
         "name": "cotton",
+        "base_temperature_C": 15.0,
+        "base_temperature_C_reference": "SWAT+ cots/cotp tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 20,
         "is_paddy": False,
         "a": 1.0,
@@ -490,6 +535,8 @@ CROP_DATA = [
     },
     {
         "name": "cocoa",
+        "base_temperature_C": 10.0,
+        "base_temperature_C_reference": "SWAT+ coct (cocoa tree) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 21,
         "is_paddy": False,
         "a": 1.0,
@@ -511,6 +558,8 @@ CROP_DATA = [
     },
     {
         "name": "coffee",
+        "base_temperature_C": 10.0,
+        "base_temperature_C_reference": "SWAT+ coff tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 22,
         "is_paddy": False,
         "a": 1.0,
@@ -532,6 +581,8 @@ CROP_DATA = [
     },
     {
         "name": "others perennial",
+        "base_temperature_C": 7.0,
+        "base_temperature_C_reference": "SWAT+ orcd (orchard) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 23,
         "is_paddy": False,
         "a": 1.2,
@@ -553,6 +604,8 @@ CROP_DATA = [
     },
     {
         "name": "fodder grasses",
+        "base_temperature_C": 0.0,
+        "base_temperature_C_reference": "SWAT+ fesc (tall fescue, cool-season pasture) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 24,
         "is_paddy": False,
         "a": 1.0,
@@ -574,6 +627,8 @@ CROP_DATA = [
     },
     {
         "name": "others annual",
+        "base_temperature_C": 7.0,
+        "base_temperature_C_reference": "SWAT+ vegetables crrt, lett, onio, radi (carrot, lettuce, onion, radish) tmp_base: https://github.com/swat-model/swatplus/blob/6f515368525e7d84089ae0f9d33f4c9115de5679/refdata/Osu_1hru/plants.plt",
         "id": 25,
         "is_paddy": False,
         "a": 1.2,
@@ -620,6 +675,7 @@ class Crops(BuildModelBase):
         - rd_rain (maximum root depth for rainfed crops)
         - rd_irr (maximum root depth for irrigated crops)
         - crop_group_number (adaptation level to drought, 0-5). See WOFOST documentation.
+        - base_temperature_C (base temperature for crop development from heat units)
 
         For 'GAEZ' type, the following additional fields are required:
         - d1, d2a, d2b, d3a, d3b, d4 (lengths of growth stages)
@@ -668,6 +724,7 @@ class Crops(BuildModelBase):
                     "crop_group_number" in crop_values
                 )  # adaptation level to drought (see WOFOST: https://wofost.readthedocs.io/en/7.2/)
                 assert 5 >= crop_values["crop_group_number"] >= 0
+                assert "base_temperature_C" in crop_values
                 assert (
                     crop_values["rd_rain"] >= crop_values["rd_irr"]
                 )  # root depth rainfed crops should be larger than irrigated crops

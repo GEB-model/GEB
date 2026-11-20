@@ -159,3 +159,48 @@ def test_to_HRU(
     expected = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
     result = to_HRU(grid_data, HRU_to_grid)
     np.testing.assert_almost_equal(result, expected)
+
+
+def test_create_HRUs_splits_by_elevation_zone() -> None:
+    """Farm fields and land use types are split by the elevation zone of their subcells."""
+    from geb.hydrology.HRUs import HRUs
+
+    scaling = 4
+    mask = np.array([[False, False], [True, False]])
+    farms = np.full((8, 8), -1, dtype=np.int32)
+    farms[0:2, 0:3] = 0
+    farms[5:8, 5:8] = 1
+    rng = np.random.default_rng(0)
+    land_use = np.where(farms >= 0, 1, rng.choice([0, 1, 4, 5], size=(8, 8))).astype(
+        np.int32
+    )
+    zones = np.zeros((8, 8), dtype=np.int32)
+    zones[:, 2:] = 1
+    zones[6:, :] = 2
+
+    (
+        land_use_type,
+        land_use_ratio,
+        land_owners,
+        HRU_to_grid,
+        _,
+        linear_mapping,
+        elevation_zone,
+    ) = HRUs.create_HRUs_numba(farms, land_use, zones, mask, scaling, 4)
+
+    # every subcell of a HRU has the farm, land use and zone of the HRU
+    for HRU in range(land_use_type.size):
+        subcells = linear_mapping == HRU
+        assert (zones[subcells] == elevation_zone[HRU]).all()
+        assert (land_use[subcells] == land_use_type[HRU]).all()
+        assert (farms[subcells] == land_owners[HRU]).all()
+    # the masked cell has no HRUs, the three other cells are fully covered
+    assert (linear_mapping[4:8, 0:4] == -1).all()
+    np.testing.assert_allclose(land_use_ratio.sum(), 3.0)
+    # farm 0 lies in zones 0 and 1 of its cell: two HRUs with the same owner
+    assert sorted(elevation_zone[land_owners == 0].tolist()) == [0, 1]
+
+    without_zones = HRUs.create_HRUs_numba(
+        farms, land_use, np.zeros_like(zones), mask, scaling, 4
+    )
+    assert without_zones[0].size < land_use_type.size

@@ -10,6 +10,7 @@ import xarray as xr
 from shapely.geometry import box
 
 from geb.hydrology.landcovers import FOREST
+from geb.workflows.flood_protection import read_flood_protection_standards
 from geb.workflows.io import read_geom, read_params, read_table, read_zarr
 from geb.workflows.raster import coords_to_pixels
 
@@ -38,7 +39,7 @@ class FloodRiskModule:
         self.load_max_damage_values()
         if (
             self.model.config["hazards"]["floods"]["flood_risk"]
-            or self.model.config["agent_settings"]["households"]["adapt"]
+            or self.model.config["agents"]["households"]["adapt"]
         ):
             self.load_return_period_flood_maps()
         self.load_flood_protection_standard()
@@ -81,25 +82,24 @@ class FloodRiskModule:
             self.model.logger.info(
                 "Flood protection standard set to 'auto'. Flood protection standards will be automatically determined."
             )
-            flood_protection_standards = pd.read_parquet(
-                self.model.files["table"][
+            flood_protection_standards: pd.Series = read_flood_protection_standards(
+                table_path=self.model.files["table"][
                     "flood_protection_standards/flood_protection_standards"
-                ]
+                ],
+                flood_protection_config=self.model.config["hydrology"]["routing"][
+                    "flood_protection"
+                ],
             )
 
             for comid in np.unique(self.households.buildings["COMID"]):
                 if comid not in flood_protection_standards.index:
-                    flood_protection_standard = flood_protection_standards[
-                        "flood_protection_standard"
-                    ].mode()[0]
+                    flood_protection_standard = flood_protection_standards.mode()[0]
                     self.model.logger.warning(
                         f"COMID {comid} not found in flood protection standards table. Using mode flood protection standard {flood_protection_standard}."
                     )
 
                 else:
-                    flood_protection_standard = flood_protection_standards.loc[
-                        comid, "flood_protection_standard"
-                    ]
+                    flood_protection_standard = flood_protection_standards.loc[comid]
                 if flood_protection_standard == 0:
                     self.model.logger.warning(
                         f"COMID {comid} has a flood protection standard of 0. Value might be missing from flood protection standards table."
@@ -128,7 +128,7 @@ class FloodRiskModule:
         for return_period in self.households.return_periods:
             file_path = (
                 self.model.output_folder.parent
-                / self.model.config["general"]["spinup_name"]
+                / self.model.config["spinup_name"]
                 / "flood_maps"
                 / f"{return_period}.zarr"
             )
@@ -360,7 +360,7 @@ class FloodRiskModule:
 
     def alter_damage_curves_based_on_actions(self) -> None:
         """Alter the global damage curves for flood-proofed buildings by applying a reduction factor to the unprotected building curves."""
-        damage_reduction_over_leadtime = self.households.model.config["agent_settings"][
+        damage_reduction_over_leadtime = self.households.model.config["agents"][
             "households"
         ]["warning_system"]["damage_reduction_over_leadtime"]
         # insert a row with depth of 1.01m and damage ratio corresponding to the damage ratio at 1m depth modeling dry flood proofing until 1m depth.
@@ -793,19 +793,13 @@ class FloodRiskModule:
             self.households.var.household_points.copy().to_crs(flood_depth.rio.crs)
         )
         if (
-            (
-                self.households.model.config["agent_settings"]["households"][
-                    "warning_response"
-                ]
-            )
+            (self.households.model.config["agents"]["households"]["warning_response"])
             & (self.households.config["adapt"])
         ):
             raise ValueError(
                 "Warning: Both warning response and adaptation are enabled in the model configuration. This may lead to unintended consequences as both mechanisms currently influence the same protective measure of flood-proofing buildings. Please use either adapt or warning response, but not both."
             )
-        if self.households.model.config["agent_settings"]["households"][
-            "warning_response"
-        ]:
+        if self.households.model.config["agents"]["households"]["warning_response"]:
             # make sure household points and actions taken have the same length
             assert len(household_points) == self.households.var.actions_taken.shape[0]
 
@@ -843,9 +837,9 @@ class FloodRiskModule:
             )
             # Ensure the action_maps directory exists before writing the file
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            damage_reduction_over_leadtime = self.households.model.config[
-                "agent_settings"
-            ]["households"]["warning_system"]["damage_reduction_over_leadtime"]
+            damage_reduction_over_leadtime = self.households.model.config["agents"][
+                "households"
+            ]["warning_system"]["damage_reduction_over_leadtime"]
             if damage_reduction_over_leadtime:
                 elevated_mask = buildings["elevated_possessions"] == True
                 # Early action: >48 hours lead time

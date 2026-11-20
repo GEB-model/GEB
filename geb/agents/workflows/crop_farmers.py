@@ -1,5 +1,7 @@
 """Contains several functions for crop farmer module."""
 
+from typing import NamedTuple
+
 import numpy as np
 import numpy.typing as npt
 from numba import njit, prange
@@ -13,9 +15,23 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hydrology.landsurface.evapotranspiration import get_root_ratios
+from geb.numba_config import NUMBA_CACHE
 
 
-@njit(cache=True, inline="always")
+class IrrigationDemand(NamedTuple):
+    """Gross irrigation demand per field (m³), in total and within each source's limit.
+
+    Each water source has its own annual irrigation limit per farmer, so the demand
+    that may be taken from a source is the total demand adjusted to that limit.
+    """
+
+    total_m3: ArrayFloat32
+    reservoir_m3: ArrayFloat32
+    channel_m3: ArrayFloat32
+    groundwater_m3: ArrayFloat32
+
+
+@njit(cache=NUMBA_CACHE, inline="always")
 def get_farmer_HRUs(
     field_indices: npt.NDArray[np.int32],
     field_indices_by_farmer: npt.NDArray[np.int32],
@@ -38,7 +54,7 @@ def get_farmer_HRUs(
     ]
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def farmer_command_area(
     n: int,
     field_indices: npt.NDArray[np.int32],
@@ -69,7 +85,7 @@ def farmer_command_area(
     return output
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def get_farmer_groundwater_depth(
     n: int,
     groundwater_depth: npt.NDArray[np.float32],
@@ -112,7 +128,7 @@ def get_farmer_groundwater_depth(
     return groundwater_depth_by_farmer
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def get_deficit_between_dates(
     cumulative_water_deficit_m3: npt.NDArray[np.floating],
     farmer: int | np.integer,
@@ -156,7 +172,7 @@ def get_deficit_between_dates(
     return deficit
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def get_future_deficit(
     farmer: int | np.integer,
     day_index: int | np.integer,
@@ -234,7 +250,7 @@ def get_future_deficit(
     return future_water_deficit
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def adjust_irrigation_to_limit(
     farmer: int | np.integer,
     day_index: int | np.integer,
@@ -260,45 +276,37 @@ def adjust_irrigation_to_limit(
         reset_day_index: Day to reset the irrigation year, effectively the end of the decision period.
 
     Returns:
-        irrigation_correction_factor: The ratio of the remaining irrigation limit to the future water deficit.
-        If the remaining irrigation limit is less than 0, returns 0.
+        irrigation_correction_factor: The ratio of the remaining irrigation limit to the future water deficit,
+        capped at 1. If no irrigation limit remains, returns 0.
     """
-    if remaining_irrigation_limit_m3[farmer] < np.float32(0):
+    if remaining_irrigation_limit_m3[farmer] <= np.float32(0):
         return np.float32(0)
     # calculate future water deficit, but also include today's irrigation consumption
-    # Check whether a full year has passed
-    if np.all(~np.isnan(cumulative_water_deficit_m3[farmer])):
-        potential_irrigation_consumption_farmer_m3 = (
-            farmer_gross_irrigation_demand_m3 * irrigation_efficiency_farmer
-        )
-        future_water_deficit = get_future_deficit(
-            farmer=farmer,
-            day_index=day_index,
-            cumulative_water_deficit_m3=cumulative_water_deficit_m3,
-            crop_calendar=crop_calendar,
-            crop_rotation_year_index=crop_rotation_year_index,
-            potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
-            reset_day_index=reset_day_index,
-        )
-        effective_remaining_irrigation_limit_m3 = (
-            remaining_irrigation_limit_m3[farmer] * irrigation_efficiency_farmer
-        )
-
-        irrigation_correction_factor: np.float32 = (
-            effective_remaining_irrigation_limit_m3 / future_water_deficit
-        )
-        # limit the ratio to 1 if the deficit is smaller than the limit
-        irrigation_correction_factor: np.float32 = min(
-            irrigation_correction_factor, np.float32(1)
-        )
-    else:
-        irrigation_correction_factor: np.float32 = np.float32(1)
-
-    assert future_water_deficit > np.float32(0)
-    return irrigation_correction_factor
+    potential_irrigation_consumption_farmer_m3 = (
+        farmer_gross_irrigation_demand_m3 * irrigation_efficiency_farmer
+    )
+    future_water_deficit = get_future_deficit(
+        farmer=farmer,
+        day_index=day_index,
+        cumulative_water_deficit_m3=cumulative_water_deficit_m3,
+        crop_calendar=crop_calendar,
+        crop_rotation_year_index=crop_rotation_year_index,
+        potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
+        reset_day_index=reset_day_index,
+    )
+    if future_water_deficit <= np.float32(0):
+        return np.float32(1)
+    effective_remaining_irrigation_limit_m3 = (
+        remaining_irrigation_limit_m3[farmer] * irrigation_efficiency_farmer
+    )
+    # limit the ratio to 1 if the deficit is smaller than the limit
+    return min(
+        np.float32(effective_remaining_irrigation_limit_m3 / future_water_deficit),
+        np.float32(1),
+    )
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def withdraw_channel(
     available_channel_storage_m3: npt.NDArray[np.floating],
     grid_cell: int | np.integer,
@@ -310,7 +318,6 @@ def withdraw_channel(
     remaining_irrigation_limit_m3: npt.NDArray[np.floating],
     channel_abstraction_m3_by_farmer: npt.NDArray[np.floating],
     maximum_abstraction_channel_m3_field: float | np.floating,
-    minimum_channel_storage_m3: float | np.floating = 100.0,
 ) -> np.float32:
     """Withdraw irrigation water from channel for a field.
 
@@ -322,12 +329,11 @@ def withdraw_channel(
         farmer: Farmer index.
         irrigation_water_demand_field_m: Remaining demand at field (m).
         water_withdrawal_m: Per-field withdrawal accumulator (m).
-        remaining_irrigation_limit_m3: Remaining seasonal limit per farmer (m³),
-            or ``NaN`` when unlimited.
+        remaining_irrigation_limit_m3: Remaining annual limit of channel water per
+            farmer (m³), or ``NaN`` when unlimited.
         channel_abstraction_m3_by_farmer: Per-farmer channel abstraction accumulator (m³).
-        maximum_abstraction_channel_m3_field: Max channel abstraction allowed for this
-            field in current step (m³).
-        minimum_channel_storage_m3: Minimum storage to keep in channel (buffer).
+        maximum_abstraction_channel_m3_field: Demand of this field that may be taken
+            from the channel, adjusted to the channel limit (m³).
 
     Returns:
         Updated remaining field demand (m).
@@ -335,13 +341,10 @@ def withdraw_channel(
     water_demand_cell_m3 = irrigation_water_demand_field_m * cell_area[field]
     assert water_demand_cell_m3 >= 0
 
-    remaining_channel_m3 = max(
-        available_channel_storage_m3[grid_cell] - minimum_channel_storage_m3, 0
-    )
-
-    # channel abstraction
+    # channel abstraction; the minimum channel storage that must remain in the
+    # channel is already excluded from the available channel storage
     channel_abstraction_cell_m3 = min(
-        remaining_channel_m3,
+        available_channel_storage_m3[grid_cell],
         water_demand_cell_m3,
         maximum_abstraction_channel_m3_field,
     )
@@ -363,7 +366,7 @@ def withdraw_channel(
     return np.float32(irrigation_water_demand_field_m)
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def withdraw_reservoir(
     command_area: int | np.integer,
     field: int | np.integer,
@@ -387,11 +390,12 @@ def withdraw_reservoir(
         available_reservoir_storage_m3: Available storage per reservoir (m³).
         irrigation_water_demand_field_m: Remaining demand at field (m).
         water_withdrawal_m: Per-field withdrawal accumulator (m).
-        remaining_irrigation_limit_m3: Remaining seasonal limit per farmer (m³),
-            or ``NaN`` when unlimited.
+        remaining_irrigation_limit_m3: Remaining annual limit of reservoir water per
+            farmer (m³), or ``NaN`` when unlimited.
         reservoir_abstraction_m3_by_farmer: Per-farmer reservoir abstraction accumulator (m³).
         maximum_abstraction_reservoir_m3_field: Max reservoir abstraction allowed for
-            this field in current step (m³).
+            this field in current step, within the reservoir limit and the release to
+            the command area (m³).
         cell_area: HRU area (m²).
 
     Returns:
@@ -431,7 +435,7 @@ def withdraw_reservoir(
     return irrigation_water_demand_field_m
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def withdraw_groundwater(
     farmer: int | np.integer,
     grid_cell: int | np.integer,
@@ -460,10 +464,11 @@ def withdraw_groundwater(
         well_depth: Per-farmer well depth (m).
         irrigation_water_demand_field_m: Remaining demand at field (m).
         water_withdrawal_m: Per-field withdrawal accumulator (m).
-        remaining_irrigation_limit_m3: Remaining seasonal limit per farmer (m³),
-            or ``NaN`` when unlimited.
+        remaining_irrigation_limit_m3: Remaining annual limit of groundwater per
+            farmer (m³), or ``NaN`` when unlimited.
         groundwater_abstraction_m3_by_farmer: Per-farmer groundwater abstraction accumulator (m³).
-        maximum_abstraction_groundwater_m3_field: Max allowed GW abstraction (m³) for this field.
+        maximum_abstraction_groundwater_m3_field: Demand of this field that may be taken
+            from groundwater, adjusted to the groundwater limit (m³).
 
     Returns:
         Updated remaining field demand (m).
@@ -503,7 +508,7 @@ def withdraw_groundwater(
     return np.float32(irrigation_water_demand_field_m)
 
 
-@njit(cache=True, inline="always")
+@njit(cache=NUMBA_CACHE, inline="always")
 def get_potential_irrigation_consumption_m(
     topwater: np.float32,
     root_depth_m: np.float32,
@@ -511,20 +516,19 @@ def get_potential_irrigation_consumption_m(
     field_capacity: ArrayFloat32,
     wilting_point: ArrayFloat32,
     w: ArrayFloat32,
-    ws: ArrayFloat32,
     saturated_hydraulic_conductivity_m_per_day: ArrayFloat32,
     fraction_irrigated_field: np.float32,
     max_paddy_water_level_farmer: np.float32,
-    crop_group: np.float32,  # kept for future dynamic-p logic
     is_paddy: np.bool_,
     minimum_effective_root_depth_m: np.float32,
-    depletion_factor: np.float32 = np.float32(0.5),
 ) -> np.float32:
     """Compute potential irrigation (m) for a field on the current day.
 
     For paddy: irrigate up to a target ponding level above the current topwater.
-    For non-paddy: apply when soil depletion exceeds a fraction of readily
-    available water in the root zone, capped by infiltration capacity.
+    For non-paddy: when the root-zone depletion exceeds the readily available
+    water (RAW = p * TAW with p = 0.5, i.e. half of the total available water;
+    FAO-56), refill the root zone to field capacity, capped by the infiltration
+    capacity.
 
     Args:
         topwater: Current surface water level at the field (m).
@@ -533,14 +537,11 @@ def get_potential_irrigation_consumption_m(
         field_capacity: Volumetric water at field capacity per layer, (n_layers,).
         wilting_point: Volumetric water at wilting point per layer, (n_layers,).
         w: Current soil water per layer (same units as FC/WP), (n_layers,).
-        ws: Saturation per layer (unused here but kept for signature stability).
         saturated_hydraulic_conductivity_m_per_day: Layer/soil infiltration control (m/day).
         fraction_irrigated_field: Fraction of HRU actually irrigated [0,1].
         max_paddy_water_level_farmer: Target ponding level for paddy (m).
-        crop_group: Crop stress group (placeholder for future dynamic p).
         is_paddy: Whether this field is paddy.
         minimum_effective_root_depth_m: Lower bound for effective root depth (m).
-        depletion_factor: Multiplier on RAW threshold (default 0.5).
 
     Returns:
         Potential irrigation depth (m) to apply today (already scaled by
@@ -575,20 +576,16 @@ def get_potential_irrigation_consumption_m(
         # often refered to as TAW (see AquaCrop v7.1, Chapter 3)
         maximum_available_water = field_capacity_root_zone - wilting_point_root_zone
 
-        # # calculate the depletion coefficient (P_{sto}), which is the fraction of
-        # # total available water (TAW) at which stomata start to close
-        # p: np.float32 = get_fraction_easily_available_soil_water(
-        #     crop_group, potential_evapotranspiration
-        # )
-        # TODO: Re-enable some dynamic p but not based on PET since this gives
-        # issues when used in irrigation
+        # depletion fraction p: the fraction of TAW that can be depleted before
+        # the crop experiences water stress. A fixed p = 0.5 (FAO-56 typical
+        # value) is used; a PET-dependent p makes irrigation timing unstable.
         p = np.float32(0.5)
 
         readily_available_water_root_zone = maximum_available_water * p
 
         soil_depletion = field_capacity_root_zone - available_water_root_zone
 
-        if soil_depletion > readily_available_water_root_zone * depletion_factor:
+        if soil_depletion > readily_available_water_root_zone:
             potential_irrigation_consumption_m = soil_depletion
         else:
             potential_irrigation_consumption_m = np.float32(0)
@@ -601,7 +598,7 @@ def get_potential_irrigation_consumption_m(
     return potential_irrigation_consumption_m * fraction_irrigated_field
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def get_gross_irrigation_demand_m3(
     day_index: int,
     n: int,
@@ -618,7 +615,6 @@ def get_gross_irrigation_demand_m3(
     field_capacity: TwoDArrayFloat32,
     wilting_point: TwoDArrayFloat32,
     w: TwoDArrayFloat32,
-    ws: TwoDArrayFloat32,
     saturated_hydraulic_conductivity_m_per_day: TwoDArrayFloat32,
     remaining_irrigation_limit_m3_reservoir: ArrayFloat32,
     remaining_irrigation_limit_m3_channel: ArrayFloat32,
@@ -626,55 +622,56 @@ def get_gross_irrigation_demand_m3(
     irrigation_limit_reset_day_index: ArrayInt32,
     cumulative_water_deficit_m3: TwoDArrayFloat32,
     crop_calendar: ThreeDArrayInt32,
-    crop_group_numbers: ArrayFloat32,
     paddy_irrigated_crops: ArrayBool,
     current_crop_calendar_rotation_year_index: ArrayInt32,
     max_paddy_water_level: ArrayFloat32,
     minimum_effective_root_depth_m: np.float32,
 ) -> tuple[ArrayFloat32, ArrayFloat32, ArrayFloat32, ArrayFloat32]:
-    """Compute gross irrigation demand per field (m³) and limit-adjusted variants.
+    """Compute the gross irrigation demand per field (m³), also adjusted to each source's limit.
 
     Iterates per farmer and field to compute gross potential irrigation demand
-    (m³) from soil/crop state, then applies irrigation-limit corrections for
-    each source (in the order reservoir, channel, groundwater) when a limit is present.
-    Used to regulate the irrigation behavior of farmers. The farmers are "activated"
-    by the given `activation_order`
+    (m³) from soil/crop state. Each water source (reservoir, channel, groundwater)
+    has its own annual irrigation limit per farmer. For each source the demand is
+    reduced so that the remaining limit of that source is spread over the remaining
+    water deficit of the irrigation year; a source without a limit (NaN) can supply
+    the full demand.
 
     Returns:
-        tuple[
-            np.ndarray,
-            np.ndarray,
-            np.ndarray,
-            np.ndarray,
-        ]: A 4-tuple of arrays (all shape = n_fields, dtype float32):
-            - gross_potential_irrigation_m3: Unconstrained gross demand (m³) per field.
-            - gross_potential_irrigation_m3_limit_adjusted_reservoir: Demand limited by the reservoir cap.
-            - gross_potential_irrigation_m3_limit_adjusted_channel: Demand limited by the channel cap.
-            - gross_potential_irrigation_m3_limit_adjusted_groundwater: Demand limited by the groundwater cap.
+        Four arrays of gross irrigation demand per field (m³, float32): the demand
+        itself and the demand adjusted to the reservoir, channel and groundwater limit.
     """
     n_hydrological_response_units: int = cell_area.size
     gross_potential_irrigation_m3: ArrayFloat32 = np.zeros(
         n_hydrological_response_units, dtype=np.float32
     )
-    gross_potential_irrigation_m3_limit_adjusted_reservoir: ArrayFloat32 = (
-        np.zeros_like(gross_potential_irrigation_m3)
-    )
-    gross_potential_irrigation_m3_limit_adjusted_channel: ArrayFloat32 = np.zeros_like(
+    demand_limited_reservoir_m3: ArrayFloat32 = np.zeros_like(
         gross_potential_irrigation_m3
     )
-    gross_potential_irrigation_m3_limit_adjusted_groundwater: ArrayFloat32 = (
-        np.zeros_like(gross_potential_irrigation_m3)
+    demand_limited_channel_m3: ArrayFloat32 = np.zeros_like(
+        gross_potential_irrigation_m3
+    )
+    demand_limited_groundwater_m3: ArrayFloat32 = np.zeros_like(
+        gross_potential_irrigation_m3
     )
     # TODO: First part of this function can be parallelized
     for farmer in range(n):
-        farmer_fields: npt.NDArray[np.int32] = get_farmer_HRUs(
-            field_indices, field_indices_by_farmer, farmer
-        )
+        first_field: int = int(field_indices_by_farmer[farmer, 0])
+        end_field: int = int(field_indices_by_farmer[farmer, 1])
+        if first_field >= end_field:
+            continue
+
+        farmer_fields: npt.NDArray[np.int32] = field_indices[first_field:end_field]
         irrigation_efficiency_farmer: np.float32 = irrigation_efficiency[farmer]
-        for field in farmer_fields:
+
+        farmer_gross_irrigation_demand_m3: np.float32 = np.float32(0.0)
+        has_irrigated_field: bool = False
+
+        for i in range(first_field, end_field):
+            field: np.int32 = field_indices[i]
             if not currently_irrigated_fields[field]:
                 continue
 
+            has_irrigated_field = True
             crop: np.int32 = crop_map[field]
             assert crop != -1
 
@@ -685,34 +682,41 @@ def get_gross_irrigation_demand_m3(
                 field_capacity=field_capacity[field, :],
                 wilting_point=wilting_point[field, :],
                 w=w[field, :],
-                ws=ws[field, :],
                 saturated_hydraulic_conductivity_m_per_day=saturated_hydraulic_conductivity_m_per_day[
                     field, :
                 ],
                 fraction_irrigated_field=fraction_irrigated_field[farmer],
                 max_paddy_water_level_farmer=max_paddy_water_level[farmer],
-                crop_group=crop_group_numbers[crop],
                 is_paddy=paddy_irrigated_crops[crop],
                 minimum_effective_root_depth_m=minimum_effective_root_depth_m,
             )
 
             assert consumption_m < 1
 
-            gross_potential_irrigation_m3[field] = (
+            gross_demand: np.float32 = (
                 consumption_m * cell_area[field]
             ) / irrigation_efficiency_farmer
+            gross_potential_irrigation_m3[field] = gross_demand
+            farmer_gross_irrigation_demand_m3 += gross_demand
 
-        farmer_gross_irrigation_demand_m3: np.float32 = gross_potential_irrigation_m3[
-            farmer_fields
-        ].sum()
-        # If the potential irrigation consumption is larger than 0, the farmer needs to abstract water
-        # if there is no irrigation limit, no need to adjust the irrigation
-        if not np.isnan(remaining_irrigation_limit_m3_reservoir[farmer]):
-            if farmer_gross_irrigation_demand_m3 > 0.0:
-                irrigation_correction_factor: np.float32 = adjust_irrigation_to_limit(
+        # If the farmer has no irrigated fields or zero demand, there is nothing to limit
+        if not has_irrigated_field or farmer_gross_irrigation_demand_m3 <= np.float32(
+            0.0
+        ):
+            continue
+
+        # reduce the demand to the remaining limit of each water source
+        for remaining_irrigation_limit_m3, demand_limited_m3 in (
+            (remaining_irrigation_limit_m3_reservoir, demand_limited_reservoir_m3),
+            (remaining_irrigation_limit_m3_channel, demand_limited_channel_m3),
+            (remaining_irrigation_limit_m3_groundwater, demand_limited_groundwater_m3),
+        ):
+            irrigation_correction_factor: np.float32 = np.float32(1.0)
+            if not np.isnan(remaining_irrigation_limit_m3[farmer]):
+                irrigation_correction_factor = adjust_irrigation_to_limit(
                     farmer=farmer,
                     day_index=day_index,
-                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_reservoir,
+                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
                     cumulative_water_deficit_m3=cumulative_water_deficit_m3,
                     crop_calendar=crop_calendar,
                     crop_rotation_year_index=current_crop_calendar_rotation_year_index,
@@ -720,67 +724,10 @@ def get_gross_irrigation_demand_m3(
                     irrigation_efficiency_farmer=irrigation_efficiency_farmer,
                     reset_day_index=irrigation_limit_reset_day_index[farmer],
                 )
-                assert 0 <= irrigation_correction_factor <= 1
-
-                gross_potential_irrigation_m3_limit_adjusted_reservoir[
-                    farmer_fields
-                ] = (
-                    gross_potential_irrigation_m3[farmer_fields]
-                    * irrigation_correction_factor
-                )
-        else:
-            gross_potential_irrigation_m3_limit_adjusted_reservoir[farmer_fields] = (
+            assert 0 <= irrigation_correction_factor <= 1
+            demand_limited_m3[farmer_fields] = (
                 gross_potential_irrigation_m3[farmer_fields]
-            )
-
-        if not np.isnan(remaining_irrigation_limit_m3_channel[farmer]):
-            if farmer_gross_irrigation_demand_m3 > 0.0:
-                irrigation_correction_factor: np.float32 = adjust_irrigation_to_limit(
-                    farmer=farmer,
-                    day_index=day_index,
-                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_channel,
-                    cumulative_water_deficit_m3=cumulative_water_deficit_m3,
-                    crop_calendar=crop_calendar,
-                    crop_rotation_year_index=current_crop_calendar_rotation_year_index,
-                    farmer_gross_irrigation_demand_m3=farmer_gross_irrigation_demand_m3,
-                    irrigation_efficiency_farmer=irrigation_efficiency_farmer,
-                    reset_day_index=irrigation_limit_reset_day_index[farmer],
-                )
-                assert 0 <= irrigation_correction_factor <= 1
-
-                gross_potential_irrigation_m3_limit_adjusted_channel[farmer_fields] = (
-                    gross_potential_irrigation_m3[farmer_fields]
-                    * irrigation_correction_factor
-                )
-        else:
-            gross_potential_irrigation_m3_limit_adjusted_channel[farmer_fields] = (
-                gross_potential_irrigation_m3[farmer_fields]
-            )
-
-        if not np.isnan(remaining_irrigation_limit_m3_groundwater[farmer]):
-            if farmer_gross_irrigation_demand_m3 > 0.0:
-                irrigation_correction_factor: np.float32 = adjust_irrigation_to_limit(
-                    farmer=farmer,
-                    day_index=day_index,
-                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_groundwater,
-                    cumulative_water_deficit_m3=cumulative_water_deficit_m3,
-                    crop_calendar=crop_calendar,
-                    crop_rotation_year_index=current_crop_calendar_rotation_year_index,
-                    farmer_gross_irrigation_demand_m3=farmer_gross_irrigation_demand_m3,
-                    irrigation_efficiency_farmer=irrigation_efficiency_farmer,
-                    reset_day_index=irrigation_limit_reset_day_index[farmer],
-                )
-                assert 0 <= irrigation_correction_factor <= 1
-
-                gross_potential_irrigation_m3_limit_adjusted_groundwater[
-                    farmer_fields
-                ] = (
-                    gross_potential_irrigation_m3[farmer_fields]
-                    * irrigation_correction_factor
-                )
-        else:
-            gross_potential_irrigation_m3_limit_adjusted_groundwater[farmer_fields] = (
-                gross_potential_irrigation_m3[farmer_fields]
+                * irrigation_correction_factor
             )
 
         assert (
@@ -789,13 +736,13 @@ def get_gross_irrigation_demand_m3(
 
     return (
         gross_potential_irrigation_m3,
-        gross_potential_irrigation_m3_limit_adjusted_reservoir,
-        gross_potential_irrigation_m3_limit_adjusted_channel,
-        gross_potential_irrigation_m3_limit_adjusted_groundwater,
+        demand_limited_reservoir_m3,
+        demand_limited_channel_m3,
+        demand_limited_groundwater_m3,
     )
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def abstract_water(
     activation_order: npt.NDArray[np.int32],
     field_indices_by_farmer: npt.NDArray[np.int32],
@@ -818,9 +765,9 @@ def abstract_water(
     remaining_irrigation_limit_m3_channel: npt.NDArray[np.floating],
     remaining_irrigation_limit_m3_groundwater: npt.NDArray[np.floating],
     maximum_abstraction_reservoir_m3_by_farmer: npt.NDArray[np.floating],
-    maximum_abstraction_channel_m3_by_farmer: npt.NDArray[np.floating],
-    maximum_abstraction_groundwater_m3_by_farmer: npt.NDArray[np.floating],
     gross_irrigation_demand_m3_per_field: npt.NDArray[np.floating],
+    demand_limited_channel_m3_per_field: npt.NDArray[np.floating],
+    demand_limited_groundwater_m3_per_field: npt.NDArray[np.floating],
 ) -> tuple[
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
@@ -852,13 +799,19 @@ def abstract_water(
         command_area_by_farmer: Reservoir command area per farmer (``-1`` if none).
         return_fraction: Per-farmer fraction of applied losses that return as return-flow.
         well_depth: Per-farmer well depth (m).
-        remaining_irrigation_limit_m3_reservoir: Remaining seasonal limit (m³).
-        remaining_irrigation_limit_m3_channel: Remaining seasonal limit (m³).
-        remaining_irrigation_limit_m3_groundwater: Remaining seasonal limit (m³).
-        maximum_abstraction_reservoir_m3_by_farmer: Cap per farmer (m³) from reservoir.
-        maximum_abstraction_channel_m3_by_farmer: Cap per farmer (m³) from channel.
-        maximum_abstraction_groundwater_m3_by_farmer: Cap per farmer (m³) from GW.
-        gross_irrigation_demand_m3_per_field: Unadjusted gross demand per HRU (m³).
+        remaining_irrigation_limit_m3_reservoir: Remaining annual limit of reservoir
+            water per farmer (m³), or ``NaN`` when unlimited.
+        remaining_irrigation_limit_m3_channel: Remaining annual limit of channel water
+            per farmer (m³), or ``NaN`` when unlimited.
+        remaining_irrigation_limit_m3_groundwater: Remaining annual limit of
+            groundwater per farmer (m³), or ``NaN`` when unlimited.
+        maximum_abstraction_reservoir_m3_by_farmer: Cap per farmer (m³) from reservoir,
+            within the reservoir limit and the release to the command area.
+        gross_irrigation_demand_m3_per_field: Gross demand per HRU (m³).
+        demand_limited_channel_m3_per_field: Gross demand per HRU adjusted to the
+            channel limit (m³): the most that may be taken from the channel.
+        demand_limited_groundwater_m3_per_field: Gross demand per HRU adjusted to the
+            groundwater limit (m³): the most that may be taken from groundwater.
 
     Returns:
         Tuple with per-source totals and field-level fluxes:
@@ -891,27 +844,46 @@ def abstract_water(
     groundwater_abstraction_m3 = np.zeros_like(available_groundwater_m3)
     reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
 
+    # Fast path: if unadjusted gross demand across all fields is zero, nothing is abstracted
+    if (
+        gross_irrigation_demand_m3_per_field.size == 0
+        or gross_irrigation_demand_m3_per_field.max() <= np.float32(0.0)
+    ):
+        return (
+            channel_abstraction_m3_by_farmer,
+            reservoir_abstraction_m3_by_farmer,
+            groundwater_abstraction_m3_by_farmer,
+            water_withdrawal_m,
+            water_consumption_m,
+            irrigation_return_flow_m,
+            irrigation_evaporation_m,
+            reservoir_abstraction_m3,
+            groundwater_abstraction_m3,
+        )
+
     for farmer in activation_order:
-        farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
+        f_start: int = int(field_indices_by_farmer[farmer, 0])
+        f_end: int = int(field_indices_by_farmer[farmer, 1])
+        if f_start >= f_end:
+            continue
+
+        farmer_gross_demand: np.float32 = np.float32(0.0)
+        for i in range(f_start, f_end):
+            farmer_gross_demand += gross_irrigation_demand_m3_per_field[
+                field_indices[i]
+            ]
+
+        if farmer_gross_demand <= np.float32(0.0):
+            continue
+
+        farmer_fields: npt.NDArray[np.int32] = field_indices[f_start:f_end]
         potential_irrigation_consumption_m3_farmer = (
             gross_irrigation_demand_m3_per_field[farmer_fields]
         )
 
-        if potential_irrigation_consumption_m3_farmer.sum() <= 0:
-            continue
-
         command_area_farmer = command_area_by_farmer[farmer]
         return_fraction_farmer = return_fraction[farmer]
 
-        if channel_irrigated[farmer]:
-            maximum_abstraction_channel_m3_farmer = (
-                maximum_abstraction_channel_m3_by_farmer[farmer]
-            )
-            maximum_abstraction_channel_m3_by_field = (
-                maximum_abstraction_channel_m3_farmer
-                * potential_irrigation_consumption_m3_farmer
-                / potential_irrigation_consumption_m3_farmer.sum()
-            )
         if command_area_farmer != -1:  # -1 means no command area
             maximum_abstraction_reservoir_m3_farmer = (
                 maximum_abstraction_reservoir_m3_by_farmer[farmer]
@@ -919,17 +891,7 @@ def abstract_water(
             maximum_abstraction_reservoir_m3_by_field = (
                 maximum_abstraction_reservoir_m3_farmer
                 * potential_irrigation_consumption_m3_farmer
-                / potential_irrigation_consumption_m3_farmer.sum()
-            )
-
-        if well_irrigated[farmer]:
-            maximum_abstraction_groundwater_m3_farmer = (
-                maximum_abstraction_groundwater_m3_by_farmer[farmer]
-            )
-            maximum_abstraction_groundwater_m3_by_field = (
-                maximum_abstraction_groundwater_m3_farmer
-                * potential_irrigation_consumption_m3_farmer
-                / potential_irrigation_consumption_m3_farmer.sum()
+                / farmer_gross_demand
             )
 
         # loop through all farmers fields and apply irrigation
@@ -975,10 +937,9 @@ def abstract_water(
                         irrigation_water_demand_field_m=irrigation_water_demand_field_m,
                         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_channel,
                         channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
-                        maximum_abstraction_channel_m3_field=maximum_abstraction_channel_m3_by_field[
-                            field_index
+                        maximum_abstraction_channel_m3_field=demand_limited_channel_m3_per_field[
+                            field_int
                         ],
-                        minimum_channel_storage_m3=100.0,
                     )
                 assert water_withdrawal_m[field_int] >= 0
                 assert irrigation_water_demand_field_m >= 0
@@ -997,8 +958,8 @@ def abstract_water(
                         water_withdrawal_m=water_withdrawal_m,
                         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_groundwater,
                         groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
-                        maximum_abstraction_groundwater_m3_field=maximum_abstraction_groundwater_m3_by_field[
-                            field_index
+                        maximum_abstraction_groundwater_m3_field=demand_limited_groundwater_m3_per_field[
+                            field_int
                         ],
                     )
                     assert irrigation_water_demand_field_m >= 0
@@ -1039,7 +1000,7 @@ def abstract_water(
     )
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def plant(
     n: int,
     day_index: int,
@@ -1163,7 +1124,7 @@ def plant(
     return plant, farmers_selling_land
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def arrays_equal(a: npt.NDArray, b: npt.NDArray) -> bool:
     """Check element-wise equality for two same-shaped arrays.
 
@@ -1180,7 +1141,7 @@ def arrays_equal(a: npt.NDArray, b: npt.NDArray) -> bool:
     return True
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def find_matching_rows(
     arr: npt.NDArray[np.int32], target_row: npt.NDArray[np.int32]
 ) -> npt.NDArray[np.bool_]:
@@ -1204,7 +1165,7 @@ def find_matching_rows(
     return matches
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def find_most_similar_index(
     target_series: npt.NDArray[np.float32],
     yield_ratios: npt.NDArray[np.float32],
@@ -1240,7 +1201,7 @@ def find_most_similar_index(
     return indices[min_idx]
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _pick_representative_by_mean_total_profit(
     total_profits: npt.NDArray[np.float32],  # (n_farmers, n_cols)
     candidate_mask: npt.NDArray[np.bool_],  # (n_farmers,)
@@ -1288,7 +1249,7 @@ def _pick_representative_by_mean_total_profit(
     return best_idx
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=NUMBA_CACHE, parallel=True)
 def crop_profit_difference_total(
     total_profits: npt.NDArray[np.float32],
     crop_elevation_group: npt.NDArray[np.int32],
@@ -1457,7 +1418,7 @@ def gev_ppf_scalar(u: float, c: float, loc: float, scale: float) -> float:
         return loc - scale * np.log(-np.log(u))
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=NUMBA_CACHE, parallel=True)
 def compute_premiums_and_best_contracts_numba(
     gev_params: npt.NDArray[np.floating],
     values_history: npt.NDArray[np.floating],
@@ -1590,3 +1551,73 @@ def compute_premiums_and_best_contracts_numba(
         best_rmse_arr,
         best_prem_arr,
     )
+
+
+@njit(cache=NUMBA_CACHE)
+def accumulate_farmer_pr_and_water_deficit(
+    pr_kg_per_m2_per_s: npt.NDArray[np.float32],
+    reference_evapotranspiration_grass_m_per_day: npt.NDArray[np.float32],
+    cell_area: npt.NDArray[np.float32],
+    field_indices_by_farmer: npt.NDArray[np.int32],
+    field_indices: npt.NDArray[np.int32],
+    out_pr_mm_per_day: npt.NDArray[np.float32],
+    out_water_deficit_m3: npt.NDArray[np.float32],
+    HRU_to_grid: npt.NDArray[np.int32],
+) -> None:
+    """Accumulate daily precipitation and water deficit per farmer.
+
+    Computes average daily precipitation (mm) and total volumetric water
+    deficit (m³) for each farmer directly using indexed lookups, avoiding full-grid
+    reductions and allocations.
+
+    Args:
+        pr_kg_per_m2_per_s: Precipitation rate per HRU or grid cell per hour (kg·m⁻²·s⁻¹).
+        reference_evapotranspiration_grass_m_per_day: Reference evapotranspiration per HRU (m·day⁻¹).
+        cell_area: Cell area per HRU (m²).
+        field_indices_by_farmer: Slices into field_indices per farmer of shape (n_farmers, 2).
+        field_indices: HRU indices of farmer fields.
+        out_pr_mm_per_day: Output array for daily precipitation per farmer (mm·day⁻¹).
+        out_water_deficit_m3: Output array for daily water deficit per farmer (m³·day⁻¹).
+        HRU_to_grid: Mapping from HRU cell index to compressed grid index. If empty,
+            pr_kg_per_m2_per_s is indexed directly by HRU index.
+    """
+    n_farmers: int = field_indices_by_farmer.shape[0]
+    n_hours: int = pr_kg_per_m2_per_s.shape[1]
+    use_grid_mapping: bool = HRU_to_grid.size > 0
+
+    for farmer_i in range(n_farmers):
+        start_idx: int = field_indices_by_farmer[farmer_i, 0]
+        end_idx: int = field_indices_by_farmer[farmer_i, 1]
+        n_fields: int = end_idx - start_idx
+
+        farmer_pr_mm: float = 0.0
+        farmer_deficit_m3: float = 0.0
+
+        if n_fields > 0:
+            total_pr_mm: float = 0.0
+            total_deficit_m3: float = 0.0
+
+            for k in range(start_idx, end_idx):
+                hru_idx: int = field_indices[k]
+                grid_idx: int = HRU_to_grid[hru_idx] if use_grid_mapping else hru_idx
+                hru_pr_sum: float = 0.0
+                for hour in range(n_hours):
+                    hru_pr_sum += pr_kg_per_m2_per_s[grid_idx, hour]
+
+                # 1 kg/m² = 1 mm. Multiply sum of hourly rates by 3600 seconds/hour to obtain mm/day.
+                hru_pr_mm: float = hru_pr_sum * 3600.0
+                total_pr_mm += hru_pr_mm
+
+                # Convert mm to m: 3600 / 1000 = 3.6
+                hru_pr_m: float = hru_pr_sum * 3.6
+                deficit_m: float = (
+                    reference_evapotranspiration_grass_m_per_day[hru_idx] - hru_pr_m
+                )
+                if deficit_m > 0.0:
+                    total_deficit_m3 += deficit_m * cell_area[hru_idx]
+
+            farmer_pr_mm = total_pr_mm / n_fields
+            farmer_deficit_m3 = total_deficit_m3
+
+        out_pr_mm_per_day[farmer_i] = np.float32(farmer_pr_mm)
+        out_water_deficit_m3[farmer_i] = np.float32(farmer_deficit_m3)

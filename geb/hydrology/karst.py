@@ -94,8 +94,10 @@ class Karst(Module):
         """
         # In karst terrain, surface runoff and interflow generated on hillslopes drain towards
         # dry valleys, sinkholes, and permeable karst depressions on non-sealed land.
-        karst_presence: ArrayFloat32 = (
-            self.hydrology.to_HRU(data=self.karst_fraction) > np.float32(0.0)
+        # Only the karst part of a cell does so: the capture is weighted by the karst
+        # fraction, the rest of the cell drains as non-karst land.
+        karst_presence: ArrayFloat32 = np.clip(
+            self.hydrology.to_HRU(data=self.karst_fraction), 0.0, 1.0
         ).astype(np.float32) * (
             (self.hydrology.HRU.var.land_use_type != SEALED)
             & (self.hydrology.HRU.var.land_use_type != OPEN_WATER)
@@ -126,9 +128,8 @@ class Karst(Module):
             total_surface_flow_m * surface_capture_fraction
         )
 
-        # Deep soil drainage percolates directly into the underlying bedrock. Where soluble
-        # karst formations underlie the soil (karst_fraction > 0), unsealed soil recharge drains
-        # completely into the karst aquifer system rather than being artificially restricted by surface outcrop fractions.
+        # Deep soil drainage percolates directly into the underlying bedrock. Below the karst
+        # part of the cell (karst fraction) it drains into the karst aquifer system.
         captured_soil_m: ArrayFloat32 = soil_recharge_m * karst_presence
 
         # Remove captured water from its original route to avoid counting it twice.

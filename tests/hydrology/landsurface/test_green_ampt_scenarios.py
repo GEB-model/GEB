@@ -70,8 +70,8 @@ def run_infiltration_simulation(
     w = ws * np.float32(initial_saturation)  # 50% saturation
 
     # Thermal integration (simplified for tests)
-    soil_enthalpy_top_layer = np.float32(initial_enthalpy_J_per_m2)  # J/m2
-    solid_heat_capacity_top_layer = np.float32(100000.0)  # J/m2/K
+    soil_enthalpies = np.full(n_layers, initial_enthalpy_J_per_m2, dtype=np.float32)
+    solid_heat_capacities = np.full(n_layers, 100000.0, dtype=np.float32)
     rain_temp = np.float32(rain_temp_C)  # C
 
     saturated_hydraulic_conductivity = np.full(n_layers, ksat_m_per_s, dtype=np.float32)
@@ -122,7 +122,7 @@ def run_infiltration_simulation(
             wetting_front_suction,
             wetting_front_deficit,
             green_ampt_active_layer_idx,
-            soil_enthalpy_top_layer,
+            soil_enthalpies[0],
         ) = infiltration(
             np.int64(42),
             ws,
@@ -140,12 +140,15 @@ def run_infiltration_simulation(
             bubbling_pressure_m_positive,
             layer_heights,
             lambda_param,
-            soil_enthalpy_top_layer,
-            solid_heat_capacity_top_layer,
+            soil_enthalpies,
+            solid_heat_capacities,
             rain_temp,
             rain_m,
             rainfall_lookup_table=generate_rainfall_lookup_table(sigma=0.8),
             distribute_rainfall_lognormally=False,  # For testing, use uniform distribution to simplify analysis
+            dunne_effective_saturation=np.float32(0.0),
+            surface_crust_factor=np.float32(0.2),
+            macropore_infiltration_capacity_m_per_s=np.float32(0.0),
         )
 
         # Simulate percolation (drainage) between layers to prevent top saturation blocks
@@ -179,7 +182,7 @@ def run_infiltration_simulation(
         deficit_series.append(float(wetting_front_deficit))
         top_layer_saturation_series.append(float(w[0] / ws[0]))
         soil_moisture_ratio_series.append((w / ws).copy())
-        enthalpy_series_J_per_m2.append(float(soil_enthalpy_top_layer))
+        enthalpy_series_J_per_m2.append(float(soil_enthalpies[0]))
         topwater_series_mm.append(float(topwater_rem * 1000.0))
 
     results = SimulationResults(
@@ -279,7 +282,7 @@ def test_ga_continuous_rainfall() -> None:
     )
 
     # Checks
-    # Infiltration should cap at roughly Ksat after some time (actually Green-Ampt decays to Ksat)
+    # Infiltration decays towards the conductivity of the wetted zone, half of Ksat
     # Initially infiltration > Ksat due to suction
 
     # Verify enthalpy advection: rain is 10C, initial soil is 200000 J/m2.
@@ -304,9 +307,10 @@ def test_ga_continuous_rainfall() -> None:
         "Top layer temperature should be between initial and rain temp"
     )
 
-    # Check max infiltration > Ksat (due to suction)
+    # Check max infiltration above the conductivity of the wetted zone (due to
+    # suction): half the saturated conductivity of 10 mm/hr (trapped air, Bouwer 1966)
     max_inf = np.max(results.infiltration_mm_per_hr)
-    assert max_inf > 10.0
+    assert max_inf > 5.0
 
     # Check that infiltration rate decreases over time during the event
     event_infil = results.infiltration_mm_per_hr[5:25]
@@ -315,12 +319,12 @@ def test_ga_continuous_rainfall() -> None:
     # Check wetting front grows
     assert results.wetting_front_depth_m[20] > results.wetting_front_depth_m[5]
 
-    # Check resetting: after rain stops, wetting front should be reset to 0 (at step 25 rain is 0?)
-    # rain[25] is 0. So at end of step 25, if topwater was fully handled, WF should reset OR
-    # it resets when topwater input is 0 for the NEXT step?
-    # Logic: if topwater <= 0 -> reset.
-    # At step 25, rain=0. So input topwater=0. So WF should reset to 0.
-    assert results.wetting_front_depth_m[29] == 0.0
+    # The front can grow below the top layer (the wetted zone spans several layers)
+    assert results.wetting_front_depth_m[24] > 0.05
+
+    # After the rain stops the front recedes by drainage, hour by hour
+    after_rain = np.asarray(results.wetting_front_depth_m[25:30])
+    assert (np.diff(after_rain) < 0).all(), "Wetting front should recede after rain"
 
 
 def test_ga_low_intensity_rainfall() -> None:
@@ -373,8 +377,12 @@ def test_ga_full_column_saturation_processes() -> None:
     w = wres.copy() + np.float32(1e-4)  # Near residual
 
     # Thermal integration (simplified for tests)
-    soil_enthalpy_top_layer = np.float32(200000.0)  # Dummy J/m2 (~above freezing)
-    solid_heat_capacity_top_layer = np.float32(100000.0)  # Dummy J/m2/K
+    soil_enthalpies = np.full(
+        n_layers, 200000.0, dtype=np.float32
+    )  # Dummy J/m2 (~above freezing)
+    solid_heat_capacities = np.full(
+        n_layers, 100000.0, dtype=np.float32
+    )  # Dummy J/m2/K
     rain_temp = np.float32(10.0)  # 10C
 
     saturated_hydraulic_conductivity = np.full(n_layers, ksat_m, dtype=np.float32)
@@ -418,7 +426,7 @@ def test_ga_full_column_saturation_processes() -> None:
             wetting_front_suction,
             wetting_front_deficit,
             green_ampt_active_layer_idx,
-            soil_enthalpy_top_layer,
+            soil_enthalpies[0],
         ) = infiltration(
             np.int64(42),
             ws,
@@ -436,11 +444,14 @@ def test_ga_full_column_saturation_processes() -> None:
             bubbling_pressure_m_positive,
             layer_heights,
             lambda_param,
-            soil_enthalpy_top_layer,
-            solid_heat_capacity_top_layer,
+            soil_enthalpies,
+            solid_heat_capacities,
             rain_temp,
             rain_m,
             rainfall_lookup_table=generate_rainfall_lookup_table(sigma=0.8),
+            dunne_effective_saturation=np.float32(0.0),
+            surface_crust_factor=np.float32(0.2),
+            macropore_infiltration_capacity_m_per_s=np.float32(0.0),
         )
 
         # Simulate Drainage (simple gravity flow)
@@ -543,8 +554,12 @@ def test_ga_top_layer_refill_priority() -> None:
     land_use = np.int32(1)
 
     # Thermal integration (simplified for tests)
-    soil_enthalpy_top_layer = np.float32(200000.0)  # Dummy J/m2 (~above freezing)
-    solid_heat_capacity_top_layer = np.float32(100000.0)  # Dummy J/m2/K
+    soil_enthalpies = np.full(
+        n_layers, 200000.0, dtype=np.float32
+    )  # Dummy J/m2 (~above freezing)
+    solid_heat_capacities = np.full(
+        n_layers, 100000.0, dtype=np.float32
+    )  # Dummy J/m2/K
     rain_temp = np.float32(10.0)  # 10C
 
     variable_runoff_beta = np.float32(0.0)
@@ -560,7 +575,7 @@ def test_ga_top_layer_refill_priority() -> None:
         wetting_front_suction,
         wetting_front_deficit,
         green_ampt_active_layer_idx,
-        soil_enthalpy_top_layer,
+        soil_enthalpies[0],
     ) = infiltration(
         np.int64(42),
         ws,
@@ -578,11 +593,14 @@ def test_ga_top_layer_refill_priority() -> None:
         bubbling,
         layer_heights,
         lam,
-        soil_enthalpy_top_layer,
-        solid_heat_capacity_top_layer,
+        soil_enthalpies,
+        solid_heat_capacities,
         rain_temp,
         rain_m,
         rainfall_lookup_table=generate_rainfall_lookup_table(sigma=0.8),
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # Verify:
@@ -651,7 +669,9 @@ def test_ga_extreme_rainfall_runoff() -> None:
     assert final_rate < 40.0, (
         f"Infiltration rate {final_rate} too high relative to Ksat 10.0"
     )
-    assert final_rate > 2.0, (
+    # Green-Ampt infiltration approaches the (crusted) saturated conductivity from above;
+    # after long ponding it equals it within float32 precision.
+    assert final_rate >= 2.0 - 1e-4, (
         f"Infiltration rate {final_rate} dropped below effective crusted Ksat"
     )
 
@@ -675,8 +695,12 @@ def test_ga_saturation_excess_runoff() -> None:
     land_use = np.int32(NON_PADDY_IRRIGATED)
 
     # Thermal integration (simplified for tests)
-    soil_enthalpy_top_layer = np.float32(200000.0)  # Dummy J/m2 (~above freezing)
-    solid_heat_capacity_top_layer = np.float32(100000.0)  # Dummy J/m2/K
+    soil_enthalpies = np.full(
+        n_layers, 200000.0, dtype=np.float32
+    )  # Dummy J/m2 (~above freezing)
+    solid_heat_capacities = np.full(
+        n_layers, 100000.0, dtype=np.float32
+    )  # Dummy J/m2/K
     rain_temp = np.float32(10.0)  # 10C
 
     variable_runoff_beta = np.float32(0.1)
@@ -697,7 +721,7 @@ def test_ga_saturation_excess_runoff() -> None:
         wetting_front_suction,
         wetting_front_deficit,
         green_ampt_active_layer_idx,
-        soil_enthalpy_top_layer,
+        soil_enthalpies[0],
     ) = infiltration(
         np.int64(42),
         ws,
@@ -715,11 +739,14 @@ def test_ga_saturation_excess_runoff() -> None:
         bubbling,
         layer_heights,
         lam,
-        soil_enthalpy_top_layer,
-        solid_heat_capacity_top_layer,
+        soil_enthalpies,
+        solid_heat_capacities,
         rain_temp,
         rain_m,
         rainfall_lookup_table=generate_rainfall_lookup_table(sigma=0.8),
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
     )
 
     # All rain should be runoff

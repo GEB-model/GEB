@@ -81,6 +81,8 @@ def test_dry_bed_cutoff() -> None:
         curr_discharge=np.float32(5.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
         g_dt_substep=np.float32(9.80665 * 10.0),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=True,
@@ -103,6 +105,8 @@ def test_downhill_gravity_acceleration() -> None:
         curr_discharge=np.float32(0.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
         g_dt_substep=np.float32(9.80665 * 5.0),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=True,
@@ -125,6 +129,8 @@ def test_adverse_slope_deceleration_and_reversal() -> None:
         curr_discharge=np.float32(0.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
         g_dt_substep=np.float32(9.80665 * 5.0),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=True,
@@ -147,6 +153,8 @@ def test_reverse_flow_suppressed_when_can_reverse_false() -> None:
         curr_discharge=np.float32(0.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
         g_dt_substep=np.float32(9.80665 * 5.0),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=False,
@@ -170,6 +178,8 @@ def test_manning_friction_damping_monotonicity_and_stability() -> None:
         curr_discharge=np.float32(10.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_low_n,
+        geom_floodplain_areas=np.zeros((geom_low_n.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_low_n.shape[0], 10), dtype=np.float32),
         g_dt_substep=np.float32(9.80665 * 10.0),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=True,
@@ -183,6 +193,8 @@ def test_manning_friction_damping_monotonicity_and_stability() -> None:
         curr_discharge=np.float32(10.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_high_n,
+        geom_floodplain_areas=np.zeros((geom_high_n.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_high_n.shape[0], 10), dtype=np.float32),
         g_dt_substep=np.float32(9.80665 * 10.0),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=True,
@@ -196,6 +208,10 @@ def test_manning_friction_damping_monotonicity_and_stability() -> None:
         curr_discharge=np.float32(10.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_extreme_n,
+        geom_floodplain_areas=np.zeros((geom_extreme_n.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros(
+            (geom_extreme_n.shape[0], 10), dtype=np.float32
+        ),
         g_dt_substep=np.float32(9.80665 * 10.0),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=True,
@@ -220,6 +236,8 @@ def test_critical_flow_froude_limiter() -> None:
         curr_discharge=np.float32(0.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
         g_dt_substep=np.float32(9.80665 * 60.0),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=True,
@@ -248,6 +266,8 @@ def test_upstream_storage_volume_limiter() -> None:
         curr_discharge=np.float32(20.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
         g_dt_substep=np.float32(9.80665 * dt_s),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=True,
@@ -271,6 +291,8 @@ def test_zero_upstream_storage_produces_zero_discharge() -> None:
         curr_discharge=np.float32(10.0),
         min_wet_depth_m=np.float32(0.01),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
+        geom_floodplain_widths=np.zeros((geom_inbank.shape[0], 10), dtype=np.float32),
         g_dt_substep=np.float32(9.80665 * 10.0),
         sqrt_gravity=np.float32(np.sqrt(9.80665)),
         can_reverse=True,
@@ -349,3 +371,95 @@ def test_evaluate_discharge_pow_0_6_boundary_conditions() -> None:
     q_beyond: np.float32 = np.float32(200_000.0)
     approx_beyond: np.float32 = evaluate_discharge_pow_0_6(q_beyond)
     assert approx_beyond > 0.0
+
+
+def test_overbank_flow_is_the_sum_of_channel_and_floodplain() -> None:
+    """Steady flow above the banks equals the conveyance of channel plus floodplain.
+
+    Divided channel method: Q = sqrt(S) (A_c R_c^(2/3) / n_c + A_f R_f^(2/3) / n_f). The
+    discharge of the channel alone is lower, and it keeps rising with the stage.
+    """
+    from geb.hydrology.routing.geometry import (
+        FLOODPLAIN_PROFILE_DEPTHS_ARR,
+        GEOM_IN_FLOODPLAIN_ROUGHNESS_RATIO,
+        GEOM_IN_LEVEE_DEPTH,
+    )
+
+    channel_n, floodplain_n = 0.03, 0.06
+    width, depth = 20.0, 3.0
+    geom_inbank = _create_single_reach_geometry(
+        bankfull_width_m=width, bankfull_depth_m=depth, manning_n=channel_n
+    )
+    geom_inbank[0, GEOM_IN_LEVEE_DEPTH] = np.float32(depth)
+    # wetted perimeter of the parabolic channel when full to the banks
+    bankfull_perimeter = width + (8.0 / 3.0) * depth * depth / width
+    geom_inbank[0, GEOM_IN_BANKFULL_PERIMETER] = np.float32(bankfull_perimeter)
+    geom_inbank[0, GEOM_IN_FLOODPLAIN_ROUGHNESS_RATIO] = np.float32(
+        channel_n / floodplain_n
+    )
+    geom_inbank[0, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M] = np.float32(0.0)
+    # valley floor 420 m wide at every level: 400 m of floodplain
+    widths = np.full((1, 10), 420.0, dtype=np.float32)
+    areas = np.empty((1, 10), dtype=np.float32)
+    areas[0, 0] = 0.5 * (width + 420.0) * FLOODPLAIN_PROFILE_DEPTHS_ARR[0]
+    for k in range(1, 10):
+        areas[0, k] = areas[0, k - 1] + 420.0 * (
+            FLOODPLAIN_PROFILE_DEPTHS_ARR[k] - FLOODPLAIN_PROFILE_DEPTHS_ARR[k - 1]
+        )
+    slope = 0.0005
+    storage: ArrayFloat64 = np.array([1e12], dtype=np.float64)
+
+    def steady_discharge(effective_depth: float, floodplain: bool) -> float:
+        q = np.float32(0.0)
+        for _ in range(2000):
+            q = solve_inertial_momentum(
+                reach_idx=0,
+                effective_depth=np.float32(effective_depth),
+                water_slope=np.float32(-slope),
+                curr_discharge=q,
+                min_wet_depth_m=np.float32(0.01),
+                geom_inbank=geom_inbank,
+                geom_floodplain_areas=areas if floodplain else np.zeros_like(areas),
+                geom_floodplain_widths=widths if floodplain else np.zeros_like(widths),
+                g_dt_substep=np.float32(9.80665 * 5.0),
+                sqrt_gravity=np.float32(np.sqrt(9.80665)),
+                can_reverse=False,
+                river_storage_m3_inertial=storage,
+                inv_dt_substep=np.float32(1.0 / 5.0),
+            )
+        return float(q)
+
+    bankfull_area = width * depth / 1.5
+    over = 1.0  # m above the banks
+    channel_area = bankfull_area + width * over
+    channel_q = (
+        np.sqrt(slope)
+        * channel_area
+        * (channel_area / bankfull_perimeter) ** (2.0 / 3.0)
+        / channel_n
+    )
+    floodplain_area = 400.0 * over - 0.5 * 400.0 * 0.1
+    floodplain_q = (
+        np.sqrt(slope)
+        * floodplain_area
+        * (floodplain_area / 400.0) ** (2.0 / 3.0)
+        / floodplain_n
+    )
+    bankfull_q = (
+        np.sqrt(slope)
+        * bankfull_area
+        * (bankfull_area / bankfull_perimeter) ** (2.0 / 3.0)
+        / channel_n
+    )
+
+    assert steady_discharge(depth, floodplain=True) == pytest.approx(
+        bankfull_q, rel=0.01
+    )
+    assert steady_discharge(depth + over, floodplain=False) == pytest.approx(
+        channel_q, rel=0.01
+    )
+    assert steady_discharge(depth + over, floodplain=True) == pytest.approx(
+        channel_q + floodplain_q, rel=0.01
+    )
+    # 1 m over the banks more than doubles the discharge of this section
+    assert channel_q + floodplain_q > 2.0 * bankfull_q

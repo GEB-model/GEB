@@ -30,7 +30,6 @@ from geb.cli import (
     update_fn,
 )
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
-from geb.hydrology.routing import get_river_width
 from geb.model import GEBModel
 from geb.runner import parse_config
 from geb.workflows.io import (
@@ -40,9 +39,9 @@ from geb.workflows.io import (
     write_zarr,
 )
 
-from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
+from .testconfig import IN_GITHUB_ACTIONS, TEST_MODEL_DIR, tmp_folder
 
-working_directory: Path = tmp_folder / "model"
+working_directory: Path = TEST_MODEL_DIR  # shared with dependent tests (e.g. SFINCS)
 working_directory_coastal: Path = tmp_folder / "model_coastal"
 
 DEFAULT_BUILD_ARGS: dict[str, Any] = {"continue_": True}
@@ -68,6 +67,7 @@ def test_init(clean_working_directory: bool) -> None:
         args: dict[str, Any] = {
             "config": "model.yml",
             "build_config": "build.yml",
+            "region": "region.yml",
             "working_directory": ".",
             "from_example": "geul",
         }
@@ -78,7 +78,7 @@ def test_init(clean_working_directory: bool) -> None:
 
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()
-        # geb init no longer creates update.yml (write one by hand for `geb update`)
+        assert Path("region.yml").exists()
         assert not Path("update.yml").exists()
 
         # should raise an error if the folder already exists
@@ -111,6 +111,7 @@ def test_init_coastal(clean_working_directory: bool) -> None:
         args: dict[str, Any] = {
             "config": "model.yml",
             "build_config": "build.yml",
+            "region": "region.yml",
             "working_directory": ".",
             "from_example": "geul",
             "basin_id": "23010758",
@@ -122,7 +123,7 @@ def test_init_coastal(clean_working_directory: bool) -> None:
 
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()
-        # geb init no longer creates update.yml (write one by hand for `geb update`)
+        assert Path("region.yml").exists()
         assert not Path("update.yml").exists()
 
         # should raise an error if the folder already exists
@@ -327,9 +328,7 @@ def test_spinup() -> None:
                 [linear_index]
             ]
 
-            river_width = get_river_width(
-                river_width_alpha, river_width_beta, mean_discharge
-            )
+            river_width = river_width_alpha * mean_discharge**river_width_beta
 
             # this check only makes sense after 365 days
             if geb.n_timesteps > 365:
@@ -506,7 +505,7 @@ def test_alter() -> None:
         run_args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
         run_args["working_directory"] = args["working_directory"]
         run_args["config"] = parse_config(CONFIG_DEFAULT)
-        run_args["config"]["general"]["spinup_time"] = date(
+        run_args["config"]["spinup_time"] = date(
             1980, 1, 1
         )  # MSWEP data is only available from 1979 onwards
 
@@ -562,9 +561,7 @@ def test_land_use_change() -> None:
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(CONFIG_DEFAULT)
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
-        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
-            days=370
-        )
+        config["end_time"] = config["start_time"] + timedelta(days=370)
         args["config"] = config
 
         geb = run_model_with_method(method=None, close_after_run=False, **args)
@@ -659,9 +656,7 @@ def test_setup_inflow() -> None:
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(CONFIG_DEFAULT)
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
-        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
-            days=10
-        )
+        config["end_time"] = config["start_time"] + timedelta(days=10)
         args["config"] = config
 
         model: GEBModel = run_model_with_method(
@@ -745,9 +740,7 @@ def test_setup_retention_basins() -> None:
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(CONFIG_DEFAULT)
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
-        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
-            days=10
-        )
+        config["end_time"] = config["start_time"] + timedelta(days=10)
         args["config"] = config
 
         model: GEBModel = run_model_with_method(
@@ -819,7 +812,7 @@ def test_run_yearly() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(CONFIG_DEFAULT)
-        config["general"]["end_time"] = date(2049, 12, 31)
+        config["end_time"] = date(2049, 12, 31)
         config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
 
         args["config"] = config
@@ -900,14 +893,14 @@ def test_multiverse() -> None:
         forecast_n_hours: int = 13
 
         forecast_issue_date: datetime = (
-            datetime.combine(date=config["general"]["start_time"], time=time.min)
+            datetime.combine(date=config["start_time"], time=time.min)
             + timedelta(days=forecast_after_n_days)
             + timedelta(hours=forecast_n_hours)
         )
         forecast_end_date = forecast_issue_date + timedelta(
             days=int(forecast_n_days), hours=forecast_n_hours
         )
-        config["general"]["end_time"] = forecast_issue_date + timedelta(
+        config["end_time"] = forecast_issue_date + timedelta(
             days=int(forecast_n_days) + 5
         )
 
@@ -1055,9 +1048,7 @@ def test_alternate_universe() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(CONFIG_DEFAULT)
-        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
-            days=10
-        )
+        config["end_time"] = config["start_time"] + timedelta(days=10)
         args["config"] = config
 
         geb: GEBModel = run_model_with_method(
@@ -1237,6 +1228,7 @@ def test_set_and_clean(tmp_path: Path) -> None:
         init_fn(
             config="model.yml",
             build_config="build.yml",
+            region="region.yml",
             working_directory=Path("."),
             from_example="geul",
             basin_id="23011134",
@@ -1266,23 +1258,24 @@ def test_set_and_clean(tmp_path: Path) -> None:
             "model.yml",
             "--working-directory",
             str(copied_model_directory),
-            f"general.spinup_time={updated_spinup_time.isoformat()}",
-            f"general.start_time={updated_start_time.isoformat()}",
-            f"general.end_time={updated_end_time.isoformat()}",
+            f"spinup_time={updated_spinup_time.isoformat()}",
+            f"start_time={updated_start_time.isoformat()}",
+            f"end_time={updated_end_time.isoformat()}",
             "hazards.floods.simulate=false",
-            "report=null",
-            "report._discharge_stations+=true",
+            "report._discharge_stations=false",
+            "report.custom_module.custom_var+=true",
         ],
     )
 
     assert set_result.exit_code == 0, set_result.output
 
     copied_config: dict[str, Any] = parse_config(copied_model_directory / "model.yml")
-    assert copied_config["general"]["spinup_time"] == updated_spinup_time
-    assert copied_config["general"]["start_time"] == updated_start_time
-    assert copied_config["general"]["end_time"] == updated_end_time
+    assert copied_config["spinup_time"] == updated_spinup_time
+    assert copied_config["start_time"] == updated_start_time
+    assert copied_config["end_time"] == updated_end_time
     assert copied_config["hazards"]["floods"]["simulate"] is False
-    assert copied_config["report"] == {"_discharge_stations": True}
+    assert copied_config["report"]["_discharge_stations"] is False
+    assert copied_config["report"]["custom_module"]["custom_var"] is True
 
     clean_result = runner.invoke(
         cli,
@@ -1296,18 +1289,24 @@ def test_set_and_clean(tmp_path: Path) -> None:
 
     assert clean_result.exit_code == 0, clean_result.output
 
-    expected_remaining_files: set[str] = {"build.yml", "model.yml", "update.yml"}
+    expected_remaining_files: set[str] = {
+        "build.yml",
+        "model.yml",
+        "region.yml",
+        "update.yml",
+    }
     remaining_files: set[str] = {
         path.name for path in copied_model_directory.iterdir() if path.exists()
     }
     assert remaining_files == expected_remaining_files
 
     cleaned_config: dict[str, Any] = parse_config(copied_model_directory / "model.yml")
-    assert cleaned_config["general"]["spinup_time"] == updated_spinup_time
-    assert cleaned_config["general"]["start_time"] == updated_start_time
-    assert cleaned_config["general"]["end_time"] == updated_end_time
+    assert cleaned_config["spinup_time"] == updated_spinup_time
+    assert cleaned_config["start_time"] == updated_start_time
+    assert cleaned_config["end_time"] == updated_end_time
     assert cleaned_config["hazards"]["floods"]["simulate"] is False
-    assert cleaned_config["report"] == {"_discharge_stations": True}
+    assert cleaned_config["report"]["_discharge_stations"] is False
+    assert cleaned_config["report"]["custom_module"]["custom_var"] is True
 
     for generated_directory_name in ("cache", "input", "logs", "output"):
         assert not (copied_model_directory / generated_directory_name).exists()

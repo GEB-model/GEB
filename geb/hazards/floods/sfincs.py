@@ -44,7 +44,11 @@ from geb.geb_types import (
 from geb.hazards.event import Event
 from geb.hazards.floods.workflows.bathymetry import (
     burn_rivers,
+    capture_subgrid_initial_water_level,
     skip_subgrid_tiles_without_river_bed_levels,
+)
+from geb.hazards.floods.workflows.initial_water_level import (
+    calculate_initial_water_volume,
 )
 from geb.hazards.floods.workflows.utils import get_end_point
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
@@ -68,6 +72,10 @@ from geb.workflows.raster import (
     pad_xy,
     rasterize_like,
 )
+from geb.workflows.river_profiles import (
+    estimate_river_surface_profiles,
+    river_bed_profiles,
+)
 
 from .workflows.outflow import create_outflow_in_mask
 from .workflows.utils import (
@@ -82,6 +90,9 @@ from .workflows.utils import (
 )
 
 SFINCS_WATER_LEVEL_BOUNDARY = 2
+
+# Margin around the subbasins within which the DEMs are kept for SFINCS (m).
+DEM_CLIP_MARGIN_M: float = 10_000.0
 
 
 class SFINCSRootModel:
@@ -107,6 +118,7 @@ class SFINCSRootModel:
         self.logger: logging.Logger = logger
 
         self.sfincs_model = None
+        self.elevation_list: list[dict[str, Any]] = []
 
     @property
     def sfincs_model(self) -> SfincsModel:
@@ -184,6 +196,8 @@ class SFINCSRootModel:
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
         self.sfincs_model.config.read()
         self.sfincs_model.grid.read()
+        if self.is_subgrid:
+            self.sfincs_model.subgrid.read()
 
         self.is_build_from_scratch = False
         return self
@@ -226,6 +240,22 @@ class SFINCSRootModel:
         """Sets the area of interest DataArray."""
         self._area_of_interest = area_of_interest
 
+    @property
+    def river_initial_water_level(self) -> xr.DataArray:
+        """Gets the initial water level DataArray for burned river cells (meters)."""
+        if not hasattr(self, "_river_initial_water_level"):
+            self._river_initial_water_level = read_zarr(
+                self.path / "river_initial_water_level.zarr"
+            ).compute()
+        return self._river_initial_water_level
+
+    @river_initial_water_level.setter
+    def river_initial_water_level(
+        self, river_initial_water_level: xr.DataArray
+    ) -> None:
+        """Sets the initial water level DataArray for burned river cells (meters)."""
+        self._river_initial_water_level = river_initial_water_level
+
     def build(
         self,
         DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]],
@@ -240,6 +270,7 @@ class SFINCSRootModel:
         outflow_boundary_width_m: float = 500.0,
         maximum_elevation_for_coastal_boundary_cells_m: float = 3.0,
         initial_water_level: float | None = 0.0,
+        river_surface_profiles: gpd.GeoDataFrame | None = None,
         custom_rivers_to_burn: gpd.GeoDataFrame | None = None,
         overwrite: bool | Literal["auto"] = True,
         write_figures: bool = False,
@@ -261,8 +292,14 @@ class SFINCSRootModel:
             outflow_boundary_width_m: The width of the outflow boundary condition in meters. Defaults to 500 m.
             maximum_elevation_for_coastal_boundary_cells_m: The maximum elevation for cells to be considered as coastal boundary condition cells. Defaults to 3 m.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
+            river_surface_profiles: River water-surface profiles of the model build
+                (routing/river_surface_profiles); the riverbed burned into the DEM is this
+                surface minus the river depth. Required when rivers are burned, unless
+                custom rivers are given.
             custom_rivers_to_burn: A GeoDataFrame of custom rivers to burn into the model grid. If None, uses the provided rivers GeoDataFrame.
-                dataframe must contain 'width' and 'depth' columns.
+                dataframe must contain 'width', 'depth', 'manning', 'downstream_ID' and
+                'uparea_m2' columns; their water-surface profile is estimated from the
+                SFINCS elevation.
             overwrite: Whether to overwrite the existing model if it exists. If 'auto', the model is only rebuilt if the input parameters or code have changed.
             write_figures: Whether to generate and save diagnostic figures.
 
@@ -372,55 +409,10 @@ class SFINCSRootModel:
         if crs.is_geographic:
             sf.config.update(crsgeo=1)
 
-        # Copy DEMs to avoid modifying input
-        DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = [
-            DEM.copy() for DEM in DEMs
-        ]
-
-        # Remove unnecessary keys (to avoid warnings) and set reproj_method to bilinear for all DEMs
-        DEMs_in_area_of_interest = []
-        for DEM in DEMs:
-            assert isinstance(DEM["elevation"], xr.Dataset), (
-                "DEM must contain an 'elevation' key with an xarray Dataset"
-            )
-            DEM_bounds = DEM["elevation"].rio.bounds()
-            subbasin_bounds = self.subbasins.total_bounds
-
-            # check if any overlap between DEM and subbasins, if not, do not
-            # include the DEM in further analysis
-            if not (
-                DEM_bounds[0] <= subbasin_bounds[2]
-                and DEM_bounds[2] >= subbasin_bounds[0]
-                and DEM_bounds[1] <= subbasin_bounds[3]
-                and DEM_bounds[3] >= subbasin_bounds[1]
-            ):
-                continue
-
-            DEM.pop("name", None)
-            DEM.pop("path", None)
-            DEM.pop("fill_depressions", None)
-            DEM.pop("coastal_only", None)
-            DEM.pop("coastal_zmin", None)
-            DEM["reproj_method"] = "bilinear"
-
-            DEM["elevation"] = clip_with_geometry(
-                DEM["elevation"]["elevation"],
-                gpd.GeoDataFrame(
-                    [self.subbasins.union_all().buffer(0.1)],
-                    columns=["geometry"],
-                    crs=self.subbasins.crs,
-                ),
-                all_touched=True,
-                drop=True,
-            ).to_dataset(name="elevation")
-            DEMs_in_area_of_interest.append(DEM)
-
-        if not DEMs_in_area_of_interest:
-            raise ValueError(
-                "None of the provided DEMs overlap with the area of interest"
-            )
-
-        sf.elevation.create(elevation_list=DEMs_in_area_of_interest)
+        self.elevation_list: list[dict[str, Any]] = self.prepare_elevation_list(DEMs)
+        # The DEMs are clipped to the subbasins, so the grid has no elevation outside
+        # them. These cells are never active (checked below), so nothing is filled.
+        sf.elevation.create(elevation_list=self.elevation_list, interpolate_na=False)
 
         # Remove rivers that are not represented in the grid and have no upstream rivers
         # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
@@ -458,7 +450,12 @@ class SFINCSRootModel:
             "Clipped flood plain unions to a geometry with no boundary"
         )
 
-        sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
+        # The active area is exactly the flood plain (and below the coastal and outflow
+        # areas): holes are not filled (hydromt fills holes < 10 km2 by default), as they
+        # lie outside the subbasins, where the DEMs have no elevation.
+        sf.mask.create_active(
+            include_polygon=flood_plain, reset_mask=True, fill_area=0.0
+        )
 
         self.rivers["outflow_elevation"] = np.nan
         self.rivers["outflow_point_xy"] = None
@@ -476,6 +473,7 @@ class SFINCSRootModel:
             sf.mask.create_active(
                 include_polygon=low_elevation_coastal_zone_mask,
                 reset_mask=False,
+                fill_area=0.0,
             )
 
             # setup the coastal boundary conditions
@@ -507,6 +505,7 @@ class SFINCSRootModel:
                 include_polygon=outflow_points,
                 all_touched=False,
                 reset_mask=False,
+                fill_area=0.0,
             )
 
             # create polygon from mask
@@ -540,6 +539,8 @@ class SFINCSRootModel:
             self.setup_river_outflow_boundary()
             # setup boundary observation lines for inland basins.
             self.setup_boundary_observation_lines()
+
+        self.check_active_cells_have_elevation()
 
         # We are only interested in flooding within the subbasins of interest.
         # This area of interest mask is used later to filter the flood maps.
@@ -629,11 +630,35 @@ class SFINCSRootModel:
             )
 
             rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
+
+            # riverbed: water-surface profile minus the river depth
+            if custom_rivers_to_burn is not None:
+                profiles: gpd.GeoDataFrame = estimate_river_surface_profiles(
+                    rivers=rivers_to_burn, elevation=sf.elevation.data["dep"]
+                )
+            else:
+                if river_surface_profiles is None:
+                    raise ValueError(
+                        "river_surface_profiles are required to burn the model rivers."
+                    )
+                profiles = river_surface_profiles[
+                    river_surface_profiles["river_id"].isin(rivers_to_burn.index)
+                ].to_crs(sf.crs)
+                profiles = profiles[
+                    profiles.within(
+                        self.sfincs_model.grid.region.to_crs(sf.crs).union_all()
+                    )
+                ]
+            river_bed_points: gpd.GeoDataFrame = river_bed_profiles(
+                rivers_to_burn, profiles
+            )
+            river_bed_points.to_parquet(self.path / "river_bed_points.geoparquet")
         else:
             rivers_to_burn = gpd.GeoDataFrame(
                 columns=["geometry", "width", "depth", "manning"],
                 crs=self.crs,
             )
+            rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
 
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
@@ -646,10 +671,14 @@ class SFINCSRootModel:
             with (
                 np.errstate(invalid="ignore"),
                 skip_subgrid_tiles_without_river_bed_levels(),
+                capture_subgrid_initial_water_level(
+                    grid_mask=self.mask,
+                    nr_subgrid_pixels=grid_size_multiplier,
+                ) as river_initial_water_level,
             ):
                 # only burn rivers that are wider than the subgrid pixel size
                 sf.subgrid.create(
-                    elevation_list=DEMs,
+                    elevation_list=self.elevation_list,
                     roughness_list=[
                         {
                             "manning": mannings.to_dataset(name="manning"),
@@ -659,7 +688,10 @@ class SFINCSRootModel:
                         {
                             "centerlines": rivers_to_burn.rename(
                                 columns={"width": "rivwth", "depth": "rivdph"}
-                            )
+                            ),
+                            "point_zb": river_bed_points[["geometry"]].assign(
+                                rivbed=river_bed_points["bed_elevation_m"]
+                            ),
                         }
                     ]
                     if not rivers_to_burn.empty
@@ -670,6 +702,7 @@ class SFINCSRootModel:
                     nr_levels=20,
                     nrmax=500,
                 )
+            self.river_initial_water_level = river_initial_water_level
 
         else:
             self.logger.info(
@@ -689,13 +722,23 @@ class SFINCSRootModel:
                 # retrieve the elevation and mannings grids
                 # burn the rivers into these grids
                 # and write the burned grids back to the model
-                burned_elv, burned_manning = burn_rivers(
+                burned_elv, burned_manning, river_initial_water_level = burn_rivers(
                     elevation_grid=sf.elevation.data["dep"],
                     manning_grid=sf.roughness.data["manning"],
                     rivers=rivers_to_burn,
+                    river_bed_points=river_bed_points,
                 )
                 sf.grid.data["dep"] = burned_elv
                 sf.grid.data["manning"] = burned_manning
+                self.river_initial_water_level = river_initial_water_level.where(
+                    self.mask == 1
+                )
+                self.river_initial_water_level.attrs["_FillValue"] = np.nan
+            else:
+                self.river_initial_water_level = xr.full_like(
+                    self.elevation, np.nan, dtype=np.float32
+                )
+                self.river_initial_water_level.attrs["_FillValue"] = np.nan
 
         if not rivers_to_burn.empty:
             bed_elevation_grid: xr.DataArray = (
@@ -720,6 +763,11 @@ class SFINCSRootModel:
         write_zarr(
             self.area_of_interest,
             self.path / "area_of_interest.zarr",
+            crs=self.mask.rio.crs,
+        )
+        write_zarr(
+            self.river_initial_water_level,
+            self.path / "river_initial_water_level.zarr",
             crs=self.mask.rio.crs,
         )
 
@@ -1349,6 +1397,33 @@ class SFINCSRootModel:
         """
         return self.sfincs_model.elevation.data["dep"]
 
+    def check_active_cells_have_elevation(self) -> None:
+        """Check that every active cell of the SFINCS grid has an elevation from the DEMs.
+
+        Raises:
+            ValueError: If active cells have no elevation, with their number and
+                extent. Typical sources are DEM values removed by the DEM's ``zmin``
+                (e.g. land below sea level) and gaps in the DEM coverage of the active
+                area (e.g. holes between the subbasins that the mask fills).
+        """
+        is_active_without_elevation: xr.DataArray = self.elevation.isnull() & (
+            self.mask > 0
+        )
+        number_of_cells: int = int(is_active_without_elevation.sum())
+        if number_of_cells == 0:
+            return
+        cells: xr.DataArray = is_active_without_elevation.where(
+            is_active_without_elevation, drop=True
+        )
+        x_name, y_name = self.elevation.rio.x_dim, self.elevation.rio.y_dim
+        raise ValueError(
+            f"{number_of_cells} active SFINCS cells have no elevation from the DEMs, "
+            f"within x {float(cells[x_name].min()):.4f} to {float(cells[x_name].max()):.4f} "
+            f"and y {float(cells[y_name].min()):.4f} to {float(cells[y_name].max()):.4f} "
+            f"({self.elevation.rio.crs}). Check the DEMs (coverage, zmin) and the "
+            "active area; elevation is not filled."
+        )
+
     @property
     def crs(self) -> rasterio.crs.CRS:
         """Returns the coordinate reference system (CRS) of the SFINCS model.
@@ -1380,6 +1455,49 @@ class SFINCSRootModel:
         if self.sfincs_model.crs is None:
             raise ValueError("CRS is not defined for the SFINCS model.")
         return self.sfincs_model.crs.is_geographic
+
+    @property
+    def is_subgrid(self) -> bool:
+        """Returns whether the SFINCS model uses subgrid mode.
+
+        Returns:
+            True if the SFINCS model uses subgrid mode, False otherwise.
+        """
+        return self.sfincs_model.config.data.sbgfile is not None
+
+    @property
+    def subgrid_dem_path(self) -> Path:
+        """Returns the path to the subgrid DEM file (dep_subgrid.tif).
+
+        Returns:
+            Path to the subgrid DEM file.
+
+        Raises:
+            ValueError: If the model does not use subgrid mode.
+            FileNotFoundError: If the subgrid DEM file does not exist.
+        """
+        if not self.is_subgrid:
+            raise ValueError("This SFINCS model does not use subgrid mode.")
+        dem_path: Path = self.path / "subgrid" / "dep_subgrid.tif"
+        if not dem_path.is_file():
+            raise FileNotFoundError(f"Subgrid DEM file not found at {dem_path}")
+        return dem_path
+
+    @property
+    def bed_elevation(self) -> xr.DataArray:
+        """Returns the bed elevation grid of the SFINCS model.
+
+        In subgrid mode, this is the minimum subgrid elevation in each cell (z_zmin).
+        In non-subgrid mode, this is the burned cell elevation (dep).
+
+        Returns:
+            The bed elevation grid as an xarray DataArray.
+        """
+        if self.is_subgrid:
+            if "z_zmin" not in self.sfincs_model.subgrid.data:
+                self.sfincs_model.subgrid.read()
+            return self.sfincs_model.subgrid.data["z_zmin"]
+        return self.elevation
 
     @property
     def cell_area_m2(self) -> xr.DataArray:
@@ -1426,6 +1544,73 @@ class SFINCSRootModel:
                 self.sfincs_model.mask.data["mask"].rio.resolution()[0]
                 * self.sfincs_model.mask.data["mask"].rio.resolution()[1]
             )
+
+    def prepare_elevation_list(
+        self,
+        DEMs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Filter and clip DEM datasets to the subbasins area of interest for SFINCS.
+
+        Args:
+            DEMs: List of DEM configurations containing an 'elevation' dataset.
+
+        Returns:
+            List of cleaned, clipped DEM configurations with 'elevation' and 'da'.
+
+        Raises:
+            ValueError: If none of the provided DEMs overlap with the subbasins.
+        """
+        # The DEMs are clipped to the subbasins with a margin, so that active cells on the
+        # border of the subbasins (coarse cells, the outflow boundary) have elevation.
+        clip_area: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            geometry=[
+                self.subbasins.to_crs(self.utm_zone)
+                .union_all()
+                .buffer(DEM_CLIP_MARGIN_M)
+            ],
+            crs=self.utm_zone,
+        ).to_crs(self.subbasins.crs)
+
+        DEMs_in_area_of_interest: list[dict[str, Any]] = []
+        for raw_dem in DEMs:
+            DEM: dict[str, Any] = raw_dem.copy()
+            assert isinstance(DEM["elevation"], xr.Dataset), (
+                "DEM must contain an 'elevation' key with an xarray Dataset"
+            )
+            DEM_bounds = DEM["elevation"].rio.bounds()
+            subbasin_bounds = self.subbasins.total_bounds
+
+            # check if any overlap between DEM and subbasins
+            if not (
+                DEM_bounds[0] <= subbasin_bounds[2]
+                and DEM_bounds[2] >= subbasin_bounds[0]
+                and DEM_bounds[1] <= subbasin_bounds[3]
+                and DEM_bounds[3] >= subbasin_bounds[1]
+            ):
+                continue
+
+            DEM.pop("name", None)
+            DEM.pop("path", None)
+            DEM.pop("fill_depressions", None)
+            DEM.pop("coastal_only", None)
+            DEM["reproj_method"] = "bilinear"
+
+            clipped_da: xr.DataArray = clip_with_geometry(
+                DEM["elevation"]["elevation"],
+                clip_area.to_crs(DEM["elevation"].rio.crs),
+                all_touched=True,
+                drop=True,
+            )
+            DEM["da"] = clipped_da
+            DEM["elevation"] = clipped_da.to_dataset(name="elevation")
+            DEMs_in_area_of_interest.append(DEM)
+
+        if not DEMs_in_area_of_interest:
+            raise ValueError(
+                "None of the provided DEMs overlap with the area of interest"
+            )
+
+        return DEMs_in_area_of_interest
 
     def assign_return_periods(
         self,
@@ -1696,12 +1881,14 @@ class SFINCSRootModel:
         Returns:
             An instance of SFINCSSimulation with the configured forcing.
         """
-        return SFINCSSimulation(
+        sim: SFINCSSimulation = SFINCSSimulation(
             sfincs_root_model_path=self.root,
             sfincs_root_model_name=self.name,
             logger=self.logger,
             **kwargs,
         )
+        sim.sfincs_root_model.elevation_list = self.elevation_list
+        return sim
 
     def create_coastal_return_period_simulation(
         self,
@@ -1985,6 +2172,9 @@ class SFINCSSimulation:
     inflow_was_set: bool
     sfincs_model: SfincsModel
     sfincs_root_model: SFINCSRootModel
+    total_runoff_volume_m3: float
+    total_discharge_volume_m3: float
+    total_initial_water_volume_m3: float
 
     def __init__(
         self,
@@ -2073,6 +2263,7 @@ class SFINCSSimulation:
         # Track total volumes added via forcings (for water balance debugging)
         self.total_runoff_volume_m3: float = 0.0
         self.total_discharge_volume_m3: float = 0.0
+        self.total_initial_water_volume_m3: float = 0.0
 
         self.set_river_outflow_boundary_condition()
 
@@ -2082,7 +2273,8 @@ class SFINCSSimulation:
         """Print all forcing volumes for debugging the water balance."""
         msg: str = (
             f"SFINCS Forcing volumes: runoff={int(self.total_runoff_volume_m3)} m3, "
-            f"discharge={int(self.total_discharge_volume_m3)} m3"
+            f"discharge={int(self.total_discharge_volume_m3)} m3, "
+            f"initial_water={int(self.total_initial_water_volume_m3)} m3"
         )
         self.logger.info(msg)
 
@@ -2606,22 +2798,85 @@ class SFINCSSimulation:
 
         mask: xr.DataArray = self.sfincs_model.mask.data["mask"]
 
-        # Calculate cell area based on the model's CRS
+        pixels_per_cell_y: int = flood_depth.shape[0] // mask.shape[0]
+        pixels_per_cell_x: int = flood_depth.shape[1] // mask.shape[1]
+        active_mask: np.ndarray = np.repeat(
+            np.repeat(mask.values == 1, pixels_per_cell_y, axis=0),
+            pixels_per_cell_x,
+            axis=1,
+        )
+        height, width = flood_depth.shape
         if self.sfincs_model.crs.is_geographic:
-            cell_area: xr.DataArray = xr.full_like(mask, np.nan, dtype=np.float32)
-            height, width = cell_area.shape
-            cell_area.values = calculate_cell_area_m2(
-                cell_area.rio.transform(), height, width
+            cell_area: np.ndarray = calculate_cell_area_m2(
+                flood_depth.rio.transform(), height, width
             )
         else:
-            cell_area = xr.full_like(
-                mask,
-                math.prod(mask.rio.resolution()),
+            cell_area = np.full(
+                (height, width),
+                abs(math.prod(flood_depth.rio.resolution())),
                 dtype=np.float32,
             )
+        depth_vals: np.ndarray = np.where(
+            active_mask, np.nan_to_num(flood_depth.values, nan=0.0), 0.0
+        )
+        return float(np.sum(depth_vals * cell_area))
 
-        # Only include active cells (mask == 1), excluding water-level boundary cells (mask == 2).
-        return (flood_depth.where(mask == 1) * cell_area).sum().item()
+    def get_initial_water_volume(self, initial_level: xr.DataArray) -> float:
+        """Calculate the initial water volume in cubic meters.
+
+        Args:
+            initial_level: Initial water-level map (meters), with NaN where not set.
+
+        Returns:
+            Initial water volume in cubic meters (m³).
+        """
+        subgrid_dem: Path | None = self.subgrid_dem_path if self.is_subgrid else None
+        return calculate_initial_water_volume(
+            initial_level=initial_level,
+            cell_area_coarse=self.sfincs_root_model.cell_area_m2,
+            bed_elevation=self.bed_elevation,
+            subgrid_dem=subgrid_dem,
+            is_geographic=self.sfincs_root_model.is_geographic,
+        )
+
+    def set_river_initial_water_level(self) -> xr.DataArray:
+        """Set SFINCS initial water levels in burned river cells.
+
+        Returns:
+            Initial water levels (meters), with NaN in cells without burned river pixels.
+        """
+        initial_level: xr.DataArray = self.sfincs_root_model.river_initial_water_level
+        filled_cells: int = int(initial_level.notnull().sum().item())
+        if filled_cells == 0:
+            self.logger.info(
+                "No burned river cells found; initial water levels were not changed."
+            )
+            return initial_level
+
+        self.sfincs_model.initial_conditions.create(
+            zsini=initial_level,
+            reproj_method="nearest",
+        )
+        # this can be replaced with sfincs_model.initial_conditions.write()
+        # once the write method is implemented in HydroMT-SFINCS
+        self.sfincs_model.grid.write_map(
+            map_fn=self.path / "sfincs.ini",
+            data=self.sfincs_model.grid.data["zs"].values,
+            mask=self.sfincs_model.grid.mask.values,
+        )
+        self.sfincs_model.config.write()
+
+        initial_water_volume_m3: float = self.get_initial_water_volume(
+            initial_level=initial_level
+        )
+        self.total_initial_water_volume_m3 = initial_water_volume_m3
+        self.total_discharge_volume_m3 += initial_water_volume_m3
+
+        self.print_forcing_volume()
+        self.logger.info(
+            f"River initial water levels set for {filled_cells} burned river cells."
+        )
+        return initial_level
 
     def get_outflow_volume(self) -> float:
         """Compute the net water volume that flowed out across the boundary observation lines.
@@ -2653,6 +2908,36 @@ class SFINCSSimulation:
     def root_path(self) -> Path:
         """Returns the root directory for the SFINCS model files."""
         return self.sfincs_root_model.path
+
+    @property
+    def is_subgrid(self) -> bool:
+        """Returns whether the SFINCS model uses subgrid mode.
+
+        Returns:
+            True if the SFINCS model uses subgrid mode, False otherwise.
+        """
+        return self.sfincs_root_model.is_subgrid
+
+    @property
+    def subgrid_dem_path(self) -> Path:
+        """Returns the path to the subgrid DEM file (dep_subgrid.tif).
+
+        Returns:
+            Path to the subgrid DEM file.
+        """
+        return self.sfincs_root_model.subgrid_dem_path
+
+    @property
+    def bed_elevation(self) -> xr.DataArray:
+        """Returns the bed elevation grid of the SFINCS model.
+
+        In subgrid mode, this is the minimum subgrid elevation in each cell (z_zmin).
+        In non-subgrid mode, this is the burned cell elevation (dep).
+
+        Returns:
+            The bed elevation grid as an xarray DataArray.
+        """
+        return self.sfincs_root_model.bed_elevation
 
     @property
     def path(self) -> Path:

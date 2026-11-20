@@ -9,6 +9,7 @@ from geb.hydrology.landsurface.constants import (
     KELVIN_OFFSET,
     LATENT_HEAT_FUSION_J_PER_KG,
     MAX_SNOW_DENSITY_KG_PER_M3,
+    MIN_ACTIVE_SNOW_SWE_M,
     RHO_WATER_KG_PER_M3,
     SNOW_EMISSIVITY,
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
@@ -64,17 +65,28 @@ def _snow_enthalpy(
 
 
 def test_discriminate_precipitation_threshold() -> None:
-    """Precipitation at or below freezing should be classified as snowfall."""
-    snowfall, rainfall = discriminate_precipitation(np.float32(0.005), np.float32(0.0))
+    """Snow fraction follows Jennings et al. (2018): mixed phase around 0-2 degC."""
+    precipitation = np.float32(0.005)
 
-    assert math.isclose(snowfall, 0.005, abs_tol=1e-6)
-    assert math.isclose(rainfall, 0.0, abs_tol=1e-6)
+    def snow_fraction(temperature_C: float, relative_humidity_percent: float) -> float:
+        snowfall, rainfall = discriminate_precipitation(
+            precipitation,
+            np.float32(temperature_C),
+            np.float32(relative_humidity_percent),
+        )
+        assert math.isclose(snowfall + rainfall, 0.005, rel_tol=1e-5)
+        return float(snowfall / precipitation)
 
-    snowfall_rain, rainfall_rain = discriminate_precipitation(
-        np.float32(0.005), np.float32(2.0)
-    )
-    assert math.isclose(snowfall_rain, 0.0, abs_tol=1e-6)
-    assert math.isclose(rainfall_rain, 0.005, abs_tol=1e-6)
+    assert snow_fraction(-5.0, 100.0) > 0.99
+    assert snow_fraction(5.0, 100.0) < 0.01
+    # saturated air: about three quarters snow at 0 degC, half at about 0.7 degC
+    assert 0.70 < snow_fraction(0.0, 100.0) < 0.78
+    assert 0.45 < snow_fraction(0.7, 100.0) < 0.55
+    # drier air keeps more snow at the same temperature
+    assert snow_fraction(1.0, 70.0) > snow_fraction(1.0, 100.0)
+    # monotone in temperature
+    fractions = [snow_fraction(t, 90.0) for t in np.arange(-3.0, 4.0, 0.5)]
+    assert all(a >= b for a, b in zip(fractions, fractions[1:]))
 
 
 def test_calculate_snow_metamorphism_compaction_rate_per_s() -> None:
@@ -259,6 +271,7 @@ def test_apply_precipitation_compaction_and_top_layer_transfer() -> None:
     ) = apply_precipitation_compaction_and_top_layer_transfer(
         pr_kg_per_m2_per_s=np.float32(0.002),
         air_temperature_C=np.float32(-3.0),
+        relative_humidity_percent=np.float32(90.0),
         swe_top_m=np.float64(0.049),
         liquid_water_top_m=np.float64(0.0),
         enthalpy_top_J_per_m2=_snow_enthalpy(np.float64(0.049), np.float32(-2.0)),
@@ -269,8 +282,9 @@ def test_apply_precipitation_compaction_and_top_layer_transfer() -> None:
         density_bottom_kg_per_m3=np.float32(300.0),
     )
 
-    assert math.isclose(rainfall_m_per_hour, 0.0, abs_tol=1e-9)
-    assert math.isclose(snowfall_m_per_hour, 0.0072, abs_tol=1e-9)
+    # at -3 degC almost all precipitation is snow (Jennings et al., 2018)
+    assert rainfall_m_per_hour < 0.005 * 0.0072
+    assert math.isclose(rainfall_m_per_hour + snowfall_m_per_hour, 0.0072, rel_tol=1e-5)
     assert math.isclose(swe_top_m, float(MAX_TOP_LAYER_SWE_M), abs_tol=1e-9)
     assert swe_bottom_m > np.float64(0.02)
     assert liquid_water_top_m == np.float64(0.0)
@@ -555,6 +569,7 @@ def _run_snow_scenario_step(
     ) = apply_precipitation_compaction_and_top_layer_transfer(
         pr_kg_per_m2_per_s=pr_kg_per_m2_per_s,
         air_temperature_C=air_temperature_C,
+        relative_humidity_percent=np.float32(90.0),
         swe_top_m=swe_top_m,
         liquid_water_top_m=liquid_water_top_m,
         enthalpy_top_J_per_m2=enthalpy_top_J_per_m2,
@@ -580,6 +595,7 @@ def _run_snow_scenario_step(
             leaf_area_index=np.float32(0.0),
             air_temperature_K=np.float32(air_temperature_C + float(KELVIN_OFFSET)),
             soil_albedo=np.float32(0.2),
+            snow_albedo=np.float32(0.9),
         )
         sensible_heat_W_per_m2, _ = calculate_sensible_heat_flux(
             soil_temperature_C=snow_surface_temp_C,
@@ -1555,7 +1571,7 @@ def test_thin_snow_pack_complete_melting() -> None:
             snow_melt_m_per_hour,
             melt_runoff_m_per_hour,
             _rainfall_m_per_hour,
-            _sublimation_m_per_hour,
+            sublimation_m_per_hour,
             _refreezing_m_per_hour,
         ) = update_snow_mass_and_phase(
             rainfall_m_per_hour=np.float32(0.0),
@@ -1584,11 +1600,15 @@ def test_thin_snow_pack_complete_melting() -> None:
         assert enthalpy_bottom_J_per_m2 == np.float32(0.0)
         assert density_top_kg_per_m3 == FRESH_SNOW_DENSITY_KG_PER_M3
         assert density_bottom_kg_per_m3 == FRESH_SNOW_DENSITY_KG_PER_M3
-        assert math.isclose(float(melt_runoff_m_per_hour), thin_swe, abs_tol=1e-12)
+        assert math.isclose(
+            float(melt_runoff_m_per_hour),
+            thin_swe + float(sublimation_m_per_hour),
+            abs_tol=1e-12,
+        )
 
 
-def test_thin_snow_pack_sublimation_clean_zero() -> None:
-    """Test that thin snow sublimates to zero without negative residual snow water equivalent."""
+def test_thin_snow_pack_sublimation_scaled_by_snow_cover() -> None:
+    """Test that a snow trace sublimates in proportion to the ground it covers."""
     initial_swe_m: np.float64 = np.float64(1.0e-5)
     enthalpy_initial: np.float32 = get_snow_enthalpy_from_temperature(
         initial_swe_m, np.float32(-5.0)
@@ -1625,12 +1645,55 @@ def test_thin_snow_pack_sublimation_clean_zero() -> None:
         activate_layer_thickness_m=np.float32(0.2),
     )
 
-    assert swe_top_m == 0.0
+    _, full_cover_sublimation_m_per_hour = calculate_latent_heat_flux_and_sublimation(
+        np.float32(-5.0),
+        np.float32(-5.0),
+        np.float32(50.0),
+        np.float32(101325.0),
+        np.float32(10.0),
+    )
+    # Snow at air temperature cannot be cooled further by sublimation, so at most the
+    # covered fraction of the full-cover rate sublimates.
+    snow_cover_fraction = float(initial_swe_m / MIN_ACTIVE_SNOW_SWE_M)
+    assert (
+        float(full_cover_sublimation_m_per_hour) * snow_cover_fraction
+        <= float(applied_sublimation_m_per_hour)
+        <= 0.0
+    )
+    assert 0.0 < swe_top_m <= initial_swe_m
+    assert math.isclose(
+        swe_top_m, initial_swe_m + applied_sublimation_m_per_hour, rel_tol=1e-6
+    )
     assert swe_bottom_m == 0.0
     assert liquid_water_top_m == 0.0
-    assert enthalpy_top_J_per_m2 == np.float32(0.0)
-    assert density_top_kg_per_m3 == FRESH_SNOW_DENSITY_KG_PER_M3
-    assert math.isclose(float(applied_sublimation_m_per_hour), -1.0e-5, abs_tol=1e-12)
+
+
+def test_snow_trace_above_freezing_condenses_little() -> None:
+    """Test that condensation onto a snow trace in warm humid air stays below its mass.
+
+    Rain and snow fall together between about -1 and +3 degC, so traces of wet snow
+    lie on warm ground during rain. Vapour condenses only on the covered part.
+    """
+    initial_swe_m: np.float64 = np.float64(1.0e-5)
+    outputs = update_snow_mass_and_phase(
+        rainfall_m_per_hour=np.float32(0.0),
+        swe_top_m=initial_swe_m,
+        liquid_water_top_m=np.float64(0.0),
+        enthalpy_top_J_per_m2=np.float32(0.0),
+        density_top_kg_per_m3=FRESH_SNOW_DENSITY_KG_PER_M3,
+        swe_bottom_m=np.float64(0.0),
+        liquid_water_bottom_m=np.float64(0.0),
+        enthalpy_bottom_J_per_m2=np.float32(0.0),
+        density_bottom_kg_per_m3=FRESH_SNOW_DENSITY_KG_PER_M3,
+        air_temperature_C=np.float32(3.0),
+        vapor_pressure_air_Pa=np.float32(719.0),  # 95 % relative humidity
+        air_pressure_Pa=np.float32(101325.0),
+        wind_10m_m_per_s=np.float32(5.0),
+        activate_layer_thickness_m=np.float32(0.2),
+    )
+    condensation_m_per_hour = float(outputs[11])
+    assert condensation_m_per_hour > 0.0
+    assert condensation_m_per_hour < 0.05 * initial_swe_m
 
 
 def test_thin_snow_freeze_thaw_cycling_stability() -> None:
@@ -2013,6 +2076,7 @@ def test_snow_radiation_canopy_shading() -> None:
         leaf_area_index=np.float32(0.0),
         air_temperature_K=np.float32(273.15),
         soil_albedo=np.float32(0.2),
+        snow_albedo=np.float32(0.9),
     )
 
     # Forest canopy (LAI = 4.0)
@@ -2024,6 +2088,7 @@ def test_snow_radiation_canopy_shading() -> None:
         leaf_area_index=np.float32(4.0),
         air_temperature_K=np.float32(273.15),
         soil_albedo=np.float32(0.2),
+        snow_albedo=np.float32(0.9),
     )
 
     # Shaded snow receives less net radiation during high solar periods
@@ -2051,3 +2116,84 @@ def test_sublimation_clamped_below_minus_100() -> None:
         )
         assert np.isfinite(latent_flux)
         assert np.isfinite(subl_rate)
+
+
+def test_update_snow_albedo() -> None:
+    """Test snow albedo aging (Douville et al., 1995): decay, refresh and reset."""
+    from geb.hydrology.landsurface.snow_glaciers import (
+        SNOW_ALBEDO_FRESH,
+        SNOW_ALBEDO_MIN,
+        update_snow_albedo,
+    )
+
+    day = np.float32(86400.0)
+    swe = np.float32(0.1)
+    # Dry snow darkens linearly by 0.008 per day.
+    dry = update_snow_albedo(np.float32(0.85), np.float32(0.0), swe, False, day)
+    np.testing.assert_allclose(dry, 0.842, rtol=1e-5)
+    # Melting snow decays exponentially towards the minimum.
+    wet = update_snow_albedo(np.float32(0.85), np.float32(0.0), swe, True, day)
+    np.testing.assert_allclose(wet, 0.5 + 0.35 * np.exp(-0.24), rtol=1e-5)
+    assert wet < dry
+    # Ten days of melt end close to, but not below, the minimum.
+    albedo = np.float32(0.85)
+    for _ in range(240):
+        albedo = update_snow_albedo(albedo, np.float32(0.0), swe, True, day / 24)
+    assert SNOW_ALBEDO_MIN <= albedo < 0.6
+    # 10 mm of fresh snow restores the fresh-snow albedo.
+    refreshed = update_snow_albedo(albedo, np.float32(0.01), swe, False, day / 24)
+    np.testing.assert_allclose(refreshed, SNOW_ALBEDO_FRESH, rtol=1e-5)
+    # Without snow the albedo resets.
+    assert (
+        update_snow_albedo(
+            np.float32(0.6), np.float32(0.0), np.float32(0.0), False, day
+        )
+        == SNOW_ALBEDO_FRESH
+    )
+
+
+def test_redistribute_snow_along_drainage_direction() -> None:
+    """Test that snow above the holding capacity moves downslope and mass is conserved."""
+    from geb.hydrology.landsurface.snow_glaciers import (
+        get_snow_holding_capacity_m,
+        redistribute_snow_along_drainage_direction,
+    )
+
+    # Three grid cells in a chain 0 -> 1 -> 2 (outlet); cell 1 has two HRUs.
+    grid_to_HRU = np.array([1, 3, 4], dtype=np.int32)
+    upstream_to_downstream = np.array([0, 1, 2], dtype=np.int32)
+    downstream_cell = np.array([1, 2, 2], dtype=np.int32)
+    area = np.array([100.0, 50.0, 50.0, 100.0], dtype=np.float32)
+    capacity = np.array([0.1, 0.1, 0.5, 2.0], dtype=np.float32)
+    swe = np.array([[0.4, 0.6], [0.0, 0.0], [0.1, 0.0], [0.0, 0.0]], dtype=np.float64)
+    enthalpy = np.array(
+        [[-100.0, -300.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], dtype=np.float32
+    )
+    mass_before = (swe.sum(axis=1) * area).sum()
+    enthalpy_before = (enthalpy.sum(axis=1) * area).sum()
+
+    moved = redistribute_snow_along_drainage_direction(
+        swe,
+        enthalpy,
+        capacity,
+        area,
+        grid_to_HRU,
+        upstream_to_downstream,
+        downstream_cell,
+    )
+
+    np.testing.assert_allclose((swe.sum(axis=1) * area).sum(), mass_before)
+    np.testing.assert_allclose(
+        (enthalpy.sum(axis=1) * area).sum(), enthalpy_before, rtol=1e-5
+    )
+    np.testing.assert_allclose(moved, 90.0)  # 0.9 m on 100 m2 left HRU 0
+    np.testing.assert_allclose(swe[0].sum(), 0.1)  # trimmed to capacity
+    np.testing.assert_allclose(swe[1].sum(), 0.1)  # cell 1 filled to capacity
+    np.testing.assert_allclose(swe[2].sum(), 0.5)
+    # 90 m3 arrives in cell 1, which has room for 5 + 20 m3; the rest reaches cell 2.
+    np.testing.assert_allclose(swe[3].sum(), 0.65)
+    # Steep slopes hold less snow than gentle ones, never more than the maximum.
+    capacity = get_snow_holding_capacity_m(
+        np.array([0.0, 0.3, 1.0], dtype=np.float32), 2.0
+    )
+    assert capacity[0] == 2.0 and capacity[2] < capacity[1] <= 2.0

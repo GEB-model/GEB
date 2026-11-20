@@ -4,6 +4,8 @@ import logging
 import os
 from typing import Any
 
+from geb.workflows.io import apply_shared_permissions
+
 from .aquastat import AQUASTAT
 from .ar6 import AR6
 from .base import Adapter
@@ -15,6 +17,7 @@ from .destination_earth import DestinationEarth
 from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
 from .ecmwf_geopotential import ECMWFGeopotential
+from .esa_cci_land_cover_pft import ESACCILandCoverPFT
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
@@ -857,6 +860,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://zenodo.org/records/7912730",
         },
     },
+    "esa_cci_land_cover_pft_2020": {
+        "adapter": ESACCILandCoverPFT(
+            folder="esa_cci_land_cover_pft",
+            local_version=1,
+            filename="esa_cci_land_cover_pft_2020.nc",
+            cache="global",
+        ),
+        "url": "https://dap.ceda.ac.uk/neodc/esacci/land_cover/data/pft/v2.0.8/ESACCI-LC-L4-PFT-Map-300m-P1Y-2020-v2.0.8.nc",
+        "source": {
+            "name": "ESA CCI Land Cover plant functional types (PFT) v2.0.8",
+            "author": "Harper et al. (2023)",
+            "version": "2.0.8, 2020",
+            "license": "CC BY 4.0",
+            "url": "https://catalogue.ceda.ac.uk/uuid/26a0f46c95ee4c29b5c650b129aab788",
+            "paper_doi": "10.5194/essd-15-1465-2023",
+        },
+    },
     "esa_worldcover_2021": {
         "adapter": ESAWorldCover(),
         "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2021_AWS_V2",
@@ -1400,11 +1420,30 @@ class DataCatalog:
         Returns:
             The data catalog entry as a dictionary.
         """
-        return self.catalog[name]["adapter"].fetch(
+        adapter = self.catalog[name]["adapter"].fetch(
             url=self.catalog[name]["url"],
             *args,
             **kwargs,
         )
+        self._share_global_cache(self.catalog[name]["adapter"])
+        return adapter
+
+    def _share_global_cache(self, adapter: Adapter) -> None:
+        """Make the data of an adapter in the global cache accessible to other users.
+
+        Only applies when the GEB_SHARE_GLOBAL_CACHE environment variable is "true"
+        and the adapter uses the global cache. The local cache is never changed.
+
+        Args:
+            adapter: The adapter whose data should be shared.
+        """
+        if os.getenv("GEB_SHARE_GLOBAL_CACHE", "false").lower() != "true":
+            return
+        if adapter.cache != "global":
+            return
+        # the dataset folder itself is created by Adapter.root and may be new
+        apply_shared_permissions(adapter.root.parent, recursive=False)
+        apply_shared_permissions(adapter.root)
 
     def size(self, name: str | None = None, format: str | None = "GB") -> int | str:
         """Calculate the total size on disk for specified data entries.
@@ -1480,6 +1519,7 @@ class DataCatalog:
                 if not adapter.is_ready:
                     print(f"Fetching {name}...")
                     adapter.fetch(url=entry["url"])
+                    self._share_global_cache(adapter)
                     print(f"Fetched {name} to {adapter.path}")
 
         print("All global data fetched, catalog size:", self.size(format="GB"))

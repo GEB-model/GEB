@@ -22,11 +22,9 @@ setup_cell_area:
 
 setup_hydrography:
 
-setup_retention_basins:
-  max_storage_m3_to_min_shreve_stream_order_function: "(x**0.5) / 100"
-  dominant_river_search_radius_m: 2000.0
-
 setup_elevation:
+
+setup_grid_elevation:
 
 setup_floodplains:
 
@@ -36,7 +34,10 @@ setup_regions_and_land_use:
   region_database: GADM_level1
   ISO3_column: GID_0
 
+setup_elevation_zones:
+
 setup_geomorphology:
+  channel_initiation_area_km2: 0.2
   
 setup_economic_data:
 
@@ -45,6 +46,12 @@ setup_soil:
 setup_vegetation:
 
 setup_waterbodies:
+
+setup_river_surface_profiles:
+
+setup_retention_basins:
+  max_storage_m3_to_min_shreve_stream_order_function: "(x**0.5) / 100"
+  dominant_river_search_radius_m: 2000.0
 
 setup_groundwater:
 

@@ -12,6 +12,7 @@ from typing import cast
 import netCDF4  # noqa: F401  # Needed to solve: https://github.com/pydata/xarray/issues/7259
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import rioxarray  # noqa: F401  # needed for rioxarray to register itself as an xarray extension
 import xarray as xr
 from dotenv import load_dotenv
@@ -31,9 +32,17 @@ load_dotenv()
 SFINCS_VERSION: str = "2.5.0"
 SFINCS_RELEASE_NAME: str = "Hautacam"
 
+# Headers for map tile requests: the OpenStreetMap tile usage policy requires a user agent
+# that identifies the application (the default of contextily is blocked).
+TILE_REQUEST_HEADERS: dict[str, str] = {
+    "User-Agent": "GEB (https://github.com/GEB-model/GEB)"
+}
+
 # Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
 if Path("/research/BETA-IVM-HPC/GEB").exists():
     os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/datacatalog/"
+    # make data written to the global cache readable by all users and writable by the group
+    os.environ["GEB_SHARE_GLOBAL_CACHE"] = os.getenv("GEB_SHARE_GLOBAL_CACHE", "true")
     os.environ["SFINCS_BINARY"] = os.getenv(
         "SFINCS_BINARY",
         f"/research/BETA-IVM-HPC/GEB/sfincs/bin/sfincs-{SFINCS_VERSION}",
@@ -52,6 +61,7 @@ if Path("/research/BETA-IVM-HPC/GEB").exists():
     )
 elif Path("/gpfs/work5/0/prjs2035/GEB").exists():
     os.environ["GEB_DATA_ROOT"] = "/gpfs/work5/0/prjs2035/GEB/datacatalog/"
+    os.environ["GEB_SHARE_GLOBAL_CACHE"] = os.getenv("GEB_SHARE_GLOBAL_CACHE", "true")
     os.environ["SFINCS_BINARY"] = os.getenv(
         "SFINCS_BINARY",
         f"/gpfs/work5/0/prjs2035/GEB/sfincs/bin/sfincs-{SFINCS_VERSION}",
@@ -69,6 +79,7 @@ elif Path("/gpfs/work5/0/prjs2035/GEB").exists():
         "/gpfs/work5/0/prjs2035/GEB/containers/sfincs-gpu.coldeze_combo_ccall.sif",
     )  # not implemented yet
 else:
+    os.environ["GEB_SHARE_GLOBAL_CACHE"] = os.getenv("GEB_SHARE_GLOBAL_CACHE", "false")
     os.environ["SFINCS_RUNTIME"] = os.getenv("SFINCS_RUNTIME", "docker")
     os.environ["SFINCS_CONTAINER"] = os.getenv(
         "SFINCS_CONTAINER",
@@ -191,6 +202,9 @@ else:
 # xarray uses bottleneck for some operations to speed up computations
 # however, some implementations are numerically unstable, so we disable it
 xr.set_options(use_bottleneck=False, keep_attrs=True)
+
+# pandas 4 will return a BaseOffset object instead of a string from infer_freq
+pd.set_option("future.infer_freq_returns_offset", True)
 
 # raise all numpy warnings as errors, to catch potential issues early on
 np.seterr(divide="raise", over="raise", under="ignore", invalid="raise")
