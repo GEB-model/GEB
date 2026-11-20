@@ -21,7 +21,9 @@ from geb.hydrology.landsurface.water import (
     calculate_hillslope_saturated_area_fraction,
     generate_rainfall_lookup_table,
     get_bubbling_pressure_m_positive,
-    get_perched_store_filling,
+    get_bulk_density_with_organic_matter,
+    get_hillslope_store_filling,
+    get_macropore_conductivity_jarvis,
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
     get_soil_moisture_at_pressure,
@@ -1853,38 +1855,96 @@ def test_calculate_hillslope_saturated_area_fraction() -> None:
         ) == pytest.approx(expected, abs=1e-6)
 
 
-def test_get_perched_store_filling() -> None:
+def test_get_hillslope_store_filling() -> None:
     """Free water counts for the saturated zone only where it rests on filled layers."""
     height = np.array([0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 2.00], dtype=np.float32)
     fc = (0.25 * height).astype(np.float32)
     ws = (0.45 * height).astype(np.float32)
 
-    def filling(free_fraction: list[float], depth: float = 1.0) -> float:
+    def filling(free_fraction: list[float], groundwater_depth: float = 100.0) -> float:
         water = (fc + np.array(free_fraction, dtype=np.float32) * (ws - fc)).astype(
             np.float32
         )
         return float(
-            get_perched_store_filling(water, fc, ws, height, np.float32(depth))
+            get_hillslope_store_filling(
+                water, fc, ws, height, np.float32(groundwater_depth)
+            )
         )
 
     # nothing above field capacity: empty store
     assert filling([0, 0, 0, 0, 0, 0, 0]) == 0.0
     # a wet topsoil over a subsoil that still takes up water: the water is on its way
-    # down, nothing is perched
+    # down, only the layers that rest on a filled layer are perched
     assert filling([1, 1, 1, 0, 0, 0, 0]) == pytest.approx(
-        (0.05 + 0.10) / 1.0, abs=1e-6
+        (0.05 + 0.10) / 4.0, abs=1e-6
     )
     assert filling([1, 0, 0, 0, 0, 0, 0]) == 0.0
-    # the whole structured metre full over a full layer below: the store is full
-    assert filling([1, 1, 1, 1, 1, 1, 0]) == pytest.approx(1.0)
-    # the structured metre full, but the layer below it still empty: the lowest
-    # layer of the store (0.4 m of the 1.0 m) is not perched
-    assert filling([1, 1, 1, 1, 1, 0, 0]) == pytest.approx(0.6, abs=1e-6)
-    # filled from below (half-full layer under the store): the lowest store layer
-    # counts for half
-    assert filling([0, 0, 0, 0, 1, 0.5, 0]) == pytest.approx(0.4 * 0.5, abs=1e-6)
-    # a shallower structure: the store is the top 0.3 m
-    assert filling([1, 1, 1, 1, 0, 0, 0], depth=0.3) == pytest.approx(1.0)
+    # the whole soil full: the store is full
+    assert filling([1, 1, 1, 1, 1, 1, 1]) == pytest.approx(1.0)
+    # full to 2 m, the lowest layer still empty: the layer above it is not perched
+    assert filling([1, 1, 1, 1, 1, 1, 0]) == pytest.approx(1.0 / 4.0, abs=1e-6)
+    # filled from below: the lowest layer rests on the rock and counts fully, the
+    # layer above it in proportion to the filling of the lowest layer
+    assert filling([0, 0, 0, 0, 0, 1, 0.5]) == pytest.approx(
+        (1.0 * 0.5 + 2.0 * 0.5) / 4.0, abs=1e-6
+    )
+    # a water table at 2 m: the layer below it is groundwater and not part of the
+    # store, so the same water above it fills the store completely
+    assert filling([1, 1, 1, 1, 1, 1, 1], groundwater_depth=2.0) == pytest.approx(1.0)
+    assert filling([0, 0, 0, 0, 0, 1, 1], groundwater_depth=2.0) == pytest.approx(
+        0.5, abs=1e-6
+    )
+    # a water table at the surface: no drainable pore space left, the store is full
+    assert filling([1, 1, 1, 1, 1, 1, 1], groundwater_depth=0.0) == pytest.approx(1.0)
+
+
+def test_get_bulk_density_with_organic_matter() -> None:
+    """The forest topsoil gets the density of the mixing rule of Adams (1973)."""
+    # 0-5, 5-15, 15-30 cm and one deeper layer; two columns with the same soil
+    bulk_density = np.array([[1.2, 1.3, 1.4, 1.5]] * 2, dtype=np.float32)
+    organic_matter = np.array([[14.0, 7.0, 3.5, 1.0]] * 2, dtype=np.float32)
+    out = get_bulk_density_with_organic_matter(
+        bulk_density, organic_matter, np.array([True, False])
+    )
+    # mineral density from the 15-30 cm layer: (1 - f) / (1 / BD - f / 0.223)
+    mineral = (1 - 0.035) / (1 / 1.4 - 0.035 / 0.223)
+    assert mineral == pytest.approx(1.731, abs=1e-3)
+    for layer, fraction in ((0, 0.14), (1, 0.07)):
+        expected = 1 / (fraction / 0.223 + (1 - fraction) / mineral)
+        assert out[0, layer] == pytest.approx(expected, rel=1e-5)
+        assert out[0, layer] < bulk_density[0, layer]
+    assert out[0, 0] == pytest.approx(0.889, abs=1e-3)
+    # deeper layers and land that is not forest keep the mapped density
+    np.testing.assert_array_equal(out[0, 2:], bulk_density[0, 2:])
+    np.testing.assert_array_equal(out[1], bulk_density[1])
+    # a mapped density below that of the rule is kept
+    loose = bulk_density.copy()
+    loose[0, 0] = 0.7
+    assert get_bulk_density_with_organic_matter(
+        loose, organic_matter, np.array([True, False])
+    )[0, 0] == pytest.approx(0.7)
+    # the input is not changed
+    assert bulk_density[0, 0] == pytest.approx(1.2)
+
+
+def test_get_macropore_conductivity_jarvis() -> None:
+    """Value check of Table 7 of Jarvis et al. (2013), and the effect of tillage."""
+    conductivity_mm_per_h = (
+        get_macropore_conductivity_jarvis(
+            clay_percentage=np.array([20.0, 20.0, 40.0], dtype=np.float32),
+            bulk_density_kg_per_dm3=np.array([1.3, 1.3, 1.3], dtype=np.float32),
+            is_arable=np.array([False, True, False]),
+        )
+        * 3.6e6
+    )
+    # 10^(3.206 + 1.736 x 0.2 - 1.100 x 1.3) = 10^2.1232
+    assert conductivity_mm_per_h[0] == pytest.approx(10**2.1232, rel=1e-4)
+    # arable land: 10^-0.372 = 0.42 of that
+    assert conductivity_mm_per_h[1] / conductivity_mm_per_h[0] == pytest.approx(
+        10**-0.372, rel=1e-4
+    )
+    # more clay: more of the conductivity is in the macropores
+    assert conductivity_mm_per_h[2] > conductivity_mm_per_h[0]
 
 
 def test_kv_wosten_takes_organic_matter() -> None:

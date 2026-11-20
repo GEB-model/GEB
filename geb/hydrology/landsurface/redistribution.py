@@ -3,6 +3,7 @@
 import numpy as np
 from numba import njit
 
+from geb.geb_types import ArrayFloat32
 from geb.numba_config import NUMBA_CACHE
 from geb.workflows.numba_stack_array import stack_empty
 
@@ -13,6 +14,7 @@ from .constants import (
     SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
 )
+from .water import set_hillslope_store
 
 _N_SOIL_LAYERS_PLUS_ONE: int = N_SOIL_LAYERS + 1
 
@@ -235,50 +237,158 @@ def fill_soil_below_water_table(
 
 
 @njit(cache=NUMBA_CACHE, fastmath=True, inline="always")
-def get_interflow_release_m_per_s(
-    free_water_m: np.float32,
-    drainable_capacity_m: np.float32,
-    interflow_drainage_rate_per_s: np.float32,
-) -> tuple[np.float32, bool]:
-    """Outflow of free water at the foot of a hillslope (kinematic storage model).
+def set_hillslope_interflow(
+    water_content_m: ArrayFloat32,
+    water_content_field_capacity_m: ArrayFloat32,
+    water_content_saturated_m: ArrayFloat32,
+    water_content_residual_m: ArrayFloat32,
+    soil_layer_height_m: ArrayFloat32,
+    horizontal_saturated_hydraulic_conductivity_m_per_s: ArrayFloat32,
+    interflow_structural_conductivity_m_per_s: np.float32,
+    interflow_structural_depth_m: np.float32,
+    slope_m_per_m: np.float32,
+    hillslope_length_m: np.float32,
+    groundwater_depth_m: np.float32,
+    liquid_fractions: ArrayFloat32,
+    q_interflow: ArrayFloat32,
+    dq_interflow_dS: ArrayFloat32,
+) -> None:
+    """Lateral outflow of the soil at the foot of the hillslope (kinematic storage model).
 
     Sloan, P. G., & Moore, I. D. (1984). Modeling subsurface stormflow on steeply
     sloping forested watersheds. Water Resources Research, 20(12), 1815-1822,
-    doi:10.1029/WR020i012p01815. The saturated zone is a wedge that thickens
-    linearly towards the foot of the hillslope, and the outflow is the saturated
-    thickness at the foot times K sin(slope):
+    doi:10.1029/WR020i012p01815. The soil above the rock is one store. Its saturated
+    zone is a wedge that rests on the base and thickens linearly towards the foot of
+    the hillslope, where it leaves the soil:
 
     - While the wedge stays inside the soil (their eq. 9) it is twice as thick at the
-      foot as on average, so the outflow per unit area is 2 K sin(slope) H / L, with H the
-      mean saturated thickness (free water / drainable porosity). This is the case up
-      to half filling of the drainable pores.
-    - Above half filling the wedge reaches the top of the soil at the foot (their
-      eq. 11-12). The thickness at the foot cannot grow further, so the subsurface
-      outflow stays at K sin(slope) D / L, with D the soil thickness. The additional water
-      widens the part of the slope that is saturated to the surface (the share
-      2 S - 1 at relative filling S), where rain runs off over the surface (see
+      foot as on average. With S the share of the drainable pores that hold perched
+      water, the lower 2 S of the pore space is saturated at the foot.
+    - Above half filling (S > 0.5) the wedge reaches the surface at the foot (their
+      eq. 11-12): the whole soil is saturated there and the subsurface outflow cannot
+      grow further. The additional water widens the part of the slope that is
+      saturated to the surface (2 S - 1), where rain runs off (see
       calculate_hillslope_saturated_area_fraction).
 
-    Sloan and Moore describe one soil of uniform conductivity; here the rule is
-    applied to each soil layer with its own lateral conductivity.
+    The outflow per unit width is the hydraulic gradient, sin(slope) (their eq. 6),
+    times the transmissivity of the zone that is saturated at the foot. Sloan and
+    Moore have one conductivity; here the lateral conductivity differs per layer (soil
+    matrix plus the structure of the soil, which declines with depth), so the
+    transmissivity is the sum of conductivity times saturated thickness over the
+    layers, counted from the base up. When the wedge rises into the conductive upper
+    layers at the foot of the slope the outflow increases steeply. For one
+    conductivity K and soil thickness D this is their result, 2 K sin(slope) S D / L up
+    to half filling and K sin(slope) D / L above it.
+
+    The layer thicknesses are vertical and Sloan and Moore measure the thickness
+    normal to the slope, a factor cos(slope); the hillslope length is horizontal, as
+    the water depths are per unit of horizontal area. The slope term is therefore
+    sin cos = s / (1 + s^2).
+
+    The store (perched water and drainable pore space, see set_hillslope_store) is
+    the one that also gives the saturated area for the infiltration. The outflow is
+    taken from the layers in proportion to their perched water.
 
     Args:
-        free_water_m: Water above field capacity that is free to drain sideways (m).
-        drainable_capacity_m: Drainable pore space in which that water sits (m).
-        interflow_drainage_rate_per_s: 2 K sin(slope) cos(slope) / (drainable
-            porosity * hillslope length) (1/s), for vertical layer thickness and
-            horizontal hillslope length.
-
-    Returns:
-        The outflow (m/s) and whether it still rises with the water content (False
-        when the wedge has reached the top of the layer, or without free water).
+        water_content_m: Water content per layer (m).
+        water_content_field_capacity_m: Water content at field capacity per layer (m).
+        water_content_saturated_m: Water content at saturation per layer (m).
+        water_content_residual_m: Residual water content per layer (m).
+        soil_layer_height_m: Thickness per layer (m).
+        horizontal_saturated_hydraulic_conductivity_m_per_s: Lateral conductivity of
+            the soil matrix per layer (m/s).
+        interflow_structural_conductivity_m_per_s: Lateral conductivity of the soil
+            structure at the surface (m/s).
+        interflow_structural_depth_m: e-folding depth of the structural conductivity (m).
+        slope_m_per_m: Slope of the hillslope (m/m).
+        hillslope_length_m: Horizontal length of the hillslope (m).
+        groundwater_depth_m: Depth of the water table below the surface (m).
+        liquid_fractions: Unfrozen fraction of the water per layer (-).
+        q_interflow: Output: lateral outflow per layer (m/s).
+        dq_interflow_dS: Output: its derivative to the effective saturation of the
+            layer (m/s), for the implicit solver.
     """
-    if free_water_m <= np.float32(0.0):
-        return np.float32(0.0), False
-    half_capacity_m: np.float32 = np.float32(0.5) * drainable_capacity_m
-    if free_water_m < half_capacity_m:
-        return interflow_drainage_rate_per_s * free_water_m, True
-    return interflow_drainage_rate_per_s * half_capacity_m, False
+    perched_m = stack_empty(N_SOIL_LAYERS, np.float32)
+    free_m = stack_empty(N_SOIL_LAYERS, np.float32)
+    capacity_m = stack_empty(N_SOIL_LAYERS, np.float32)
+    transmissivity_m2_per_s = stack_empty(N_SOIL_LAYERS, np.float32)
+
+    total_perched_m, total_capacity_m = set_hillslope_store(
+        water_content_m,
+        water_content_field_capacity_m,
+        water_content_saturated_m,
+        soil_layer_height_m,
+        groundwater_depth_m,
+        perched_m,
+        free_m,
+        capacity_m,
+    )
+    layer_top_depth_m: np.float32 = np.float32(0.0)
+    for i in range(N_SOIL_LAYERS):
+        q_interflow[i] = np.float32(0.0)
+        dq_interflow_dS[i] = np.float32(0.0)
+        # transmissivity of the layer when it is saturated: lateral conductivity
+        # (matrix plus structure at the middle of the layer) times its thickness
+        # above the water table
+        lateral_conductivity_m_per_s: np.float32 = (
+            horizontal_saturated_hydraulic_conductivity_m_per_s[i]
+            + interflow_structural_conductivity_m_per_s
+            * np.exp(
+                -(layer_top_depth_m + np.float32(0.5) * soil_layer_height_m[i])
+                / interflow_structural_depth_m
+            )
+        )
+        above_water_table: np.float32 = min(
+            max(
+                (groundwater_depth_m - layer_top_depth_m) / soil_layer_height_m[i],
+                np.float32(0.0),
+            ),
+            np.float32(1.0),
+        )
+        transmissivity_m2_per_s[i] = (
+            lateral_conductivity_m_per_s * above_water_table * soil_layer_height_m[i]
+        )
+        layer_top_depth_m += soil_layer_height_m[i]
+
+    if total_perched_m <= np.float32(0.0) or total_capacity_m <= np.float32(0.0):
+        return
+
+    # drainable pore space that is saturated at the foot of the slope, from the base up
+    saturated_at_foot_m: np.float32 = min(
+        np.float32(2.0) * total_perched_m, total_capacity_m
+    )
+    transmissivity_at_foot_m2_per_s: np.float32 = np.float32(0.0)
+    for i in range(N_SOIL_LAYERS - 1, -1, -1):
+        if saturated_at_foot_m <= np.float32(0.0):
+            break
+        if capacity_m[i] <= np.float32(0.0):
+            continue
+        saturated_m: np.float32 = min(capacity_m[i], saturated_at_foot_m)
+        transmissivity_at_foot_m2_per_s += (
+            transmissivity_m2_per_s[i] * saturated_m / capacity_m[i]
+        )
+        saturated_at_foot_m -= saturated_m
+
+    sine_times_cosine_of_slope: np.float32 = slope_m_per_m / (
+        np.float32(1.0) + slope_m_per_m * slope_m_per_m
+    )
+    outflow_m_per_s: np.float32 = (
+        sine_times_cosine_of_slope
+        * transmissivity_at_foot_m2_per_s
+        / hillslope_length_m
+    )
+    for i in range(N_SOIL_LAYERS):
+        if perched_m[i] <= np.float32(0.0):
+            continue
+        q_interflow[i] = (
+            outflow_m_per_s * perched_m[i] / total_perched_m * liquid_fractions[i]
+        )
+        # the outflow of a layer falls with its own free water
+        dq_interflow_dS[i] = (
+            q_interflow[i]
+            / free_m[i]
+            * (water_content_saturated_m[i] - water_content_residual_m[i])
+        )
 
 
 @njit(cache=NUMBA_CACHE, fastmath=True, inline="always")
@@ -453,104 +563,23 @@ def distribute_soil_water_ross(
         dK_dS[i] = pore_size_index_i * (K[i] / s_eff)
         dphi_dS[i] = phi_exponent_i * (phi[i] / s_eff)
 
-        # Interflow calculation:
-        # Lateral subsurface flow is driven by the land surface slope and saturated
-        # lateral hydraulic conductivity (kinematic wave approximation on a hillslope).
-        # Interflow operates on free gravitational water above field capacity.
-        # Water below field capacity is bound by capillary matrix suction and does not
-        # drain laterally to channels.
-        # The part of the layer below the water table is groundwater: it leaves through
-        # the groundwater drain, not as interflow. Only water above field capacity in
-        # the part above the water table is free to drain sideways.
-        layer_top_depth_m: np.float32 = np.float32(0.0)
-        for j in range(i):
-            layer_top_depth_m += soil_layer_height[j]
-        submerged_fraction: np.float32 = min(
-            max(
-                (layer_top_depth_m + soil_layer_height[i] - groundwater_depth_m)
-                / soil_layer_height[i],
-                np.float32(0.0),
-            ),
-            np.float32(1.0),
-        )
-        free_water_m = max(
-            np.float32(0.0),
-            water_content_m[i]
-            - water_content_field_capacity_m[i]
-            - submerged_fraction
-            * (water_content_saturated_m[i] - water_content_field_capacity_m[i]),
-        )
-        drainable_capacity_m = max(
-            np.float32(1e-6),
-            water_content_saturated_m[i] - water_content_field_capacity_m[i],
-        )
-        drainable_porosity = max(
-            np.float32(1e-6),
-            drainable_capacity_m / soil_layer_height[i],
-        )
-        # Lateral conductivity: the soil matrix plus the structure of the soil (root
-        # and animal channels, pipes, loose aggregated topsoil), which carries most
-        # lateral flow on hillslopes. The structural part is largest at the surface and
-        # declines exponentially with depth; it depends on the land cover.
-        layer_middle_depth_m: np.float32 = (
-            layer_top_depth_m + np.float32(0.5) * soil_layer_height[i]
-        )
-        lateral_K_m_per_s = horizontal_saturated_hydraulic_conductivity_m_per_s[
-            i
-        ] + interflow_structural_conductivity_m_per_s * np.exp(
-            -layer_middle_depth_m / interflow_structural_depth_m
-        )
-        # Kinematic storage model of a hillslope (Sloan and Moore, 1984): the outflow
-        # per unit area is 2 K sin(slope) H / L up to half filling of the drainable pores
-        # and constant above it (see get_interflow_release_m_per_s). The pores of
-        # the part of the layer below the water table are not part of the store.
-        # Slope term. The hydraulic gradient along the slope is the sine of the slope
-        # angle (Sloan and Moore, 1984, eq. 6), not its tangent (the slope in m/m).
-        # Sloan and Moore measure the saturated thickness normal to the slope; the soil
-        # layers here are vertical, and a zone of vertical thickness H is H cos(angle)
-        # thick normal to the slope. The hillslope length is horizontal, as the water
-        # depths are per unit of horizontal area. Together: sin cos = s / (1 + s^2).
-        sine_times_cosine_of_slope: np.float32 = slope_m_per_m / (
-            np.float32(1.0) + slope_m_per_m * slope_m_per_m
-        )
-        interflow_drainage_rate_s = (
-            np.float32(2.0) * lateral_K_m_per_s * sine_times_cosine_of_slope
-        ) / (drainable_porosity * hillslope_length_m)
-        interflow_release_m_per_s, interflow_rises_with_water = (
-            get_interflow_release_m_per_s(
-                free_water_m,
-                (np.float32(1.0) - submerged_fraction) * drainable_capacity_m,
-                interflow_drainage_rate_s,
-            )
-        )
-        q_interflow[i] = interflow_release_m_per_s * liquid_fractions[i]
-        if interflow_rises_with_water:
-            dq_interflow_dS[i] = (
-                interflow_drainage_rate_s * available_capacity * liquid_fractions[i]
-            )
-        else:
-            dq_interflow_dS[i] = np.float32(0.0)
-
-        if i < N_SOIL_LAYERS - 1:
-            # Lateral flow needs a saturated zone, which builds up from the material
-            # below: free water over a layer that still takes up water drains down,
-            # not sideways. The lateral flow of a layer scales with the share of the
-            # drainable pores of the layer below that is filled (at the start of
-            # the step). The lowest layer rests on the rock.
-            perched_fraction: np.float32 = min(
-                np.float32(1.0),
-                max(
-                    np.float32(0.0),
-                    water_content_m[i + 1] - water_content_field_capacity_m[i + 1],
-                )
-                / max(
-                    np.float32(1e-6),
-                    water_content_saturated_m[i + 1]
-                    - water_content_field_capacity_m[i + 1],
-                ),
-            )
-            q_interflow[i] *= perched_fraction
-            dq_interflow_dS[i] *= perched_fraction
+    # Lateral outflow at the foot of the hillslope (interflow), from the soil as one store
+    set_hillslope_interflow(
+        water_content_m,
+        water_content_field_capacity_m,
+        water_content_saturated_m,
+        water_content_residual_m,
+        soil_layer_height,
+        horizontal_saturated_hydraulic_conductivity_m_per_s,
+        interflow_structural_conductivity_m_per_s,
+        interflow_structural_depth_m,
+        slope_m_per_m,
+        hillslope_length_m,
+        groundwater_depth_m,
+        liquid_fractions,
+        q_interflow,
+        dq_interflow_dS,
+    )
 
     # q holds vertical fluxes at layer interfaces:
     # q[0] is the top boundary (no imposed surface infiltration flux here),

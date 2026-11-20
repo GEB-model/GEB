@@ -375,13 +375,7 @@ class LandSurfaceConfig(BaseModel):
     interflow_structural_depth_m: float = Field(
         ...,
         gt=0.0,
-        description="e-folding depth (m) of the structural lateral conductivity used for interflow: K_structure(z) = K_structure(0) exp(-z / depth) at the middle of each layer. The soil layers within this depth are the store whose filling sets the saturated area.",
-    )
-    macropore_infiltration_capacity_mm_per_h: dict[
-        Literal["forest", "grassland", "cropland"], float
-    ] = Field(
-        ...,
-        description="Rate (mm/h) at which water ponding on the unsaturated part of a cell enters macropores (earthworm and root channels, cracks) and bypasses the surface layer to the unfrozen layers below it, filled from the top down, by land type; reduced by the surface crust factor (a crust also seals macropore entrances). Cropland is recognised by its owner (a farmer), also outside the growing season. Sealed land, paddy fields and open water have none. 0 = no macropore infiltration.",
+        description="e-folding depth (m) of the structural lateral conductivity used for interflow: K_structure(z) = K_structure(0) exp(-z / depth) at the middle of each layer.",
     )
     max_snow_holding_capacity_m: float = Field(
         ...,

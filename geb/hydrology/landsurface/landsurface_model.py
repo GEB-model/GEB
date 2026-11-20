@@ -174,8 +174,10 @@ from .water import (
     add_water_to_topwater_and_evaporate_open_water,
     generate_rainfall_lookup_table,
     get_bubbling_pressure_m_positive,
+    get_bulk_density_with_organic_matter,
     get_coarse_fragment_factors,
-    get_perched_store_filling,
+    get_hillslope_store_filling,
+    get_macropore_conductivity_jarvis,
     get_pore_size_index_brakensiek,
     get_regolith_layer_thickness_m,
     get_regolith_vertical_conductivity_factor,
@@ -875,14 +877,19 @@ def land_surface_model(
                 soil_enthalpy_J_per_m2[i, :].sum()
             )
 
-            # Filling of the hillslope store with perched water, for the saturated area:
-            # the free water of the structured soil that rests on filled layers below.
-            dunne_effective_saturation: np.float32 = get_perched_store_filling(
+            groundwater_depth_hour_m: np.float32 = groundwater_depth_previous_day_m[
+                i
+            ] + (
+                groundwater_depth_m[i] - groundwater_depth_previous_day_m[i]
+            ) * np.float32(hour + 1) / np.float32(24.0)
+            # Filling of the hillslope store with perched water, for the saturated
+            # area: the same store that gives the interflow.
+            dunne_effective_saturation: np.float32 = get_hillslope_store_filling(
                 water_content_m=water_content_m[i, :],
                 water_content_field_capacity_m=field_capacity_m,
                 water_content_saturated_m=saturated_water_content_m,
                 soil_layer_height_m=soil_layer_height_cell,
-                structural_depth_m=interflow_structural_depth_m,
+                groundwater_depth_m=groundwater_depth_hour_m,
             )
             # Frost loosens the soil surface and breaks the crust; rain on exposed,
             # snow-free soil builds it again.
@@ -996,10 +1003,7 @@ def land_surface_model(
                 green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
                 topwater_m=topwater_m_cell,
                 gw_ksat_m_per_s=gw_ksat_m_per_s,
-                groundwater_depth_m=groundwater_depth_previous_day_m[i]
-                + (groundwater_depth_m[i] - groundwater_depth_previous_day_m[i])
-                * np.float32(hour + 1)
-                / np.float32(24.0),
+                groundwater_depth_m=groundwater_depth_hour_m,
                 deep_soil_temperature_C=deep_soil_temperature_C[i],
                 max_capillary_rise_m=remaining_capillary_rise_m,
                 interflow_structural_depth_m=interflow_structural_depth_m,
@@ -2152,6 +2156,15 @@ class LandSurface(Module):
         # Identify sealed land use
         is_sealed: ArrayBool = self.HRU.var.land_use_type == SEALED
 
+        # The mapped bulk density of the forest topsoil is too high for the mapped
+        # organic matter: lower it to what the organic matter implies (Adams, 1973).
+        self.HRU.var.bulk_density_kg_per_dm3 = get_bulk_density_with_organic_matter(
+            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+            organic_matter_percentage=organic_carbon_percentage
+            * ORGANIC_MATTER_PER_ORGANIC_CARBON,
+            is_forest=self.HRU.var.land_use_type == FOREST,
+        )
+
         # Prepare soil properties for pedotransfer functions, accounting for compaction in sealed areas
         # Top 30 cm is considered topsoil for unsealed areas (layers 0, 1, 2)
         is_top_soil: TwoDArrayBool = np.zeros_like(
@@ -2592,31 +2605,38 @@ class LandSurface(Module):
         return factor
 
     def get_macropore_infiltration_capacity_m_per_s(self) -> ArrayFloat32:
-        """Macropore infiltration capacity per HRU, by land type (m/s).
+        """Macropore infiltration capacity per HRU (m/s).
 
-        Forest and grassland keep a continuous macropore network (earthworm and root
-        channels); tillage destroys it in the plough layer of cropland, which is
-        recognised by its owner (a farmer), also outside the growing season. Sealed land,
-        paddy fields and open water have none.
+        The saturated conductivity of the macropores of the topsoil, from its clay
+        content, bulk density and land use (Jarvis et al., 2013; see
+        get_macropore_conductivity_jarvis), with the thickness-weighted mean clay
+        content and bulk density of the top 30 cm. Tillage breaks the macropores of
+        arable land, which is recognised by its owner (a farmer), also outside the
+        growing season. Sealed land, paddy fields and open water have none.
 
         Returns:
             Macropore infiltration capacity (m/s), per HRU.
         """
-        capacity_mm_per_h: dict[str, float] = self.model.config["hydrology"][
-            "landsurface"
-        ]["macropore_infiltration_capacity_mm_per_h"]
         land_use_type = self.HRU.var.land_use_type
         is_cropland = self.HRU.var.land_owners != -1
-        capacity = np.zeros(land_use_type.shape, dtype=np.float32)
-        capacity[land_use_type == FOREST] = capacity_mm_per_h["forest"]
-        capacity[(land_use_type == GRASSLAND_LIKE) & ~is_cropland] = capacity_mm_per_h[
-            "grassland"
-        ]
-        capacity[
-            ((land_use_type == GRASSLAND_LIKE) | (land_use_type == NON_PADDY_IRRIGATED))
-            & is_cropland
-        ] = capacity_mm_per_h["cropland"]
-        return capacity / np.float32(1000.0 * 3600.0)
+        topsoil_thickness_m = self.HRU.var.soil_layer_height_m[:, :3]
+        topsoil_clay_percentage = (
+            self.HRU.var.clay_percentage[:, :3] * topsoil_thickness_m
+        ).sum(axis=1) / topsoil_thickness_m.sum(axis=1)
+        topsoil_bulk_density_kg_per_dm3 = (
+            self.HRU.var.bulk_density_kg_per_dm3[:, :3] * topsoil_thickness_m
+        ).sum(axis=1) / topsoil_thickness_m.sum(axis=1)
+        capacity = get_macropore_conductivity_jarvis(
+            clay_percentage=topsoil_clay_percentage,
+            bulk_density_kg_per_dm3=topsoil_bulk_density_kg_per_dm3,
+            is_arable=is_cropland,
+        )
+        has_macropores = (
+            (land_use_type == FOREST)
+            | (land_use_type == GRASSLAND_LIKE)
+            | ((land_use_type == NON_PADDY_IRRIGATED) & is_cropland)
+        )
+        return np.where(has_macropores, capacity, np.float32(0.0)).astype(np.float32)
 
     def get_interflow_structural_conductivity_m_per_s(self) -> ArrayFloat32:
         """Lateral conductivity of the soil structure at the surface per HRU (m/s).

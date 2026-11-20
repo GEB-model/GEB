@@ -12,7 +12,7 @@ from geb.hydrology.landsurface.redistribution import (
     calculate_saturated_matric_flux_potential,
     distribute_soil_water_ross,
     fill_soil_below_water_table,
-    get_interflow_release_m_per_s,
+    set_hillslope_interflow,
 )
 
 from ...testconfig import output_folder
@@ -173,9 +173,9 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
     assert w_new[0] == pytest.approx(w[0], abs=1e-5)
     assert w_new[1] == pytest.approx(w[1], abs=1e-5)
 
-    # Check mass balance
+    # Check mass balance (one float32 step at 1.8 m is 1.2e-7)
     assert np.float32(np.sum(w_new) + lateral_outflow) == pytest.approx(
-        np.float32(np.sum(w)), abs=1e-7
+        np.float32(np.sum(w)), abs=1e-6
     )
     # Check water content bounds
     assert np.all(w_new >= wr)
@@ -2195,32 +2195,105 @@ def test_distribute_soil_water_ross_water_table_in_the_soil() -> None:
     assert lateral_deep == 0.0
 
 
-def test_interflow_release_follows_kinematic_storage_model() -> None:
-    """Interflow rises linearly up to half filling and is constant above it.
+def _hillslope_interflow(
+    free_water_fraction: np.ndarray,
+    structural_conductivity_m_per_s: float = 0.0,
+    slope: float = 0.1,
+) -> tuple[np.ndarray, float, np.ndarray]:
+    """Outflow per layer for a uniform soil with the given free-water filling per layer.
 
-    Sloan and Moore (1984): below half filling the wedge is twice as thick at the
-    foot as on average (eq. 9); above it the thickness at the foot is the soil
-    thickness (eq. 11-12), so the outflow no longer grows.
+    Args:
+        free_water_fraction: Filling of the drainable pores per layer (0-1).
+        structural_conductivity_m_per_s: Structural lateral conductivity at the surface.
+        slope: Slope of the hillslope (m/m).
+
+    Returns:
+        The outflow per layer (m/s), the Sloan and Moore outflow of a wedge that fills
+        the whole soil at the foot, K sin cos D / L (m/s), and the layer thickness.
     """
-    capacity_m = np.float32(0.10)
-    rate_per_s = np.float32(1e-5)
-
-    release, rises = get_interflow_release_m_per_s(
-        np.float32(0.0), capacity_m, rate_per_s
+    height = np.array([0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 1.00], dtype=np.float32)
+    field_capacity = (0.30 * height).astype(np.float32)
+    saturated = (0.40 * height).astype(np.float32)
+    residual = (0.05 * height).astype(np.float32)
+    water = (
+        field_capacity + free_water_fraction * (saturated - field_capacity)
+    ).astype(np.float32)
+    conductivity = np.float32(1e-5)
+    q = np.zeros(N_SOIL_LAYERS, dtype=np.float32)
+    dq = np.zeros(N_SOIL_LAYERS, dtype=np.float32)
+    set_hillslope_interflow(
+        water,
+        field_capacity,
+        saturated,
+        residual,
+        height,
+        np.full(N_SOIL_LAYERS, conductivity, dtype=np.float32),
+        np.float32(structural_conductivity_m_per_s),
+        np.float32(2.0),
+        np.float32(slope),
+        np.float32(200.0),
+        np.float32(100.0),  # water table far below the soil
+        np.ones(N_SOIL_LAYERS, dtype=np.float32),
+        q,
+        dq,
     )
-    assert release == np.float32(0.0)
-    assert not rises
-
-    release, rises = get_interflow_release_m_per_s(
-        np.float32(0.02), capacity_m, rate_per_s
+    assert (dq >= 0.0).all()
+    full_soil_outflow = (
+        float(conductivity) * slope / (1.0 + slope**2) * float(height.sum()) / 200.0
     )
-    np.testing.assert_allclose(release, 0.02 * 1e-5, rtol=1e-5)
-    assert rises
+    return q, full_soil_outflow, height
 
-    # at half filling and above: the outflow of a wedge that fills the soil at the foot
-    for free_water_m in (0.05, 0.075, 0.10):
-        release, rises = get_interflow_release_m_per_s(
-            np.float32(free_water_m), capacity_m, rate_per_s
-        )
-        np.testing.assert_allclose(release, 0.05 * 1e-5, rtol=1e-5)
-        assert not rises
+
+def test_hillslope_interflow_follows_kinematic_storage_model() -> None:
+    """One conductivity: 2 K sin cos S D / L up to half filling, K sin cos D / L above it.
+
+    Sloan and Moore (1984), eq. 9 and eq. 11-12. The soil fills from the base, so the
+    filled layers together hold the perched water.
+    """
+    height = np.array([0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 1.00])
+    # empty soil: no outflow
+    q, full, _ = _hillslope_interflow(np.zeros(N_SOIL_LAYERS, dtype=np.float32))
+    assert q.sum() == 0.0
+
+    # lowest layer full: a third of the soil, so two thirds are saturated at the foot
+    filling = np.zeros(N_SOIL_LAYERS, dtype=np.float32)
+    filling[6] = 1.0
+    q, full, _ = _hillslope_interflow(filling)
+    np.testing.assert_allclose(q.sum(), 2.0 * (1.0 / 3.0) * full, rtol=1e-4)
+    assert q[:6].sum() == 0.0  # the water comes from the layer that holds it
+
+    # the two lowest layers full (two thirds): the wedge fills the soil at the foot
+    filling[5] = 1.0
+    q, full, _ = _hillslope_interflow(filling)
+    np.testing.assert_allclose(q.sum(), full, rtol=1e-4)
+    # split over the two layers in proportion to their perched water
+    np.testing.assert_allclose(q[5], q[6], rtol=1e-4)
+
+    # saturated soil: the same outflow, it cannot grow further
+    q, full, _ = _hillslope_interflow(np.ones(N_SOIL_LAYERS, dtype=np.float32))
+    np.testing.assert_allclose(q.sum(), full, rtol=1e-4)
+    np.testing.assert_allclose(q / q.sum(), height / height.sum(), rtol=1e-3)
+
+
+def test_hillslope_interflow_needs_perched_water() -> None:
+    """Free water over an unfilled layer drains down and gives no lateral flow."""
+    filling = np.zeros(N_SOIL_LAYERS, dtype=np.float32)
+    filling[0] = 1.0
+    q, _, _ = _hillslope_interflow(filling)
+    assert q.sum() == 0.0
+
+
+def test_hillslope_interflow_rises_steeply_into_the_structured_topsoil() -> None:
+    """The outflow rises steeply when the wedge reaches the structured topsoil.
+
+    With conductive soil structure near the surface the outflow more than doubles
+    when the filling doubles, because the wedge reaches more conductive layers.
+    """
+    structure = 1e-3  # m/s at the surface, far above the matrix conductivity
+    filling = np.zeros(N_SOIL_LAYERS, dtype=np.float32)
+    filling[6] = 0.6  # 20 % of the soil
+    q_low, _, _ = _hillslope_interflow(filling, structure)
+    filling[6] = 1.0
+    filling[5] = 0.2  # 40 % of the soil
+    q_high, _, _ = _hillslope_interflow(filling, structure)
+    assert q_high.sum() > 2.0 * q_low.sum()

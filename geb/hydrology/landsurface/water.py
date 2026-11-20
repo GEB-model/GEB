@@ -6,6 +6,7 @@ from numba import njit
 
 from geb.geb_types import ArrayFloat32, Shape, TwoDArrayFloat32, TwoDArrayFloat64
 from geb.numba_config import NUMBA_CACHE
+from geb.workflows.numba_stack_array import stack_empty
 
 from ..landcovers import (
     FOREST,
@@ -15,6 +16,8 @@ from ..landcovers import (
     SEALED_PAVED_FRACTION,
 )
 from .constants import (
+    N_SOIL_LAYERS,
+    ORGANIC_MATTER_BULK_DENSITY_KG_PER_DM3,
     REGOLITH_LAYER_MAX_THICKNESS_M,
     REGOLITH_LAYER_MIN_THICKNESS_M,
     SOILGRIDS_PROFILE_DEPTH_M,
@@ -123,72 +126,134 @@ def calculate_spatial_infiltration_excess(
 
 
 @njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
-def get_perched_store_filling(
+def set_hillslope_store(
     water_content_m: ArrayFloat32,
     water_content_field_capacity_m: ArrayFloat32,
     water_content_saturated_m: ArrayFloat32,
     soil_layer_height_m: ArrayFloat32,
-    structural_depth_m: np.float32,
-) -> np.float32:
-    """Filling of the hillslope store with perched water, for the saturated area.
+    groundwater_depth_m: np.float32,
+    perched_m: ArrayFloat32,
+    free_m: ArrayFloat32,
+    capacity_m: ArrayFloat32,
+) -> tuple[np.float32, np.float32]:
+    """Perched water and drainable pore space of the soil as one hillslope store.
+
+    This one store gives both the lateral outflow at the foot of the hillslope
+    (interflow, see set_hillslope_interflow) and the part of the hillslope that is
+    saturated to the surface (see calculate_hillslope_saturated_area_fraction).
 
     The saturated zone of a hillslope builds up from below: free water (above field
     capacity) over a layer that still takes up water drains down, it is on its way
     and not part of a saturated zone. The free water of a layer counts as perched in
     proportion to the filling of the drainable pores of the layer below; the lowest
-    soil layer rests on the rock. This is the same water that drains sideways as
-    interflow (see distribute_soil_water_ross). The store is the structured soil:
-    the layers within the depth of the soil structure (always the top layer).
+    layer rests on the rock. The part of a layer below the water table is groundwater
+    and not part of the store.
 
     Args:
-        water_content_m: Water content per soil layer (m).
+        water_content_m: Water content per layer (m).
         water_content_field_capacity_m: Water content at field capacity per layer (m).
         water_content_saturated_m: Water content at saturation per layer (m).
         soil_layer_height_m: Thickness per layer (m).
-        structural_depth_m: Depth of the soil structure (m).
+        groundwater_depth_m: Depth of the water table below the surface (m).
+        perched_m: Output: perched water per layer (m).
+        free_m: Output: water above field capacity and above the water table per layer (m).
+        capacity_m: Output: drainable pore space above the water table per layer (m).
 
     Returns:
-        Perched free water as a fraction of the drainable pores of the store (-, 0 to 1).
+        Perched water of the store (m) and drainable pore space of the store (m).
     """
     n_layers: int = water_content_m.shape[0]
-    perched_m: np.float32 = np.float32(0.0)
-    capacity_m: np.float32 = np.float32(0.0)
-    layer_bottom_m: np.float32 = np.float32(0.0)
+    total_perched_m: np.float32 = np.float32(0.0)
+    total_capacity_m: np.float32 = np.float32(0.0)
+    layer_top_depth_m: np.float32 = np.float32(0.0)
     for layer in range(n_layers):
-        layer_bottom_m += soil_layer_height_m[layer]
-        if layer > 0 and layer_bottom_m > structural_depth_m + np.float32(1e-3):
-            break
-        layer_capacity_m: np.float32 = max(
+        drainable_capacity_m: np.float32 = max(
             water_content_saturated_m[layer] - water_content_field_capacity_m[layer],
             np.float32(0.0),
         )
-        free_water_m: np.float32 = min(
+        submerged_fraction: np.float32 = min(
             max(
-                water_content_m[layer] - water_content_field_capacity_m[layer],
+                (layer_top_depth_m + soil_layer_height_m[layer] - groundwater_depth_m)
+                / soil_layer_height_m[layer],
                 np.float32(0.0),
             ),
-            layer_capacity_m,
+            np.float32(1.0),
+        )
+        capacity_m[layer] = (
+            np.float32(1.0) - submerged_fraction
+        ) * drainable_capacity_m
+        free_m[layer] = min(
+            max(
+                water_content_m[layer]
+                - water_content_field_capacity_m[layer]
+                - submerged_fraction * drainable_capacity_m,
+                np.float32(0.0),
+            ),
+            capacity_m[layer],
         )
         filling_below: np.float32 = np.float32(1.0)
         if layer < n_layers - 1:
-            capacity_below_m: np.float32 = (
-                water_content_saturated_m[layer + 1]
-                - water_content_field_capacity_m[layer + 1]
-            )
             filling_below = min(
                 max(
                     (
                         water_content_m[layer + 1]
                         - water_content_field_capacity_m[layer + 1]
                     )
-                    / max(capacity_below_m, np.float32(1e-6)),
+                    / max(
+                        water_content_saturated_m[layer + 1]
+                        - water_content_field_capacity_m[layer + 1],
+                        np.float32(1e-6),
+                    ),
                     np.float32(0.0),
                 ),
                 np.float32(1.0),
             )
-        perched_m += free_water_m * filling_below
-        capacity_m += layer_capacity_m
-    return min(perched_m / max(capacity_m, np.float32(1e-6)), np.float32(1.0))
+        perched_m[layer] = free_m[layer] * filling_below
+        total_perched_m += perched_m[layer]
+        total_capacity_m += capacity_m[layer]
+        layer_top_depth_m += soil_layer_height_m[layer]
+    return total_perched_m, total_capacity_m
+
+
+@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
+def get_hillslope_store_filling(
+    water_content_m: ArrayFloat32,
+    water_content_field_capacity_m: ArrayFloat32,
+    water_content_saturated_m: ArrayFloat32,
+    soil_layer_height_m: ArrayFloat32,
+    groundwater_depth_m: np.float32,
+) -> np.float32:
+    """Filling of the hillslope store with perched water, for the saturated area.
+
+    The store is the one that gives the interflow (see set_hillslope_store). A soil
+    without drainable pore space above the water table is full.
+
+    Args:
+        water_content_m: Water content per layer (m).
+        water_content_field_capacity_m: Water content at field capacity per layer (m).
+        water_content_saturated_m: Water content at saturation per layer (m).
+        soil_layer_height_m: Thickness per layer (m).
+        groundwater_depth_m: Depth of the water table below the surface (m).
+
+    Returns:
+        Perched water as a fraction of the drainable pores of the store (-, 0 to 1).
+    """
+    perched_m = stack_empty(N_SOIL_LAYERS, np.float32)
+    free_m = stack_empty(N_SOIL_LAYERS, np.float32)
+    capacity_m = stack_empty(N_SOIL_LAYERS, np.float32)
+    total_perched_m, total_capacity_m = set_hillslope_store(
+        water_content_m,
+        water_content_field_capacity_m,
+        water_content_saturated_m,
+        soil_layer_height_m,
+        groundwater_depth_m,
+        perched_m,
+        free_m,
+        capacity_m,
+    )
+    if total_capacity_m <= np.float32(1e-6):
+        return np.float32(1.0)
+    return min(total_perched_m / total_capacity_m, np.float32(1.0))
 
 
 @njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
@@ -202,11 +267,13 @@ def calculate_hillslope_saturated_area_fraction(
     that is thickest at the foot of the slope. While the store is less than half
     full the wedge stays below the surface. Above that the wedge reaches the surface
     over the lower part a of the slope, and the relative storage is S = (1 + a) / 2,
-    so a = 2 S - 1. There is no shape parameter.
+    so a = 2 S - 1. There is no shape parameter. The store is the same one that gives
+    the lateral outflow (see set_hillslope_store): the outflow stops growing at the
+    filling where the saturated area starts.
 
     Args:
-        effective_soil_saturation: Relative filling of the drainable pores of the
-            structured soil (-), between 0 (field capacity) and 1 (saturated).
+        effective_soil_saturation: Filling of the hillslope store with perched water
+            (-), between 0 and 1 (see get_hillslope_store_filling).
 
     Returns:
         Fraction of the area that is saturated to the surface (-).
@@ -804,7 +871,7 @@ def infiltration(
         rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
         distribute_rainfall_lognormally: Whether to distribute rainfall across substeps using a log-normal distribution to simulate temporal variability. If False, rainfall is distributed evenly.
         slope_m_per_m: Hillslope slope for modulating depression storage capacity (m/m).
-        dunne_effective_saturation: Filling of the drainable pores of the structured soil
+        dunne_effective_saturation: Filling of the hillslope store with perched water
             (-, 0 at field capacity, 1 at saturation), which sets the saturated area.
         surface_crust_factor: Factor on the saturated conductivity of the surface layer
             for crusting by raindrop impact (1 = no crust).
@@ -1015,7 +1082,7 @@ def infiltration(
 
     # Saturated area (Dunne saturation excess): rain on land that is saturated to the
     # surface cannot enter the soil and runs off. The caller supplies the filling of
-    # the drainable pores of the structured soil.
+    # the hillslope store, the same store that gives the interflow.
     s_soil_effective: np.float32 = min(
         max(dunne_effective_saturation, np.float32(0.0)), np.float32(1.0)
     )
@@ -1496,7 +1563,7 @@ def thetas_toth(
     Based on:
     Tóth, B., Weynants, M., Nemes, A., Makó, A., Bilas, G., and Tóth, G.:
     New generation of hydraulic pedotransfer functions for Europe, Eur. J.
-    Soil Sci., 66, 226-238. doi: 10.1111/ejss.121921211, 2015.
+    Soil Sci., 66, 226-238. doi: 10.1111/ejss.12192, 2015.
 
     Args:
         organic_carbon_percentage: soil organic carbon content [%].
@@ -1774,6 +1841,116 @@ def kv_brakensiek(
     )  # cm / hr
     kv = kv / 100 / 3600  # convert to m/s
     return kv.astype(np.float32)
+
+
+def get_bulk_density_with_organic_matter(
+    bulk_density_kg_per_dm3: TwoDArrayFloat32,
+    organic_matter_percentage: TwoDArrayFloat32,
+    is_forest: npt.NDArray[np.bool_],
+) -> TwoDArrayFloat32:
+    """Lower the bulk density of the forest topsoil to what its organic matter implies.
+
+    Adams, W. A. (1973). The effect of organic matter on the bulk and true densities
+    of some uncultivated podzolic soils. Journal of Soil Science, 24(1), 10-17,
+    doi:10.1111/j.1365-2389.1973.tb00737.x, eq. 1: organic and mineral matter each
+    keep their own bulk density when mixed,
+
+        BD = 100 / (x / K1 + (100 - x) / K2)
+
+    with x the organic matter (% by weight), K1 the bulk density of organic matter
+    (0.223 g/cm3: his Table 1, field condition, 0-75 % organic matter) and K2 that of
+    the mineral matter (1.27 in his soils).
+
+    The soil maps give a bulk density for the 0-5 and 5-15 cm layers that is too
+    high for the organic matter they give for the same layers. Here K2 is taken per
+    soil column: the mineral density that the rule gives for its 15-30 cm layer,
+    where little organic matter is left. The 0-5 and 5-15 cm layers then get the
+    density of the rule if that is lower than the mapped one.
+
+    Adams derived the relation on uncultivated forest soils and notes that the
+    effect may be restricted to soils where organic matter is not mixed into the
+    mineral soil, and that soil structure masks it in agricultural soils. It is
+    therefore applied to forest only.
+
+    Args:
+        bulk_density_kg_per_dm3: Bulk density per soil layer (kg/dm3), shape
+            (n, layers). Layers 0, 1 and 2 are 0-5, 5-15 and 15-30 cm.
+        organic_matter_percentage: Organic matter per soil layer (% by weight).
+        is_forest: Whether each soil column is under forest, shape (n,).
+
+    Returns:
+        Bulk density per soil layer (kg/dm3) with the lower forest topsoil density.
+    """
+    organic_matter_fraction = np.clip(
+        organic_matter_percentage / np.float32(100.0), np.float32(0.0), np.float32(0.9)
+    )
+    # Mineral density of the column from its 15-30 cm layer (the rule solved for K2),
+    # kept within the range of mineral soils so that a mapped density that is not
+    # consistent with the mapped organic matter cannot give an impossible value.
+    mineral_density = np.clip(
+        (np.float32(1.0) - organic_matter_fraction[:, 2])
+        / np.maximum(
+            np.float32(1.0) / bulk_density_kg_per_dm3[:, 2]
+            - organic_matter_fraction[:, 2] / ORGANIC_MATTER_BULK_DENSITY_KG_PER_DM3,
+            np.float32(1e-3),
+        ),
+        np.float32(1.2),
+        np.float32(1.9),
+    )
+    out = bulk_density_kg_per_dm3.copy()
+    for layer in (0, 1):
+        mixed_density = np.float32(1.0) / (
+            organic_matter_fraction[:, layer] / ORGANIC_MATTER_BULK_DENSITY_KG_PER_DM3
+            + (np.float32(1.0) - organic_matter_fraction[:, layer]) / mineral_density
+        )
+        out[:, layer] = np.where(
+            is_forest,
+            np.minimum(bulk_density_kg_per_dm3[:, layer], mixed_density),
+            bulk_density_kg_per_dm3[:, layer],
+        )
+    return out.astype(np.float32)
+
+
+def get_macropore_conductivity_jarvis(
+    clay_percentage: ArrayFloat32,
+    bulk_density_kg_per_dm3: ArrayFloat32,
+    is_arable: npt.NDArray[np.bool_],
+) -> ArrayFloat32:
+    """Saturated conductivity of the macropores of the topsoil (m/s).
+
+    Jarvis, N., Koestel, J., Messing, I., Moeys, J., & Lindahl, A. (2013). Influence
+    of soil, land use and climatic factors on the hydraulic conductivity of soil.
+    Hydrology and Earth System Sciences, 17, 5185-5195,
+    doi:10.5194/hess-17-5185-2013, Table 7:
+
+        log10 Ks(ma) = 3.206 + 1.736 f_clay - 1.100 BD - 0.372 LUT2    [mm/h]
+
+    Ks(ma) is the saturated conductivity minus the conductivity at 10 cm tension
+    (where the macropores no longer conduct), f_clay the clay content (kg/kg), BD
+    the bulk density (g/cm3) and LUT2 = 1 for arable or rotational land. Fitted on
+    220 tension-infiltrometer measurements in the field, in mineral topsoil
+    (< 0.3 m; organic soils were excluded) worldwide; validation R2 0.21. It is
+    applied here to organic soils as well. Tillage breaks the continuity of the macropores:
+    arable land has a 2-3 times lower conductivity than forest, natural vegetation
+    and perennial agriculture.
+
+    Args:
+        clay_percentage: Clay content of the topsoil (0-30 cm) (%).
+        bulk_density_kg_per_dm3: Bulk density of the topsoil (0-30 cm) (kg/dm3).
+        is_arable: Whether the land is arable (tilled).
+
+    Returns:
+        Saturated conductivity of the macropores (m/s).
+    """
+    log10_conductivity_mm_per_h = (
+        np.float32(3.206)
+        + np.float32(1.736) * clay_percentage / np.float32(100.0)
+        - np.float32(1.100) * bulk_density_kg_per_dm3
+        - np.float32(0.372) * is_arable
+    )
+    return (
+        np.float32(10.0) ** log10_conductivity_mm_per_h / np.float32(1000.0 * 3600.0)
+    ).astype(np.float32)
 
 
 def kv_wosten(

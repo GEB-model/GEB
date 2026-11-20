@@ -65,6 +65,10 @@ RHO_MINERAL_KG_PER_M3: np.float32 = np.float32(2650.0)
 # because databases of that period derived organic matter from carbon with it.
 ORGANIC_MATTER_PER_ORGANIC_CARBON: np.float32 = np.float32(1.724)
 
+# Bulk density of soil organic matter (kg/dm3): Adams (1973), Table 1, fitted on soils
+# in field condition with 0-75 % organic matter (see get_bulk_density_with_organic_matter).
+ORGANIC_MATTER_BULK_DENSITY_KG_PER_DM3: np.float32 = np.float32(0.223)
+
 # Soil profile: six SoilGrids layers (0-5, 5-15, 15-30, 30-60, 60-100 and 100-200 cm)
 # plus one weathered-rock (regolith) layer below 2 m, down to the depth to bedrock but at
 # most REGOLITH_LAYER_MAX_THICKNESS_M thick. Deep roots (forest) extract water from it.

@@ -72,10 +72,6 @@ hydrology:
       grassland: 50.0
       cropland: 15.0
     interflow_structural_depth_m: 2.0
-    macropore_infiltration_capacity_mm_per_h:
-      forest: 20.0
-      grassland: 10.0
-      cropland: 3.0
     max_snow_holding_capacity_m: 2.0
     slope_dependent_soil_depth_factor: 10.0
     regolith_vertical_conductivity_divisor: 10.0
