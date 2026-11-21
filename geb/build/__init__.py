@@ -2634,22 +2634,6 @@ class GEBModel(
             ) from None
 
     @property
-    def ISIMIP_ssp(self) -> str:
-        """Returns the ISIMIP SSP-RCP name. ISIMIP only uses the climate forcing value (RCP), so the SSP-RCP might be different from the model's SSP.
-
-        Raises:
-            ValueError: If the RCP is not supported.
-        """
-        if self.rcp == "26":
-            return "ssp126"
-        elif self.rcp == "70":
-            return "ssp370"
-        elif self.rcp == "85":
-            return "ssp585"
-        else:
-            raise ValueError(f"RCP-{self.rcp} not supported.")
-
-    @property
     def ssp_rcp(self) -> int:
         """Returns the SSP-RCP identifier for CMIP models. CMIP models only use the climate forcing data, so the SSP-RCP combination might be different from the model's SSP.
 
