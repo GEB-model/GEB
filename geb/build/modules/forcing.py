@@ -26,13 +26,16 @@ from numba import njit, prange
 from zarr.abc.codec import ArrayArrayCodec
 from zarr.codecs import CastValue, ScaleOffset
 
+from geb import TILE_REQUEST_HEADERS
 from geb.build.data_catalog.base import Adapter
 from geb.build.data_catalog.ecmwf import ECMWFForecasts
 from geb.build.methods import build_method
 from geb.forcing import generate_bilinear_interpolation_weights
 from geb.hydrology.landsurface.potential_evapotranspiration import (
+    get_hourly_weather,
     get_reference_evapotranspiration,
 )
+from geb.numba_config import NUMBA_CACHE
 from geb.workflows.raster import (
     clip_with_grid,
     create_temp_zarr,
@@ -541,6 +544,7 @@ def create_gif_climate_data_over_time(
                     ax,
                     crs="EPSG:4326",
                     source=ctx.providers.OpenStreetMap.Mapnik,  # ty:ignore[unresolved-attribute]
+                    headers=TILE_REQUEST_HEADERS,
                     zorder=0,
                 )
 
@@ -1657,7 +1661,7 @@ class Forcing(BuildModelBase):
             f"Start date {calibration_period_start} must be earlier than end date {calibration_period_end}."
         )
 
-        @njit(parallel=True, cache=True)
+        @njit(parallel=True, cache=NUMBA_CACHE)
         def _get_pet_vectorized(
             temperature_K: np.ndarray,
             dewpoint_temperature_K: np.ndarray,
@@ -1677,16 +1681,19 @@ class Forcing(BuildModelBase):
                     wind_speed = np.float32(
                         np.sqrt(wind_u_m_per_s[y, x] ** 2 + wind_v_m_per_s[y, x] ** 2)
                     )
-                    res = get_reference_evapotranspiration(
-                        np.float32(temperature_K[y, x] - 273.15),
-                        np.float32(dewpoint_temperature_K[y, x] - 273.15),
-                        np.float32(surface_pressure_Pa[y, x]),
-                        np.float32(rlds_W_per_m2[y, x]),
-                        np.float32(rsds_W_per_m2[y, x]),
-                        wind_speed,
-                        np.float32(0.0),
+                    weather = get_hourly_weather(
+                        tas_C=np.float32(temperature_K[y, x] - 273.15),
+                        dewpoint_tas_C=np.float32(
+                            dewpoint_temperature_K[y, x] - 273.15
+                        ),
+                        ps_pa=np.float32(surface_pressure_Pa[y, x]),
+                        rsds_W_per_m2=np.float32(rsds_W_per_m2[y, x]),
+                        rlds_W_per_m2=np.float32(rlds_W_per_m2[y, x]),
+                        wind_10m_m_per_s=wind_speed,
                     )
-                    reference_et_m_per_h[y, x] = res[0]
+                    reference_et_m_per_h[y, x] = get_reference_evapotranspiration(
+                        weather, np.float32(0.0)
+                    )[0]
             return reference_et_m_per_h
 
         self.logger.info("Calculating potential evapotranspiration...")

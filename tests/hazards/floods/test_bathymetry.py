@@ -5,6 +5,7 @@ from typing import Literal
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 from hydromt_sfincs.workflows.bathymetry import burn_river_rect
@@ -12,7 +13,12 @@ from shapely.geometry import LineString
 
 from geb.hazards.floods.workflows.bathymetry import (
     burn_rivers,
+    capture_subgrid_initial_water_level,
     skip_subgrid_tiles_without_river_bed_levels,
+)
+from geb.workflows.river_profiles import (
+    estimate_river_surface_profiles,
+    river_bed_profiles,
 )
 from tests.testconfig import output_folder
 
@@ -297,6 +303,31 @@ def plot_result(
     plt.close()
 
 
+def get_river_bed_points(
+    gdf_riv: gpd.GeoDataFrame, da_elv: xr.DataArray
+) -> gpd.GeoDataFrame:
+    """Riverbed points from the river surface profiles on the test DEM.
+
+    Args:
+        gdf_riv: Test rivers.
+        da_elv: Test DEM.
+
+    Returns:
+        Riverbed points of all rivers.
+    """
+    rivers = gdf_riv.copy()
+    # upstream area for choosing the main upstream river: number of upstream rivers
+    n_upstream = pd.Series(1.0, index=rivers.index)
+    for river_id in rivers.index:
+        downstream_id = rivers.at[river_id, "downstream_ID"]
+        while downstream_id in rivers.index:
+            n_upstream[downstream_id] += 1.0
+            downstream_id = rivers.at[downstream_id, "downstream_ID"]
+    rivers["uparea_m2"] = n_upstream * 1e6
+    profiles = estimate_river_surface_profiles(rivers, da_elv)
+    return river_bed_profiles(rivers, profiles)
+
+
 @pytest.mark.parametrize("crs", [32631, 4326])
 @pytest.mark.parametrize("with_obstacles", [False, True])
 def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
@@ -311,15 +342,25 @@ def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
     if with_obstacles:
         da_elv = add_river_obstacles(da_elv, gdf_riv)
 
-    da_elv_out, da_man_out = burn_rivers(
+    river_bed_points = get_river_bed_points(gdf_riv, da_elv)
+    da_elv_out, da_man_out, da_ini_out = burn_rivers(
         elevation_grid=da_elv,
         manning_grid=da_man,
         rivers=gdf_riv,
+        river_bed_points=river_bed_points,
     )
 
     # Structural validations
     assert da_elv_out.shape == da_elv.shape
+    assert da_ini_out.shape == da_elv.shape
     assert not np.isnan(da_elv_out.values).all()
+    burned_mask = np.isfinite(da_ini_out.values)
+    assert burned_mask.any()
+    assert np.all(da_ini_out.values[burned_mask] > da_elv_out.values[burned_mask])
+    np.testing.assert_array_equal(
+        da_elv_out.values[~burned_mask],
+        da_elv.values[~burned_mask],
+    )
 
     crs_lbl: Literal["projected", "geographic"] = (
         "projected" if crs == 32631 else "geographic"
@@ -378,3 +419,82 @@ def test_subgrid_tile_without_river_bed_levels() -> None:
     # the original function must be restored afterwards
     with pytest.raises(ValueError, match="Lengths of inputs do not match"):
         burn_river_rect(da_elv=elevation, da_man=manning, gdf_riv=river_on_tile_edge)
+
+
+def test_capture_subgrid_initial_water_level() -> None:
+    """Capturing subgrid initial water levels must match the exact burned subgrid pixels."""
+    import hydromt_sfincs.workflows.bathymetry as hydromt_sfincs_bathymetry
+
+    nr_subgrid_pixels: int = 2
+    # Coarse grid is 4x4 with 100 m cells; subgrid tile has +1 overlap cell -> (5*2, 5*2) = (10, 10) at 50 m
+    coarse_x: np.ndarray = np.arange(0.5, 4.5) * 100.0 + 500000.0
+    coarse_y: np.ndarray = np.arange(3.5, -0.5, -1.0) * 100.0 + 5000000.0
+    grid_mask: xr.DataArray = xr.DataArray(
+        np.ones((4, 4), dtype=np.uint8),
+        coords={"y": coarse_y, "x": coarse_x},
+        dims=("y", "x"),
+    ).rio.write_crs(32631)
+
+    subgrid_x: np.ndarray = np.arange(0.5, 10.5) * 50.0 + 500000.0
+    subgrid_y: np.ndarray = np.arange(9.5, -0.5, -1.0) * 50.0 + 4999900.0
+    elevation: xr.DataArray = xr.DataArray(
+        np.full((10, 10), 12.0, dtype=np.float32),
+        coords={"y": subgrid_y, "x": subgrid_x},
+        dims=("y", "x"),
+    )
+    elevation.raster.set_crs(32631)
+    manning: xr.DataArray = elevation * 0 + 0.03
+    river: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"rivwth": [100.0], "rivdph": [3.0], "manning": [0.03]},
+        geometry=[LineString([(500050.0, 5000225.0), (500350.0, 5000225.0)])],
+        crs=32631,
+    )
+
+    with capture_subgrid_initial_water_level(
+        grid_mask=grid_mask,
+        nr_subgrid_pixels=nr_subgrid_pixels,
+    ) as initial_water_level:
+        burned_elv, _ = hydromt_sfincs_bathymetry.burn_river_rect(
+            da_elv=elevation,
+            da_man=manning,
+            gdf_riv=river,
+        )
+
+    burned_subgrid = (
+        burned_elv.values[:-nr_subgrid_pixels, :-nr_subgrid_pixels]
+        < elevation.values[:-nr_subgrid_pixels, :-nr_subgrid_pixels]
+    )
+    expected_burned_coarse = burned_subgrid.reshape(
+        4, nr_subgrid_pixels, 4, nr_subgrid_pixels
+    ).any(axis=(1, 3))
+    assert expected_burned_coarse.any()
+    np.testing.assert_array_equal(
+        initial_water_level.notnull().values,
+        expected_burned_coarse,
+    )
+    np.testing.assert_allclose(
+        initial_water_level.values[expected_burned_coarse],
+        12.0,
+    )
+
+
+def test_subgrid_burn_uses_river_bed_points() -> None:
+    """hydromt-sfincs burns the riverbed of the GEB river profiles (point_zb)."""
+    da_elv, da_man, gdf_riv = create_dummy_data(crs=32631)
+    river_bed_points = get_river_bed_points(gdf_riv, da_elv)
+    burned_elevation, _ = burn_river_rect(
+        da_elv=da_elv.copy(),
+        da_man=da_man.copy(),
+        gdf_riv=gpd.GeoDataFrame(
+            gdf_riv.rename(columns={"width": "rivwth", "depth": "rivdph"})
+        ),
+        gdf_zb=river_bed_points[["geometry"]].assign(
+            rivbed=river_bed_points["bed_elevation_m"]
+        ),
+    )
+    lowered = burned_elevation.values < da_elv.values - 1e-3
+    assert lowered.any()
+    # every burned cell lies within the range of the riverbed points
+    assert burned_elevation.values[lowered].min() >= (
+        river_bed_points["bed_elevation_m"].min() - 1e-3
+    )

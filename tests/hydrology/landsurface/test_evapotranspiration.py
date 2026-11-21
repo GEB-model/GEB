@@ -3,6 +3,7 @@
 import math
 
 import numpy as np
+import pytest
 
 from geb.hydrology.landsurface.evapotranspiration import (
     calculate_bare_soil_evaporation,
@@ -11,7 +12,13 @@ from geb.hydrology.landsurface.evapotranspiration import (
     get_fraction_easily_available_soil_water,
     get_root_mass_ratios,
     get_root_ratios,
+    get_soil_evaporation_reduction_coefficient,
     get_transpiration_factor,
+)
+
+# Soil layer thicknesses (m); the top two (0.15 m) form the evaporating layer.
+SOIL_LAYER_HEIGHT_M = np.array(
+    [0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 2.00], dtype=np.float32
 )
 
 
@@ -347,16 +354,20 @@ def test_calculate_bare_soil_evaporation() -> None:
     open_water_evaporation = np.float32(0.0)
     w_cell = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres_cell = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
-    ws_cell = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
+    wfc_cell = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
+    wwp_cell = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
 
     evaporation = calculate_bare_soil_evaporation(
         soil_is_frozen=soil_is_frozen,
         land_use_type=land_use_type,
         potential_direct_evaporation_m=potential_direct_evaporation,
+        energy_limited_soil_evaporation_m=potential_direct_evaporation,
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
-        ws_m=ws_cell,
+        wfc_m=wfc_cell,
+        wwp_m=wwp_cell,
+        soil_layer_height_m=SOIL_LAYER_HEIGHT_M,
     )
 
     # Basic checks
@@ -369,12 +380,118 @@ def test_calculate_bare_soil_evaporation() -> None:
         soil_is_frozen=True,
         land_use_type=land_use_type,
         potential_direct_evaporation_m=potential_direct_evaporation,
+        energy_limited_soil_evaporation_m=potential_direct_evaporation,
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
-        ws_m=ws_cell,
+        wfc_m=wfc_cell,
+        wwp_m=wwp_cell,
+        soil_layer_height_m=SOIL_LAYER_HEIGHT_M,
     )
     assert evaporation_frozen == 0.0
+
+
+def test_get_soil_evaporation_reduction_coefficient() -> None:
+    """FAO-56 Kr: 1 in stage 1, linear in stage 2, 0 when TEW is depleted."""
+    # 0.10 m layer, the reference depth of FAO-56 Table 19: REW = 0.44 TEW
+    wfc, wwp, depth = 0.03, 0.01, 0.10
+    tew = wfc - 0.5 * wwp  # 0.025
+    rew = 0.44 * tew  # 0.011
+    assert get_soil_evaporation_reduction_coefficient(0.035, wfc, wwp, depth) == 1.0
+    assert (
+        get_soil_evaporation_reduction_coefficient(wfc - rew + 1e-5, wfc, wwp, depth)
+        == 1.0
+    )
+    halfway = wfc - (rew + tew) / 2
+    assert get_soil_evaporation_reduction_coefficient(
+        halfway, wfc, wwp, depth
+    ) == pytest.approx(0.5, abs=1e-3)
+    assert get_soil_evaporation_reduction_coefficient(0.5 * wwp, wfc, wwp, depth) == 0.0
+
+
+def test_readily_evaporable_water_is_a_depth() -> None:
+    """REW does not grow with the depth of the evaporating layer (FAO-56: 5-12 mm).
+
+    A loam with thetaFC = 0.25 and thetaWP = 0.12 (FAO-56 Table 19 midpoints) has
+    TEW = 19 mm per 0.10 m and REW = 0.44 * 19 = 8.4 mm, also for a 0.15 m layer.
+    """
+    theta_fc, theta_wp = 0.25, 0.12
+    for depth in (0.10, 0.15):
+        wfc, wwp = theta_fc * depth, theta_wp * depth
+        rew = 0.44 * (theta_fc - 0.5 * theta_wp) * 0.10
+        assert rew == pytest.approx(0.00836)
+        assert (
+            get_soil_evaporation_reduction_coefficient(
+                wfc - rew + 1e-5, wfc, wwp, depth
+            )
+            == 1.0
+        )
+        assert (
+            get_soil_evaporation_reduction_coefficient(
+                wfc - rew - 1e-4, wfc, wwp, depth
+            )
+            < 1.0
+        )
+
+
+def test_bare_soil_evaporation_exposed_soil_limit_after_drying() -> None:
+    """FAO-56 eq. 71: Ke = min(Kr (Kc_max - Kcb), few Kc_max).
+
+    Under a canopy the exposed-soil limit few Kc_max is below Kc_max - Kcb. A drying
+    surface (Kr < 1) then still evaporates at the exposed-soil limit as long as
+    Kr (Kc_max - Kcb) >= few Kc_max.
+    """
+    from geb.hydrology.landcovers import GRASSLAND_LIKE
+
+    wfc = np.array([0.015, 0.03, 0.045, 0.09, 0.12, 0.3, 0.6], dtype=np.float32)
+    wwp = wfc / np.float32(3.0)
+    wres = np.full(7, 0.002, dtype=np.float32)
+    tew = (wfc[0] + wfc[1]) - 0.5 * (wwp[0] + wwp[1])
+    rew = 0.44 * tew * 0.10 / 0.15
+    # depletion halfway between REW and TEW: Kr = 0.5
+    depletion = (rew + tew) / 2
+
+    def evaporate(ratio: float) -> float:
+        w = wfc.copy()
+        w[0] -= depletion
+        return float(
+            calculate_bare_soil_evaporation(
+                soil_is_frozen=False,
+                land_use_type=GRASSLAND_LIKE,
+                potential_direct_evaporation_m=np.float32(0.0002),
+                energy_limited_soil_evaporation_m=np.float32(0.0002 * ratio),
+                open_water_evaporation_m=np.float32(0.0),
+                w_m=w,
+                wres_m=wres,
+                wfc_m=wfc,
+                wwp_m=wwp,
+                soil_layer_height_m=SOIL_LAYER_HEIGHT_M,
+            )
+        )
+
+    assert evaporate(1.0) == pytest.approx(0.0001, rel=1e-2)
+    assert evaporate(3.0) == pytest.approx(0.0002)
+
+
+def test_bare_soil_evaporation_wet_soil_at_full_rate() -> None:
+    """At field capacity the surface evaporates at the potential rate (stage 1)."""
+    from geb.hydrology.landcovers import GRASSLAND_LIKE
+
+    w = np.full(7, 0.3, dtype=np.float32)
+    evaporation = calculate_bare_soil_evaporation(
+        soil_is_frozen=False,
+        land_use_type=GRASSLAND_LIKE,
+        potential_direct_evaporation_m=np.float32(0.0002),
+        energy_limited_soil_evaporation_m=np.float32(0.0002),
+        open_water_evaporation_m=np.float32(0.0),
+        w_m=w,
+        wres_m=np.full(7, 0.02, dtype=np.float32),
+        wfc_m=np.full(7, 0.3, dtype=np.float32),
+        wwp_m=np.full(7, 0.1, dtype=np.float32),
+        soil_layer_height_m=SOIL_LAYER_HEIGHT_M,
+    )
+    assert evaporation == pytest.approx(0.0002)
+    assert w[0] == pytest.approx(0.3 - 0.0002)
 
 
 def test_get_fraction_easily_available_soil_water_edge_cases() -> None:
@@ -509,10 +626,13 @@ def test_calculate_bare_soil_evaporation_paddy() -> None:
         soil_is_frozen=False,
         land_use_type=PADDY_IRRIGATED,
         potential_direct_evaporation_m=0.001,
+        energy_limited_soil_evaporation_m=0.001,
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,
-        ws_m=ws,
+        wfc_m=ws * 0.75,
+        wwp_m=wres * 2.0,
+        soil_layer_height_m=SOIL_LAYER_HEIGHT_M,
     )
 
     # Should be 0 for paddy irrigation
@@ -533,20 +653,26 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
         soil_is_frozen=False,
         land_use_type=NON_PADDY_IRRIGATED,
         potential_direct_evaporation_m=0.001,
+        energy_limited_soil_evaporation_m=0.001,
         open_water_evaporation_m=0.0005,  # Half of potential
         w_m=w,
         wres_m=wres,
-        ws_m=ws,
+        wfc_m=ws * 0.75,
+        wwp_m=wres * 2.0,
+        soil_layer_height_m=SOIL_LAYER_HEIGHT_M,
     )
 
     evaporation_no_open_water = calculate_bare_soil_evaporation(
         soil_is_frozen=False,
         land_use_type=NON_PADDY_IRRIGATED,
         potential_direct_evaporation_m=0.001,
+        energy_limited_soil_evaporation_m=0.001,
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,
-        ws_m=ws,
+        wfc_m=ws * 0.75,
+        wwp_m=wres * 2.0,
+        soil_layer_height_m=SOIL_LAYER_HEIGHT_M,
     )
 
     # Should be less with open water evaporation
@@ -572,3 +698,30 @@ def test_get_transpiration_factor_edge_cases() -> None:
 
     factor5 = get_transpiration_factor(0.25, 0.1, 0.2)  # w > wcrit
     assert factor5 == 1.0
+
+
+def test_bare_soil_evaporation_uses_fao_surface_layer() -> None:
+    """Stage 2 is set by the 0-15 cm surface layer; a dry top 5 cm alone does not stop it."""
+    from geb.hydrology.landcovers import GRASSLAND_LIKE
+
+    wres = np.full(7, 0.002, dtype=np.float32)
+    wfc = np.array([0.015, 0.03, 0.045, 0.09, 0.12, 0.3, 0.6], dtype=np.float32)
+    wwp = wfc / np.float32(3.0)
+    w = wfc.copy()
+    w[0] = np.float32(0.5) * wwp[0] + np.float32(0.00005)  # top 5 cm nearly air dry
+    evaporation = calculate_bare_soil_evaporation(
+        soil_is_frozen=False,
+        land_use_type=GRASSLAND_LIKE,
+        potential_direct_evaporation_m=np.float32(0.0002),
+        energy_limited_soil_evaporation_m=np.float32(0.0002),
+        open_water_evaporation_m=np.float32(0.0),
+        w_m=w,
+        wres_m=wres,
+        wfc_m=wfc,
+        wwp_m=wwp,
+        soil_layer_height_m=SOIL_LAYER_HEIGHT_M,
+    )
+    # the 10 cm below is at field capacity: still evaporating, partly from layer 2
+    assert evaporation > np.float32(0.0001)
+    assert w[1] < wfc[1]
+    assert w[0] >= np.float32(0.5) * wwp[0] - 1e-7

@@ -716,10 +716,26 @@
     var lastD = cs.depth != null ? cs.depth : (dValues && dValues.length > 0 ? dValues[dValues.length - 1] : 2.0);
     var fpSlope = cs.floodplainSideSlopeMPerM != null ? cs.floodplainSideSlopeMPerM : (cs.floodplainSideSlope != null ? cs.floodplainSideSlope : 2.0);
 
-    var geomSummary = "Channel: " + lastW.toFixed(1) + " m × " + lastD.toFixed(2) + " m · Floodplain: 10-point profile (0.1–5.0 m) · Valley side slope: " + fpSlope.toFixed(1) + " m/m (H:V)";
+    var protectionStandard = cs.floodProtectionStandard;
+    var leveeHeight = cs.leveeHeight;
+    var leveeDepth = cs.leveeDepth;
+    // The simulated levee height decides whether a levee is drawn; the standard is a label
+    var hasLevee = leveeHeight > 0.01;
+    var standardLabel = Math.round(protectionStandard) + "-year standard";
+
+    var protectionSubtitle = hasLevee
+      ? "Protection: " + standardLabel + " (Levee height: " + leveeHeight.toFixed(2) + " m)"
+      : "No levees (" + standardLabel + ")";
+
+    var leveeSummary = hasLevee
+      ? " · Levee: " + leveeHeight.toFixed(2) + " m (crest " + leveeDepth.toFixed(2) + " m above bed, " + standardLabel + ")"
+      : " · No levees";
+
+    var geomSummary = "Channel: " + lastW.toFixed(1) + " m × " + lastD.toFixed(2) + " m" + leveeSummary +
+      " · Floodplain: 10-point profile (0.1–5.0 m) · Valley side slope: " + fpSlope.toFixed(1) + " m/m (H:V)";
 
     el.innerHTML = '<div class="geb-popup__title">River segment ' + escapeHtml(riverId) + '</div>' +
-      '<div class="geb-popup__subtitle">Upstream area: ' + formatNumber(data.upstreamAreaKm2) + ' km² · Bankfull hydraulic geometry over time</div>' +
+      '<div class="geb-popup__subtitle">Upstream area: ' + formatNumber(data.upstreamAreaKm2) + ' km² · ' + escapeHtml(protectionSubtitle) + ' · Bankfull hydraulic geometry over time</div>' +
       '<div class="geb-popup__chart-title">Bankfull discharge</div>' +
       makeChartDiv('geb-river-q-' + safeRiverId, 175) +
       '<div class="geb-popup__chart-title">Channel width and depth over time</div>' +
@@ -879,22 +895,100 @@
         type: "scatter",
         mode: "lines",
         line: {color: currentTheme === "dark" ? "#f59e0b" : "#b45309", width: 2.5},
-        hovertemplate: "Distance: %{x:,.2f} m<br>Elevation: %{y:,.2f} m<extra>Ground profile</extra>"
+        hovertemplate: "Distance: %{x:,.2f} m<br>Elevation: %{y:,.2f} m<extra>Ground profile</extra>",
+        showlegend: false
       };
 
-      var bankfullLine = {
-        x: [-halfW, halfW],
-        y: [lastD, lastD],
-        name: "Bankfull stage (" + lastD.toFixed(2) + " m)",
+      // Channel filled with water up to bankfull stage (drawn first, beneath the ground line)
+      var waterX = [];
+      var waterY = [];
+      for (var p = 0; p <= nPts; p++) {
+        var u = -1.0 + (2.0 * p / nPts);
+        waterX.push(u * halfW);
+        waterY.push(lastD * u * u);
+      }
+      waterX.push(-halfW);
+      waterY.push(lastD);
+      var waterTrace = {
+        x: waterX,
+        y: waterY,
+        name: "Bankfull water",
         type: "scatter",
         mode: "lines",
-        line: {color: "#94a3b8", width: 1.5, dash: "dot"},
-        hovertemplate: "Bankfull stage: %{y:,.2f} m<extra></extra>"
+        fill: "toself",
+        fillcolor: currentTheme === "dark" ? "rgba(56, 189, 248, 0.45)" : "rgba(14, 116, 204, 0.40)",
+        line: {color: currentTheme === "dark" ? "#38bdf8" : "#0e74cc", width: 1},
+        hoveron: "fills",
+        hovertemplate: "Bankfull stage: " + lastD.toFixed(2) + " m<extra></extra>",
+        showlegend: false
       };
+
+      var csTraces = [waterTrace, groundTrace];
+
+      if (hasLevee) {
+        // Levees sit at the channel banks with a vertical river-side face, matching the model
+        // (top width stays at bankfull width up to the crest). Real footprints are a few metres
+        // and would vanish next to km-wide floodplains, so crest and landward slope are drawn
+        // with a minimum share of the plot width (schematic horizontally, true height).
+        var plotHalfSpan = topHalfW + wallRun;
+        var crestW = Math.max(3.0, plotHalfSpan * 0.015);
+        var landwardRun = Math.max(2.5 * leveeHeight, plotHalfSpan * 0.03);
+        var leveeFillColor = currentTheme === "dark" ? "rgba(217, 119, 6, 0.40)" : "rgba(180, 83, 9, 0.30)";
+        var leveeBorderColor = currentTheme === "dark" ? "#f59e0b" : "#b45309";
+
+        // Left levee embankment
+        var leftLeveeTrace = {
+          x: [-halfW, -halfW, -(halfW + crestW), -(halfW + crestW + landwardRun), -halfW],
+          y: [lastD, leveeDepth, leveeDepth, lastD, lastD],
+          name: "Levee embankment (" + leveeHeight.toFixed(2) + " m)",
+          showlegend: false,
+          type: "scatter",
+          mode: "lines",
+          fill: "toself",
+          fillcolor: leveeFillColor,
+          line: {color: leveeBorderColor, width: 2},
+          hovertemplate: "Left levee<br>Height: " + leveeHeight.toFixed(2) + " m<br>Crest: %{y:,.2f} m<extra>Levee embankment</extra>"
+        };
+
+        // Right levee embankment
+        var rightLeveeTrace = {
+          x: [halfW, halfW, halfW + crestW, halfW + crestW + landwardRun, halfW],
+          y: [lastD, leveeDepth, leveeDepth, lastD, lastD],
+          name: "Levee embankment",
+          showlegend: false,
+          type: "scatter",
+          mode: "lines",
+          fill: "toself",
+          fillcolor: leveeFillColor,
+          line: {color: leveeBorderColor, width: 2},
+          hovertemplate: "Right levee<br>Height: " + leveeHeight.toFixed(2) + " m<br>Crest: %{y:,.2f} m<extra>Levee embankment</extra>"
+        };
+
+        csTraces.push(leftLeveeTrace, rightLeveeTrace);
+      }
+
+      // Protection level label instead of a legend (a legend overlaps in the small popup chart)
+      var protectionLabel = hasLevee
+        ? Math.round(protectionStandard) + "-year protection · levee " + leveeHeight.toFixed(2) + " m"
+        : "No levees (" + standardLabel + ")";
 
       var csLayout = getPlotlyLayout(currentTheme, {
         height: 210,
         hovermode: "closest",
+        showlegend: false,
+        annotations: [{
+          text: protectionLabel,
+          xref: "paper",
+          yref: "paper",
+          x: 0.01,
+          y: 0.99,
+          xanchor: "left",
+          yanchor: "top",
+          showarrow: false,
+          font: {size: 11, color: currentTheme === "dark" ? "#e2e8f0" : "#0f172a"},
+          bgcolor: currentTheme === "dark" ? "rgba(2, 6, 23, 0.75)" : "rgba(255, 255, 255, 0.8)",
+          borderpad: 2
+        }],
         xaxis: {
           title: "Distance across river (m)",
           zeroline: true,
@@ -907,7 +1001,7 @@
       });
 
       var csId = "geb-river-cs-" + safeRiverId;
-      Plotly.newPlot(csId, [groundTrace, bankfullLine], csLayout, csConfig);
+      Plotly.newPlot(csId, csTraces, csLayout, csConfig);
       activePlotlyElements[csId] = true;
 
       setTimeout(function() {

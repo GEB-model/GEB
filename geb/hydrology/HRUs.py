@@ -26,6 +26,7 @@ from geb.geb_types import (
     ArrayWithScalar,
     T_OneorTwoDArray,
     ThreeDArray,
+    ThreeDArrayFloat32,
     ThreeDArrayWithScalar,
     TwoDArray,
     TwoDArrayBool,
@@ -34,6 +35,8 @@ from geb.geb_types import (
     TwoDArrayInt32,
     TwoDArrayWithScalar,
 )
+from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE, OPEN_WATER, SEALED
+from geb.numba_config import NUMBA_CACHE
 from geb.store import Bucket
 from geb.workflows.io import read_grid, read_zarr
 from geb.workflows.raster import (
@@ -107,7 +110,7 @@ def load_water_demand_xr(filepath: str | Path) -> xr.Dataset:
     )
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=NUMBA_CACHE, parallel=True)
 def _to_grid_1d(
     data: ArrayFloat32,
     cell_start_indices: ArrayInt32,
@@ -140,7 +143,42 @@ def _to_grid_1d(
     return out
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=NUMBA_CACHE, parallel=True)
+def _to_grid_2d_from_hru(
+    data: TwoDArrayFloat32,
+    cell_start_indices: ArrayInt32,
+    grid_to_HRU: ArrayInt32,
+    land_use_ratio: ArrayFloat32,
+) -> TwoDArrayFloat32:
+    """Numba parallel kernel for 2D HRU-major (n_HRUs, n_timesteps) → grid weighted mean.
+
+    Parallelised over grid cells. For each grid cell, all timesteps are accumulated
+    contiguously per HRU, pulling the entire cell's timesteps into cache at once
+    and eliminating the need for an expensive matrix transpose.
+
+    Args:
+        data: HRU values, shape (n_HRUs, n_timesteps).
+        cell_start_indices: Inclusive start index of each grid cell's HRUs (size n_grid_cells).
+        grid_to_HRU: Exclusive end index of each grid cell's HRUs (size n_grid_cells).
+        land_use_ratio: Fractional area of each HRU within its grid cell.
+
+    Returns:
+        Weighted-mean per grid cell, shape (n_timesteps, n_grid_cells).
+    """
+    n_timesteps: int = data.shape[1]
+    n_grid_cells: int = grid_to_HRU.size
+    out: TwoDArrayFloat32 = np.zeros((n_timesteps, n_grid_cells), dtype=np.float32)
+    for i in prange(n_grid_cells):
+        start: int = cell_start_indices[i]
+        end: int = grid_to_HRU[i]
+        for j in range(start, end):
+            hru_area_ratio: np.float32 = land_use_ratio[j]
+            for t in range(n_timesteps):
+                out[t, i] += data[j, t] * hru_area_ratio
+    return out
+
+
+@njit(cache=NUMBA_CACHE, parallel=True)
 def _to_grid_2d(
     data: TwoDArrayFloat32,
     cell_start_indices: ArrayInt32,
@@ -230,6 +268,13 @@ def to_grid(
             cast(ArrayFloat32, data), cell_start_indices, grid_to_HRU, land_use_ratio
         )
     elif data.ndim == 2:
+        if data.shape[0] == grid_to_HRU[-1]:
+            return _to_grid_2d_from_hru(
+                cast(TwoDArrayFloat32, data),
+                cell_start_indices,
+                grid_to_HRU,
+                land_use_ratio,
+            )
         return _to_grid_2d(
             cast(TwoDArrayFloat32, data),
             cell_start_indices,
@@ -284,6 +329,9 @@ class GridVariables(Bucket):
     heads: TwoDArrayFloat64
     capillar: ArrayFloat32
     karst_storage_m: ArrayFloat64
+    minimum_temperature_index_record: TwoDArrayFloat32
+    pending_river_transmission_loss_m3: ArrayFloat64
+    pending_groundwater_drainage_m3: ArrayFloat64
     layer_boundary_elevation: TwoDArrayFloat32
     elevation: ArrayFloat32
     specific_yield: TwoDArrayFloat32
@@ -304,7 +352,6 @@ class GridVariables(Bucket):
     river_width_alpha: ArrayFloat32
     river_width_beta: ArrayFloat32
     overland_flow_buffer: TwoDArrayFloat32
-    overland_flow_buffer_weights: TwoDArrayFloat32
     retention_basin_storage_m3: ArrayFloat32
     river_storage_m3: ArrayFloat64
     river_slope_m_per_m: ArrayFloat32
@@ -685,12 +732,14 @@ class HRUVariables(Bucket):
     liquid_water_in_snow_m: TwoDArrayFloat64
     snow_water_equivalent_m: TwoDArrayFloat64
     snow_density_kg_per_m3: TwoDArrayFloat32
+    snow_albedo: ArrayFloat32
     topwater_m: ArrayFloat32
     reservoir_command_areas: ArrayInt32
     cell_area: ArrayFloat32
     land_use_type: ArrayInt32
     land_use_ratio: ArrayFloat32
     land_owners: ArrayInt32
+    elevation_zone: ArrayInt32
     HRU_to_grid: ArrayInt32
     grid_to_HRU: ArrayInt32
     nearest_river_grid_cell: ArrayInt32
@@ -702,6 +751,7 @@ class HRUVariables(Bucket):
     potential_evapotranspiration_crop_life_per_crop_stage: TwoDArrayFloat32
     crop_map: ArrayInt32
     topwater: ArrayFloat32
+    packed_soil_properties: ThreeDArrayFloat32
     soil_layer_height_m: TwoDArrayFloat32
     water_content_field_capacity_m: TwoDArrayFloat32
     water_content_m: TwoDArrayFloat32
@@ -709,6 +759,8 @@ class HRUVariables(Bucket):
     water_content_wilting_point_m: TwoDArrayFloat32
     water_content_residual_m: TwoDArrayFloat32
     crop_harvest_age_days: ArrayInt32
+    crop_heat_units_C_day: ArrayFloat32
+    crop_heat_units_at_harvest_C_day: ArrayFloat32
     silt_percentage: TwoDArrayFloat32
     clay_percentage: TwoDArrayFloat32
     sand_percentage: TwoDArrayFloat32
@@ -743,9 +795,11 @@ class HRUVariables(Bucket):
     solid_heat_capacity_J_per_m2_K: TwoDArrayFloat32
     solid_thermal_conductivity_W_per_m_K: TwoDArrayFloat32
     deep_soil_temperature_C: ArrayFloat32
+    groundwater_depth_previous_day_m: ArrayFloat32
     wetting_front_depth_m: ArrayFloat32
     wetting_front_suction_head_m: ArrayFloat32
     wetting_front_moisture_deficit: ArrayFloat32
+    crust_rain_m: ArrayFloat32
     green_ampt_active_layer_idx: ArrayInt32
     hillslope_length_m: ArrayFloat32
 
@@ -833,6 +887,7 @@ class HRUs(BaseVariables):
             self.var.HRU_to_grid,
             self.var.grid_to_HRU,
             self.var.linear_mapping,
+            self.var.elevation_zone,
         ) = self.create_HRUs()
 
         upstream_area = read_grid(
@@ -877,10 +932,11 @@ class HRUs(BaseVariables):
         return self.var.land_use_type.size
 
     @staticmethod
-    @njit(cache=True)
+    @njit(cache=NUMBA_CACHE)
     def create_HRUs_numba(
         farms: TwoDArrayInt32,
         land_use_classes: TwoDArrayInt32,
+        elevation_zones: TwoDArrayInt32,
         mask: TwoDArrayBool,
         scaling: int,
         initial_size: int,
@@ -891,12 +947,17 @@ class HRUs(BaseVariables):
         ArrayInt32,
         ArrayInt32,
         TwoDArrayInt32,
+        ArrayInt32,
     ]:
         """Numba helper function to create HRUs.
+
+        A HRU is the part of a farm field, or of a land use type outside the farms, that
+        lies in one elevation zone of a grid cell.
 
         Args:
             farms: Map of farms. Each unique integer is a unique farm. -1 is no farm.
             land_use_classes: CWatM land use class map [0-5].
+            elevation_zones: Elevation zone of each subcell, counted from the stream upwards [0-2].
             mask: Mask of the normal grid cells.
             scaling: Scaling between mask and maximum resolution of HRUs.
             initial_size: Initial size for HRU arrays.
@@ -908,8 +969,10 @@ class HRUs(BaseVariables):
             HRU_to_grid: Maps HRUs to index of compressed cell index.
             var_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             linear_mapping: The index of the HRU to the subcell.
+            elevation_zone_array: Elevation zone of each HRU.
         """
         assert farms.size == mask.size * scaling * scaling
+        assert farms.size == elevation_zones.size
         assert farms.size == land_use_classes.size
         ysize, xsize = mask.shape
 
@@ -921,6 +984,7 @@ class HRUs(BaseVariables):
         land_use_array = np.full(initial_size, -1, dtype=np.int32)
         land_use_size = np.full(initial_size, -1, dtype=np.int32)
         land_use_owner = np.full(initial_size, -1, dtype=np.int32)
+        elevation_zone_array = np.full(initial_size, -1, dtype=np.int32)
 
         def resize_arrays(
             hru_to_grid: ArrayInt32,
@@ -960,24 +1024,36 @@ class HRUs(BaseVariables):
                     cell_land_use_classes = land_use_classes[
                         y * scaling : (y + 1) * scaling, x * scaling : (x + 1) * scaling
                     ].ravel()  # get land use classes for cells
+                    cell_elevation_zones = elevation_zones[
+                        y * scaling : (y + 1) * scaling, x * scaling : (x + 1) * scaling
+                    ].ravel()  # get elevation zones for cells
                     assert (
-                        (cell_land_use_classes == 0)
-                        | (cell_land_use_classes == 1)
-                        | (cell_land_use_classes == 4)
-                        | (cell_land_use_classes == 5)
+                        (cell_elevation_zones >= 0) & (cell_elevation_zones <= 2)
+                    ).all()
+                    assert (
+                        (cell_land_use_classes == FOREST)
+                        | (cell_land_use_classes == GRASSLAND_LIKE)
+                        | (cell_land_use_classes == SEALED)
+                        | (cell_land_use_classes == OPEN_WATER)
                     ).all()
 
-                    sort_idx = np.argsort(cell_farms)
+                    # sort by farm, and by elevation zone within a farm
+                    sort_idx = np.argsort(
+                        cell_farms.astype(np.int64) * 4 + cell_elevation_zones
+                    )
                     cell_farms_sorted = cell_farms[sort_idx]
                     cell_land_use_classes_sorted = cell_land_use_classes[sort_idx]
+                    cell_elevation_zones_sorted = cell_elevation_zones[sort_idx]
 
                     prev_farm = -1  # farm is never -1
+                    prev_zone = -1
                     for i in range(cell_farms_sorted.size):
                         farm = cell_farms_sorted[i]
                         land_use = cell_land_use_classes_sorted[i]
+                        zone = cell_elevation_zones_sorted[i]
                         if farm == -1:  # if area is not a farm
                             continue
-                        if farm != prev_farm:
+                        if farm != prev_farm or zone != prev_zone:
                             if HRU >= HRU_to_grid.size:
                                 res_res = resize_arrays(
                                     HRU_to_grid,
@@ -990,6 +1066,13 @@ class HRUs(BaseVariables):
                                 land_use_array = res_res[1]
                                 land_use_size = res_res[2]
                                 land_use_owner = res_res[3]
+                                new_elevation_zone_array = np.full(
+                                    HRU_to_grid.size, -1, dtype=np.int32
+                                )
+                                new_elevation_zone_array[
+                                    : elevation_zone_array.size
+                                ] = elevation_zone_array
+                                elevation_zone_array = new_elevation_zone_array
 
                             assert land_use_array[HRU] == -1
                             assert land_use == 1  # must be one because farm
@@ -997,10 +1080,12 @@ class HRUs(BaseVariables):
                             assert land_use_size[HRU] == -1
                             land_use_size[HRU] = 1
                             land_use_owner[HRU] = farm
+                            elevation_zone_array[HRU] = zone
 
                             HRU_to_grid[HRU] = var_cell_count_compressed
 
                             prev_farm = farm
+                            prev_zone = zone
                             HRU += 1
                         else:
                             land_use_size[HRU - 1] += 1
@@ -1010,18 +1095,25 @@ class HRUs(BaseVariables):
                             x * scaling + sort_idx[i] % scaling,
                         ] = HRU - 1
 
-                    sort_idx = np.argsort(cell_land_use_classes)
+                    # sort by land use, and by elevation zone within a land use
+                    sort_idx = np.argsort(
+                        cell_land_use_classes.astype(np.int64) * 4
+                        + cell_elevation_zones
+                    )
                     cell_farms_sorted = cell_farms[sort_idx]
                     cell_land_use_classes_sorted = cell_land_use_classes[sort_idx]
+                    cell_elevation_zones_sorted = cell_elevation_zones[sort_idx]
 
                     prev_land_use = -1
+                    prev_zone = -1
                     assert prev_land_use != cell_land_use_classes[0]
                     for i in range(cell_farms_sorted.size):
                         land_use = cell_land_use_classes_sorted[i]
                         farm = cell_farms_sorted[i]
+                        zone = cell_elevation_zones_sorted[i]
                         if farm != -1:
                             continue
-                        if land_use != prev_land_use:
+                        if land_use != prev_land_use or zone != prev_zone:
                             if HRU >= HRU_to_grid.size:
                                 res_res = resize_arrays(
                                     HRU_to_grid,
@@ -1034,12 +1126,21 @@ class HRUs(BaseVariables):
                                 land_use_array = res_res[1]
                                 land_use_size = res_res[2]
                                 land_use_owner = res_res[3]
+                                new_elevation_zone_array = np.full(
+                                    HRU_to_grid.size, -1, dtype=np.int32
+                                )
+                                new_elevation_zone_array[
+                                    : elevation_zone_array.size
+                                ] = elevation_zone_array
+                                elevation_zone_array = new_elevation_zone_array
 
                             assert land_use_array[HRU] == -1
                             land_use_array[HRU] = land_use
                             assert land_use_size[HRU] == -1
                             land_use_size[HRU] = 1
+                            elevation_zone_array[HRU] = zone
                             prev_land_use = land_use
+                            prev_zone = zone
 
                             HRU_to_grid[HRU] = var_cell_count_compressed
 
@@ -1060,6 +1161,7 @@ class HRUs(BaseVariables):
         land_use_array = land_use_array[:HRU]
         land_use_owner = land_use_owner[:HRU]
         HRU_to_grid = HRU_to_grid[:HRU]
+        elevation_zone_array = elevation_zone_array[:HRU]
         assert int(land_use_size.sum()) == n_nonmasked_cells * scaling * scaling
 
         land_use_ratio = (land_use_size / (scaling**2)).astype(np.float32)
@@ -1070,6 +1172,7 @@ class HRUs(BaseVariables):
             HRU_to_grid,
             grid_to_HRU,
             linear_mapping,
+            elevation_zone_array,
         )
 
     def create_HRUs(
@@ -1081,6 +1184,7 @@ class HRUs(BaseVariables):
         ArrayInt32,
         ArrayInt32,
         TwoDArrayInt32,
+        ArrayInt32,
     ]:
         """Function to create HRUs.
 
@@ -1091,10 +1195,15 @@ class HRUs(BaseVariables):
             HRU_to_grid: Maps HRUs to index of compressed cell index.
             grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             linear_mapping: The index of the HRU to the subcell.
+            elevation_zone: Elevation zone of each HRU, counted from the stream upwards.
         """
         land_use_classes = read_grid(
             self.model.files["subgrid"]["landsurface/land_use_classes"], ndim=2
         )
+        elevation_zones = read_grid(
+            self.model.files["subgrid"]["landsurface/elevation_zones"], ndim=2
+        )
+        elevation_zones = elevation_zones.astype(np.int32)
         initial_size = (
             np.unique(self.data.farms).size + (self.data.grid.mask == 0).sum()
         )
@@ -1102,6 +1211,7 @@ class HRUs(BaseVariables):
         res = self.create_HRUs_numba(
             self.data.farms,
             land_use_classes,
+            elevation_zones,
             self.data.grid.mask,
             self.scaling,
             initial_size,
@@ -1216,7 +1326,7 @@ class HRUs(BaseVariables):
         return outarray
 
     @staticmethod
-    @njit(cache=True, parallel=True)
+    @njit(cache=NUMBA_CACHE, parallel=True)
     def convert_subgrid_to_HRU_numba(
         array: npt.NDArray[np.generic],
         linear_mapping: npt.NDArray[np.int32],
@@ -1350,6 +1460,22 @@ class HRUs(BaseVariables):
         else:
             raise NotImplementedError
         return output_data
+
+    def get_slope_m_per_m(self) -> ArrayFloat32:
+        """Slope per HRU for hillslope processes (interflow, depression storage, snow, erosion, runoff concentration).
+
+        The mean local (subgrid) slope of each HRU, because the slope of the cell-averaged
+        elevation smooths out the hillslopes.
+
+        Returns:
+            Slope per HRU (m/m).
+        """
+        return self.convert_subgrid_to_HRU(
+            read_grid(
+                self.model.files["subgrid"]["landsurface/slope_m_per_m"], ndim=2
+            ).astype(np.float32),
+            method="mean",
+        ).astype(np.float32)
 
     def plot(
         self, HRU_array: np.ndarray, ax: plt.Axes | None = None, show: bool = True
@@ -1595,6 +1721,9 @@ class Data:
         self.HRU.var.land_use_type = self.split_HRU_data(
             self.HRU.var.land_use_type, HRU
         )
+        self.HRU.var.elevation_zone = self.split_HRU_data(
+            self.HRU.var.elevation_zone, HRU
+        )
         self.HRU.var.land_use_ratio = self.split_HRU_data(
             self.HRU.var.land_use_ratio, HRU, ratio=ratio
         )
@@ -1607,5 +1736,11 @@ class Data:
         )
         self.HRU.var.crop_harvest_age_days = self.split_HRU_data(
             self.HRU.var.crop_harvest_age_days, HRU
+        )
+        self.HRU.var.crop_heat_units_C_day = self.split_HRU_data(
+            self.HRU.var.crop_heat_units_C_day, HRU
+        )
+        self.HRU.var.crop_heat_units_at_harvest_C_day = self.split_HRU_data(
+            self.HRU.var.crop_heat_units_at_harvest_C_day, HRU
         )
         return HRU

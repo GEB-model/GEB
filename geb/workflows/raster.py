@@ -37,6 +37,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayWithScalar,
 )
+from geb.numba_config import NUMBA_CACHE
 from geb.workflows.io import read_zarr, write_zarr
 
 
@@ -102,7 +103,7 @@ def decompress_with_mask(
     return outmap
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def pixel_to_coord(
     px: int | np.integer,
     py: int | np.integer,
@@ -131,7 +132,7 @@ def pixel_to_coord(
         raise ValueError("Cannot convert rotated maps")
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=NUMBA_CACHE, parallel=True)
 def pixels_to_coords(
     pixels: np.ndarray, gt: tuple[float, float, float, float, float, float]
 ) -> np.ndarray:
@@ -214,7 +215,7 @@ def sample_from_map(
 
 @njit(
     parallel=True,
-    cache=True,
+    cache=NUMBA_CACHE,
 )
 def write_to_array(
     array: np.ndarray,
@@ -276,7 +277,7 @@ def write_to_array(
     return array
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def coord_to_pixel(
     coord: tuple[float | np.floating | np.ndarray, float | np.floating | np.ndarray]
     | Sequence[Any],

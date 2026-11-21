@@ -642,15 +642,13 @@ def test_model_checkpoint_helpers(tmp_path: Path) -> None:
 
     # Mock GEBModel minimal configuration
     config = {
-        "general": {
-            "name": "default",
-            "spinup_name": "spinup",
-            "simulation_root": str(tmp_path / "simulation_root"),
-            "spinup_time": "1970-01-01",
-            "start_time": "1980-01-01",
-            "end_time": "1990-01-01",
-            "hazards": {"floods": {"simulate": False}},
-        }
+        "name": "default",
+        "spinup_name": "spinup",
+        "simulation_root": str(tmp_path / "simulation_root"),
+        "spinup_time": "1970-01-01",
+        "start_time": "1980-01-01",
+        "end_time": "1990-01-01",
+        "hazards": {"floods": {"simulate": False}},
     }
 
     class MockModel:
@@ -686,21 +684,14 @@ def test_model_checkpoint_helpers(tmp_path: Path) -> None:
     dt1 = datetime.datetime(1980, 1, 1)
     p1 = m.get_checkpoint_path(dt1)
     assert (
-        p1
-        == Path(config["general"]["simulation_root"])
-        / "default"
-        / "checkpoints"
-        / "1980-01-01"
+        p1 == Path(config["simulation_root"]) / "default" / "checkpoints" / "1980-01-01"
     )
 
     # Test spinup checkpoint path
     p_spinup = m.get_checkpoint_path(dt1, run_name="spinup")
     assert (
         p_spinup
-        == Path(config["general"]["simulation_root"])
-        / "spinup"
-        / "checkpoints"
-        / "1980-01-01"
+        == Path(config["simulation_root"]) / "spinup" / "checkpoints" / "1980-01-01"
     )
 
     # Create dummy checkpoint folders

@@ -28,7 +28,11 @@ from jinja2 import Environment, Template
 from jinja2.utils import htmlsafe_json_dumps
 from pandas.api.typing import NaTType
 
-from geb.evaluate.workflows import discharge_characteristics, discharge_helpers
+from geb.evaluate.workflows import (
+    discharge_characteristics,
+    discharge_helpers,
+    evapotranspiration_evaluation,
+)
 from geb.evaluate.workflows.discharge_characteristics import (
     DASHBOARD_CATCHMENT_CHARACTERISTICS,
     CatchmentCharacteristic,
@@ -46,6 +50,7 @@ from geb.evaluate.workflows.discharge_station_checks import (
 from geb.hydrology.routing import select_active_rivers
 from geb.hydrology.routing.geometry import FLOODPLAIN_PROFILE_DEPTHS
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
+from geb.workflows.flood_protection import read_flood_protection_standards
 from geb.workflows.io import read_geom
 
 _ESRI_TOPO_TILES = (
@@ -320,6 +325,7 @@ def create_discharge_dashboard(
     run_output_folder: Path,
     geometry_files: dict[str, Path],
     table_files: dict[str, Path],
+    flood_protection_config: dict[str, Any],
     minimum_upstream_area_km2: float,
     logger: logging.Logger,
     correct_discharge_observations: bool = False,
@@ -340,6 +346,8 @@ def create_discharge_dashboard(
         run_output_folder: Output folder of the selected simulation run.
         geometry_files: Model geometry paths keyed by dataset name.
         table_files: Model observation table paths keyed by dataset name.
+        flood_protection_config: The ``hydrology.routing.flood_protection``
+            configuration of the run.
         minimum_upstream_area_km2: Minimum routing area for evaluation (km²).
         logger: Model logger for progress and diagnostics.
         correct_discharge_observations: Whether to correct simulated discharge
@@ -443,6 +451,10 @@ def create_discharge_dashboard(
     enriched_rivers: gpd.GeoDataFrame = attach_end_of_run_river_dimensions(
         rivers=dashboard_geometries.rivers,
         run_output_folder=run_output_folder,
+        flood_protection_standards_file=table_files[
+            "flood_protection_standards/flood_protection_standards"
+        ],
+        flood_protection_config=flood_protection_config,
     )
 
     completion_time: str | None = read_run_completion_time(run_output_folder)
@@ -486,6 +498,9 @@ def create_discharge_dashboard(
         run_output_folder=run_output_folder,
         run_name=run_name,
         completion_date=completion_time,
+        flux_towers=load_flux_tower_dashboard_data(
+            run_output_folder, geometry_files, table_files, logger
+        ),
     )
     logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
     return {"dashboard": str(dashboard_path)}
@@ -505,6 +520,7 @@ def write_discharge_dashboard(
     run_output_folder: Path | None = None,
     run_name: str | None = None,
     completion_date: str | datetime.datetime | None = None,
+    flux_towers: list[dict[str, Any]] | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -520,7 +536,8 @@ def write_discharge_dashboard(
             saved.
         region_geom: Basin/region boundary GeoDataFrame used to fit the map
             extent and draw the catchment outline.
-        rivers: WGS84 river network shown on the map.
+        rivers: WGS84 river network shown on the map, enriched by
+            attach_end_of_run_river_dimensions when the run reports river dimensions.
         chart_bundles: List of inlined Base64-encoded compressed chart bundle payloads.
         station_bundle_indices: Mapping from station ID string to its integer bundle index.
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
@@ -533,14 +550,17 @@ def write_discharge_dashboard(
         chart_timeline: Optional shared integer timestamp array (epoch ms) or
             dictionary of timelines by frequency for popup time-series charts.
             Defaults to None.
-        run_output_folder: Optional simulation output folder used to attach
-            end-of-run simulated river dimensions if not already present on
-            rivers. Defaults to None.
+        run_output_folder: Optional simulation output folder used to read the
+            run completion time. Defaults to None.
         run_name: Optional simulation run name shown on the dashboard and in the
             legend.
         completion_date: Optional completion timestamp string or datetime
             shown on the dashboard and in the legend. If omitted, read from
             ``run_output_folder / done.txt``.
+        flux_towers: Optional eddy covariance towers with scores and monthly
+            evapotranspiration series (see
+            evapotranspiration_evaluation.build_tower_dashboard_data), shown as a
+            toggleable layer.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
@@ -557,13 +577,6 @@ def write_discharge_dashboard(
     elif completion_date is not None:
         formatted_completion_date = str(completion_date)
 
-    if run_output_folder is not None and (
-        "width_m" not in rivers.columns or "depth_m" not in rivers.columns
-    ):
-        rivers = attach_end_of_run_river_dimensions(
-            rivers=rivers,
-            run_output_folder=run_output_folder,
-        )
     min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
     if excluded_stations is not None and not excluded_stations.empty:
         mapped_station_scores = mapped_station_scores.copy()
@@ -843,6 +856,15 @@ def write_discharge_dashboard(
             },
         ).add_to(discharge_map)
 
+    flux_tower_layer: folium.FeatureGroup | None = None
+    if flux_towers:
+        flux_tower_layer = folium.FeatureGroup(name="Flux towers", show=True)
+        flux_tower_layer.add_to(discharge_map)
+        _JavascriptMacro(
+            "towers.js",
+            {"layer": flux_tower_layer.get_name(), "towers": flux_towers},
+        ).add_to(discharge_map)
+
     waterbody_layers: list[folium.FeatureGroup] = []
     if waterbodies is not None and not waterbodies.empty:
         waterbody_layers = _add_waterbody_layers(discharge_map, waterbodies)
@@ -882,6 +904,15 @@ def write_discharge_dashboard(
                 "name": getattr(wb_layer, "layer_name", wb_layer.get_name()),
                 "layer": wb_layer.get_name(),
                 "active": False,
+            }
+        )
+    if flux_tower_layer is not None and flux_towers is not None:
+        overlays_data.append(
+            {
+                "id": "flux_towers",
+                "name": f"Flux towers, evapotranspiration ({len(flux_towers)})",
+                "layer": flux_tower_layer.get_name(),
+                "active": True,
             }
         )
     if excluded_stations is not None and not excluded_stations.empty:
@@ -947,6 +978,39 @@ def write_discharge_dashboard(
     return discharge_map
 
 
+def load_flux_tower_dashboard_data(
+    run_output_folder: Path,
+    geometry_files: dict[str, Path],
+    table_files: dict[str, Path],
+    logger: logging.Logger,
+) -> list[dict[str, Any]] | None:
+    """Load eddy covariance tower comparisons of a run for the dashboard.
+
+    Args:
+        run_output_folder: Output folder of the run.
+        geometry_files: Model geometry paths keyed by dataset name.
+        table_files: Model table paths keyed by dataset name.
+        logger: Model logger.
+
+    Returns:
+        Tower dashboard data, or None if the model has no towers or the run did not
+        report them (``report._meteorological_stations``).
+    """
+    comparison = evapotranspiration_evaluation.load_tower_comparison(
+        run_output_folder=run_output_folder,
+        geometry_files=geometry_files,
+        table_files=table_files,
+    )
+    if comparison is None:
+        logger.info(
+            "No flux tower comparison on the dashboard (no towers, or the run did not "
+            "report report._meteorological_stations)."
+        )
+        return None
+    logger.info("Adding %d flux towers to the dashboard.", len(comparison.stations))
+    return evapotranspiration_evaluation.build_tower_dashboard_data(comparison)
+
+
 def load_discharge_dashboard_geometries(
     geometry_files: dict[str, Path],
 ) -> DischargeDashboardGeometries:
@@ -975,20 +1039,35 @@ def load_discharge_dashboard_geometries(
 def attach_end_of_run_river_dimensions(
     rivers: gpd.GeoDataFrame,
     run_output_folder: Path,
+    flood_protection_standards_file: Path,
+    flood_protection_config: dict[str, Any],
 ) -> gpd.GeoDataFrame:
-    """Attach end-of-run simulated river width and depth to the river network.
+    """Attach end-of-run simulated river dimensions and flood protection to the river network.
+
+    Levee depth, levee height and flood protection standard are attached whenever the
+    run reports bankfull depth; the levee depth report and the flood protection
+    standards table are then required.
 
     Args:
         rivers: Active river segments GeoDataFrame indexed by river ID.
         run_output_folder: Output folder of the simulation run containing
             hydrology routing reports.
+        flood_protection_standards_file: Flood protection standards table written by
+            setup_flood_protection_standards.
+        flood_protection_config: The ``hydrology.routing.flood_protection``
+            configuration of the run, which sets the protection standards.
 
     Returns:
-        Copy of the rivers GeoDataFrame with 'width_m' and 'depth_m' columns attached if available.
+        Copy of the rivers GeoDataFrame with width, depth, levee depth, levee height,
+        and flood protection standard columns attached if reported.
+
+    Raises:
+        ValueError: If river segments have no flood protection standard.
     """
     routing_dir: Path = run_output_folder / "report" / "hydrology.routing"
     w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
     d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
+    levee_depth_file: Path = routing_dir / "levee_depth_rivers_yearly_m.parquet"
     fp_s_file: Path = (
         routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
     )
@@ -1026,6 +1105,38 @@ def attach_end_of_run_river_dimensions(
             enriched_rivers["floodplain_side_slope_m_per_m"] = [
                 fp_s_map.get(str(rid)) for rid in enriched_rivers.index
             ]
+
+    if d_file.exists():
+        df_levee_depth: pd.DataFrame = pd.read_parquet(levee_depth_file)
+        last_levee_depth: pd.Series = df_levee_depth.iloc[-1]
+        levee_depth_map: dict[str, float] = {
+            str(col): float(val)
+            for col, val in last_levee_depth.items()
+            if pd.notna(val)
+        }
+        enriched_rivers["levee_depth_m"] = [
+            levee_depth_map.get(str(rid)) for rid in enriched_rivers.index
+        ]
+        enriched_rivers["levee_height_m"] = (
+            enriched_rivers["levee_depth_m"].astype(float)
+            - enriched_rivers["depth_m"].astype(float)
+        ).round(2)
+
+        protection_standards: pd.Series = read_flood_protection_standards(
+            table_path=flood_protection_standards_file,
+            flood_protection_config=flood_protection_config,
+        )
+        protection_standards.index = protection_standards.index.astype(str)
+        river_ids: pd.Index = enriched_rivers.index.astype(str)
+        missing_ids: pd.Index = river_ids.difference(protection_standards.index)
+        if len(missing_ids) > 0:
+            raise ValueError(
+                f"{len(missing_ids)} river segments have no flood protection standard "
+                f"(e.g. {list(missing_ids[:10])})."
+            )
+        enriched_rivers["flood_protection_standard"] = protection_standards.reindex(
+            river_ids
+        ).values
 
     return enriched_rivers
 
@@ -1438,6 +1549,8 @@ def build_river_chart_data(
     depth: list[float],
     floodplain_side_slope_m_per_m: float,
     floodplain_profile_widths: list[float],
+    levee_depth: float,
+    flood_protection_standard: float,
 ) -> dict[str, Any]:
     """Prepare chart data for one river segment popup in the discharge dashboard.
 
@@ -1450,6 +1563,9 @@ def build_river_chart_data(
         depth: Bankfull river depth values (meters).
         floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
         floodplain_profile_widths: 10-point cross-sectional widths at fixed depth levels (meters).
+        levee_depth: Levee crest depth above the channel bed at end of run (meters);
+            equals bankfull depth for reaches without levees.
+        flood_protection_standard: Flood protection standard return period (years).
 
     Returns:
         River chart data dictionary.
@@ -1477,6 +1593,9 @@ def build_river_chart_data(
             "floodplainSideSlopeMPerM": _as_finite_float(floodplain_side_slope_m_per_m),
             "profileDepths": [float(d) for d in FLOODPLAIN_PROFILE_DEPTHS],
             "profileWidths": profile_widths,
+            "leveeDepth": _as_finite_float(levee_depth),
+            "leveeHeight": _as_finite_float(round(levee_depth - last_d, 2)),
+            "floodProtectionStandard": _as_finite_float(flood_protection_standard),
         },
     }
 
@@ -1491,7 +1610,8 @@ def add_river_charts_to_bundle_writer(
     Args:
         chart_writer: Chart bundle writer accumulating interactive charts.
         run_output_folder: Output folder of the selected simulation run.
-        rivers: Active river segments GeoDataFrame.
+        rivers: Active river segments GeoDataFrame enriched by
+            attach_end_of_run_river_dimensions (with a flood_protection_standard column).
     """
     routing_dir: Path = run_output_folder / "report" / "hydrology.routing"
     if not routing_dir.exists():
@@ -1500,6 +1620,7 @@ def add_river_charts_to_bundle_writer(
     q_file: Path = routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet"
     d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
     w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
+    levee_depth_file: Path = routing_dir / "levee_depth_rivers_yearly_m.parquet"
     fp_s_file: Path = (
         routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
     )
@@ -1512,6 +1633,7 @@ def add_river_charts_to_bundle_writer(
         and d_file.exists()
         and w_file.exists()
         and fp_s_file.exists()
+        and levee_depth_file.exists()
         and all(f.exists() for f in fp_profile_files)
     ):
         return
@@ -1521,6 +1643,7 @@ def add_river_charts_to_bundle_writer(
     df_w: pd.DataFrame = pd.read_parquet(w_file)
     df_fp_s: pd.DataFrame = pd.read_parquet(fp_s_file)
     dfs_fp_profile: list[pd.DataFrame] = [pd.read_parquet(f) for f in fp_profile_files]
+    df_levee_depth: pd.DataFrame = pd.read_parquet(levee_depth_file)
     all_river_charts: dict[str, Any] = {}
 
     for river_id in rivers.index:
@@ -1569,6 +1692,11 @@ def add_river_charts_to_bundle_writer(
         if len(profile_vals) != len(FLOODPLAIN_PROFILE_DEPTHS):
             continue
 
+        levee_depth_value: float = float(df_levee_depth[river_id_str].dropna().iloc[-1])
+        protection_standard: float = float(
+            rivers.loc[river_id, "flood_protection_standard"]
+        )
+
         river_chart_data: dict[str, Any] = build_river_chart_data(
             river_id=river_id_str,
             upstream_area_km2=uparea_km2,
@@ -1578,6 +1706,8 @@ def add_river_charts_to_bundle_writer(
             depth=d_list,
             floodplain_side_slope_m_per_m=round(fp_s_val, 2),
             floodplain_profile_widths=[round(v, 2) for v in profile_vals],
+            levee_depth=round(levee_depth_value, 2),
+            flood_protection_standard=protection_standard,
         )
         all_river_charts[f"river_{river_id_str}"] = river_chart_data
 
@@ -2529,7 +2659,8 @@ def _add_river_layers(
     if "width_m" in rivers.columns:
         cols.append("width_m")
     if "depth_m" in rivers.columns:
-        cols.append("depth_m")
+        # Levees and protection standards are attached together with bankfull depth
+        cols.extend(["depth_m", "levee_height_m", "flood_protection_standard"])
     river_data: gpd.GeoDataFrame = rivers[cols].copy()
     river_data["river_id"] = rivers.index.astype(str)
     river_data["uparea_m2"] = river_data["uparea_m2"].round(1)

@@ -38,11 +38,7 @@ class Government(AgentBaseClass):
         """
         super().__init__(model)
         self.agents = agents
-        self.config = (
-            self.model.config["agent_settings"]["government"]
-            if "government" in self.model.config["agent_settings"]
-            else {}
-        )
+        self.config = self.model.config["agents"]["government"]
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
 
     @property
@@ -155,7 +151,7 @@ class Government(AgentBaseClass):
         self.report(locals())
 
         end_time: datetime = datetime.combine(
-            self.model.config["general"]["end_time"], datetime.min.time()
+            self.model.config["end_time"], datetime.min.time()
         )
 
         if self.model.current_time.year == end_time.year - 1 and adaptation_enabled:
@@ -718,7 +714,13 @@ class Government(AgentBaseClass):
         }
 
         # land use type per HRU and also area
-        land_use_type_per_HRU = self.model.hydrology.HRU.var.land_use_type
+        land_use_type_per_HRU = self.model.hydrology.HRU.var.land_use_type.copy()
+        # farmers' fields are valued as cropland, also when rainfed or fallow
+        # (grassland-like land use)
+        land_use_type_per_HRU[
+            (self.model.hydrology.HRU.var.land_owners != -1)
+            & (land_use_type_per_HRU == GRASSLAND_LIKE)
+        ] = NON_PADDY_IRRIGATED
         area_per_HRU = self.model.hydrology.HRU.var.cell_area
 
         # multiply the values with the area of each land use type

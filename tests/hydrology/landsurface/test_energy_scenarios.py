@@ -67,7 +67,7 @@ def run_energy_simulation(
     """
     n_steps = len(air_temp_series_C)
     n_layers = N_SOIL_LAYERS
-    layer_thickness_m = np.array([0.1, 0.2, 0.4, 0.8, 1.6, 3.2], dtype=np.float32)
+    layer_thickness_m = np.array([0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4], dtype=np.float32)
 
     # Properties
     porosity = np.full(n_layers, 0.4, dtype=np.float32)
@@ -193,6 +193,7 @@ def run_energy_simulation(
             snow_enthalpy_J_per_m2=snow_enthalpy_J_per_m2,
             snow_density_kg_per_m3=snow_density_kg_per_m3,
             topwater_m=np.float32(0.0),
+            snow_albedo=np.float32(0.9),
         )
 
         # Diagnose temperatures

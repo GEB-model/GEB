@@ -8,6 +8,7 @@ import logging
 import os
 import platform
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -1770,6 +1771,50 @@ def fast_rmtree(path: Path) -> None:
         raise NotImplementedError(
             f"Optimized fast deletion is not implemented for system: {system}"
         )
+
+
+def apply_shared_permissions(path: Path, recursive: bool = True) -> None:
+    """Make a file or directory tree readable by everyone and writable by the group.
+
+    Permissions are only added, never removed. Directories get rwx for the group,
+    r-x for others and the setgid bit, so that new entries inherit the group. Files
+    get rw for the group and r for others, plus execute for group and others if the
+    owner can execute. This also fixes files and directories that were created
+    elsewhere (e.g., by tempfile with mode 0600/0700) and then moved into place.
+
+    Entries owned by other users cannot be changed and are skipped with a warning.
+
+    Args:
+        path: The file or directory to update.
+        recursive: If True and path is a directory, also update all its contents.
+    """
+    logger = logging.getLogger(__name__)
+
+    def update(entry: Path) -> None:
+        st = os.lstat(entry)
+        if stat.S_ISLNK(st.st_mode):
+            return
+        mode = stat.S_IMODE(st.st_mode)
+        if stat.S_ISDIR(st.st_mode):
+            new_mode = mode | 0o2775
+        else:
+            new_mode = mode | 0o664
+            if mode & stat.S_IXUSR:
+                new_mode |= 0o011
+        if new_mode != mode:
+            try:
+                os.chmod(entry, new_mode)
+            except PermissionError:
+                logger.warning(f"Could not update permissions of {entry}")
+
+    if not path.exists():
+        return
+
+    update(path)
+    if recursive and path.is_dir():
+        for root, dirnames, filenames in os.walk(path):
+            for name in dirnames + filenames:
+                update(Path(root) / name)
 
 
 def create_hash_from_parameters(

@@ -24,8 +24,10 @@
 import numpy as np
 from numba import njit
 
+from geb.numba_config import NUMBA_CACHE
 
-@njit(cache=True, inline="always")
+
+@njit(cache=NUMBA_CACHE, inline="always")
 def interception(
     rainfall_m: np.float32,
     storage_m: np.float32,
@@ -60,8 +62,9 @@ def interception(
         potential_transpiration_m: Updated potential transpiration (m).
         potential_direct_evaporation_m: Updated potential direct evaporation (m).
     """
-    # If no canopy capacity or no vegetated surface, all rainfall and storage pass through
-    if capacity_m <= np.float32(0.0) or leaf_area_index <= np.float32(0.1):
+    # Without canopy (no capacity) all rainfall and storage pass through. The
+    # capacity goes to zero with the leaf area (get_interception_capacity).
+    if capacity_m <= np.float32(0.0):
         throughfall: np.float32 = rainfall_m + storage_m
         return (
             np.float32(0.0),

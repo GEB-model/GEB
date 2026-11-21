@@ -9,6 +9,7 @@ import xarray as xr
 from numba import njit
 
 from geb.geb_types import ArrayFloat64, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.numba_config import NUMBA_CACHE
 from geb.workflows.raster import pixels_to_coords
 
 
@@ -264,7 +265,7 @@ def create_farmers_table(farm_sizes_cells: ArrayInt32, region_id: int) -> pd.Dat
     )
 
 
-@njit(cache=True, parallel=False)
+@njit(cache=NUMBA_CACHE, parallel=False)
 def create_farms_numba(
     cultivated_land: TwoDArrayInt32 | TwoDArrayBool,
     ids: ArrayInt32,

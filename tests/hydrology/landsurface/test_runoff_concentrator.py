@@ -4,6 +4,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 
 from geb.hydrology.runoff_concentration import (
     advance_buffer,
@@ -96,7 +97,7 @@ def test_apply_triangular_mass_balance() -> None:
         triangular_weights(peak_hour, lag_time_hours)[:, None], n_cells, axis=1
     )
     flow = np.random.rand(n_steps, n_cells).astype(np.float32)
-    buffer = np.zeros((lag_time_hours, n_cells), dtype=np.float64)
+    buffer = np.zeros((lag_time_hours + 24, n_cells), dtype=np.float64)
 
     apply_triangular(flow, weights, buffer)
 
@@ -128,7 +129,7 @@ def test_apply_triangular_delay() -> None:
     flow = np.zeros((n_steps, n_cells), dtype=np.float32)
     flow[0, 0] = 1.0  # pulse at t=0
 
-    buffer = np.zeros((lag_time_hours, n_cells), dtype=np.float64)
+    buffer = np.zeros((lag_time_hours + 24, n_cells), dtype=np.float64)
     apply_triangular(flow, weights, buffer)
 
     # Pulse at t=0 should contribute to buffer indices 0, 1, 2, 3
@@ -192,7 +193,7 @@ def test_apply_triangular_visualization() -> None:
     n_cells = 1
     n_steps = 24
 
-    weights = triangular_weights(peak_hour, lag_time_hours)[:, None]
+    weights = triangular_weights(peak_hour, lag_time_hours - 24)[:, None]
 
     # 1. Test a single pulse at t=0
     flow_pulse = np.zeros((n_steps, n_cells), dtype=np.float32)
@@ -252,7 +253,7 @@ def test_apply_triangular_varying_buffer_lengths_visualization() -> None:
     peaks_to_test = [3.0, 6.0, 12.0, 24.0]
     for p in peaks_to_test:
         buffer = np.zeros((lag_time_hours, n_cells), dtype=np.float64)
-        weights = triangular_weights(p, lag_time_hours)[:, None]
+        weights = triangular_weights(p, lag_time_hours - 24)[:, None]
         apply_triangular(flow_pulse, weights, buffer)
 
         plt.plot(
@@ -287,7 +288,7 @@ def test_apply_triangular_varying_peaks_event_visualization() -> None:
     peaks_to_test = [3.0, 6.0, 12.0, 24.0]
     for p in peaks_to_test:
         buffer = np.zeros((lag_time_hours, n_cells), dtype=np.float64)
-        weights = triangular_weights(p, lag_time_hours)[:, None]
+        weights = triangular_weights(p, lag_time_hours - 24)[:, None]
         apply_triangular(flow_event, weights, buffer)
 
         plt.plot(
@@ -340,7 +341,7 @@ def test_apply_triangular_successive_events_visualization() -> None:
     peaks_to_test = [3.0, 6.0, 12.0, 24.0]
     for p in peaks_to_test:
         buffer = np.zeros((lag_time_hours, n_cells), dtype=np.float64)
-        weights = triangular_weights(p, lag_time_hours)[:, None]
+        weights = triangular_weights(p, lag_time_hours - n_steps)[:, None]
         apply_triangular(flow_events, weights, buffer)
 
         plt.plot(
@@ -465,7 +466,7 @@ def test_apply_triangular_2d_weights_mass_balance() -> None:
         hillslope_length_m=hillslope_lengths,
         slope_m_per_m=slopes,
         retardance_roughness=retardance_cells,
-        lag_time_hours=lag_time_hours,
+        lag_time_hours=lag_time_hours - 24,
         concentration_factor=1.0,
     )
 
@@ -557,7 +558,7 @@ def test_kerby_tc_and_pulse_routing_visualization() -> None:
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
     for s in slopes:
-        tc_minutes = 1.44 * ((n_retardance * lengths_m) ** 0.467) * (s**-0.235)
+        tc_minutes = 0.828 * ((n_retardance * lengths_m) ** 0.467) * (s**-0.235)
         ax1.plot(lengths_m, tc_minutes, label=f"Slope S = {s:.3f}")
 
     ax1.set_xlabel("Hillslope Length L [m]")
@@ -583,7 +584,7 @@ def test_kerby_tc_and_pulse_routing_visualization() -> None:
         hillslope_length_m=test_lengths,
         slope_m_per_m=test_slopes,
         retardance_roughness=retardance_test,
-        lag_time_hours=lag_time_hours,
+        lag_time_hours=lag_time_hours - 24,
         concentration_factor=1.0,
     )
 
@@ -607,3 +608,56 @@ def test_kerby_tc_and_pulse_routing_visualization() -> None:
         output_folder_runoff_concentrator / "kerby_tc_and_hydrograph_comparison.svg"
     )
     plt.close()
+
+
+def test_step_passes_interflow_without_delay() -> None:
+    """Interflow enters the channel in the hour it leaves the soil; water is conserved."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from geb.hydrology.runoff_concentration import (
+        RunoffConcentrator,
+        compute_slope_dependent_triangular_weights,
+    )
+
+    concentrator: RunoffConcentrator = object.__new__(RunoffConcentrator)
+    concentrator.lag_time_hours = 72
+    n_cells = 1
+    concentrator.overland_flow_weights = compute_slope_dependent_triangular_weights(
+        hillslope_length_m=np.array([300.0], dtype=np.float32),
+        slope_m_per_m=np.array([0.05], dtype=np.float32),
+        retardance_roughness=np.array([0.4], dtype=np.float32),
+        lag_time_hours=72 - 24,
+        concentration_factor=1.0,
+    )
+    grid = MagicMock()
+    grid.var = SimpleNamespace(
+        overland_flow_buffer=np.zeros((72, n_cells), dtype=np.float32),
+    )
+    grid.full_compressed = lambda value, dtype: np.full(n_cells, value, dtype=dtype)
+    concentrator.grid = grid
+
+    runoff = np.zeros((24, n_cells), dtype=np.float32)
+    interflow = np.zeros((24, n_cells), dtype=np.float32)
+    interflow[5] = 0.01
+    outflow = concentrator.step(interflow_m=interflow, runoff_m=runoff)
+    assert outflow[5, 0] == pytest.approx(0.01, rel=1e-6)
+    assert float(outflow.sum()) == pytest.approx(0.01, rel=1e-6)
+
+
+def test_apply_triangular_late_inflow_with_long_hydrograph_keeps_mass() -> None:
+    """Water entering in the last hour of a day keeps its full unit hydrograph.
+
+    The unit hydrograph is limited to the buffer length minus one day, so no weight
+    falls beyond the buffer, also for the longest hydrographs (slow interflow).
+    """
+    buffer_hours = 240
+    weights = triangular_weights(150.0, buffer_hours - 24)[:, None].astype(np.float32)
+    weights /= weights.sum()
+    flow = np.zeros((24, 1), dtype=np.float32)
+    flow[23, 0] = 1.0
+    buffer = np.zeros((buffer_hours, 1), dtype=np.float64)
+
+    apply_triangular(flow, weights, buffer)
+
+    np.testing.assert_allclose(buffer.sum(), 1.0, rtol=1e-6)

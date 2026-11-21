@@ -68,8 +68,10 @@ def test_waterbodies_depth_and_stage_calculations() -> None:
     mock_model = MagicMock()
     mock_model.in_spinup = False
     mock_model.config = {
-        "general": {"hydrological_year_start_month": 10},
-        "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
+        "hydrology": {
+            "hydrological_year_start_month": 10,
+            "routing": {"lake_outflow_multiplier": np.float32(1.0)},
+        },
     }
     mock_hydrology = MagicMock()
 
@@ -108,8 +110,10 @@ def test_flatten_waterbody_elevations() -> None:
     mock_model = MagicMock()
     mock_model.in_spinup = False
     mock_model.config = {
-        "general": {"hydrological_year_start_month": 10},
-        "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
+        "hydrology": {
+            "hydrological_year_start_month": 10,
+            "routing": {"lake_outflow_multiplier": np.float32(1.0)},
+        },
     }
     mock_hydrology = MagicMock()
     mock_grid = MagicMock()
@@ -150,8 +154,10 @@ def test_off_waterbodies_filtered_out_at_spinup() -> None:
     mock_model = MagicMock()
     mock_model.in_spinup = False
     mock_model.config = {
-        "general": {"hydrological_year_start_month": 10},
-        "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
+        "hydrology": {
+            "hydrological_year_start_month": 10,
+            "routing": {"lake_outflow_multiplier": np.float32(1.0)},
+        },
     }
     mock_hydrology = MagicMock()
     mock_grid = MagicMock()
@@ -386,3 +392,44 @@ def test_prune_starved_river_cells() -> None:
     assert pruned_dead[0, 1] == -1
     assert pruned_dead[0, 2] == -1
     assert pruned_dead[0, 3] == -1
+
+
+def test_remove_waterbody_cells_outside_catchment() -> None:
+    """A small lake next to the main river does not take over the river cell."""
+    from geb.build.modules.hydrography import remove_waterbody_cells_outside_catchment
+
+    # lake 1: gravel pit (catchment 2 km2) touching a side cell and the main river cell
+    # lake 2: lake the river flows through (catchment 1000 km2)
+    waterbody_id = np.array([[1, 1, -1], [2, 2, -1]], dtype=np.int32)
+    upstream_area_m2 = np.array(
+        [[1.5e6, 900e6, 3e6], [800e6, 1000e6, 5e6]], dtype=np.float32
+    )
+    updated = remove_waterbody_cells_outside_catchment(
+        waterbody_id=waterbody_id,
+        upstream_area_m2=upstream_area_m2,
+        waterbody_ids=np.array([2, 1], dtype=np.int32),
+        catchment_area_m2=np.array([1000e6, 2e6], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(updated, [[1, -1, -1], [2, 2, -1]])
+    # the input is not modified
+    assert waterbody_id[0, 1] == 1
+
+
+def test_is_flow_through_waterbody() -> None:
+    """Gravel pits along a large river are flushed within hours; real lakes are not."""
+    from geb.build.modules.hydrography import is_flow_through_waterbody
+
+    volume_total_m3 = np.array([0.6e6, 1.8e6, 4.8e10, 25e6])
+    average_discharge_m3_per_s = np.array([353.0, 0.5, 370.0, 105.0])
+    # pit on the Meuse (~40 min), small lake on a brook (~40 days),
+    # Lake Constance (~4 years), reservoir (~2.8 days)
+    np.testing.assert_array_equal(
+        is_flow_through_waterbody(volume_total_m3, average_discharge_m3_per_s),
+        [True, False, False, False],
+    )
+
+    # without discharge the residence time is infinite (or undefined): kept
+    np.testing.assert_array_equal(
+        is_flow_through_waterbody(np.array([1e6, 0.0]), np.array([0.0, 0.0])),
+        [False, False],
+    )
