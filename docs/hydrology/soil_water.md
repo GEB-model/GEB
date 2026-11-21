@@ -150,35 +150,49 @@ The physical derivation follows these steps:
 
     $$H_w = \frac{W_{free}}{\phi_d}$$
 
-3.  **Grid cell integration**: The total interflow depth produced by a grid cell of length $L$ is the discharge $q$ divided by that length:
+3.  **Hillslope integration**: In the kinematic storage model the saturated zone is a wedge that is twice as thick at the foot of the hillslope as on average. The interflow depth produced by a hillslope of length $L$ is the discharge at its foot divided by that length:
 
-    $$\text{Interflow} = \frac{q}{L} = \frac{K_{lat} \sin(\beta) W_{free}}{\phi_d L}$$
+    $$\text{Interflow} = \frac{2 K_{lat} \sin(\beta) W_{free}}{\phi_d L}$$
 
-### Implementation
+    This holds while the wedge stays inside the soil, up to half filling of the drainable pores. Above that the saturated zone reaches the top of the soil at the foot of the hillslope and cannot get thicker there, so the interflow stays at its value at half filling. The additional water widens the saturated area (see below). The rule is applied to each soil layer.
 
-The fraction of free water that becomes interflow is controlled by a `storage_coefficient`.
+Interflow is the outflow at the foot of the hillslope, so it enters the channel without a further delay.
 
-$$
-\text{Interflow} = \text{Free Water} \times \text{Storage Coefficient}
-$$
+### Lateral conductivity
 
-where the Storage Coefficient is derived as:
+Lateral flow on hillslopes is carried mostly by the structure of the soil (root and animal channels, pipes, loose aggregated topsoil) and not by the soil matrix. The lateral conductivity of each layer is the sum of the matrix conductivity and a structural part that is largest at the surface and declines exponentially with depth $z$:
 
 $$
-\text{Storage Coeff.} = \left( \frac{K_{lat} \times \text{Slope}}{\phi_d \times L_{hill}} \right) \times \text{Multiplier}
+K_{lat}(z) = K_{matrix}(z) + K_{structure} \, e^{-z / d}
 $$
 
-* $K_{lat}$: Lateral saturated hydraulic conductivity ($m/h$).
+* $K_{structure}$: Structural lateral conductivity at the surface, by land cover (`interflow_structural_conductivity_m_per_day`: forest 100, grassland 50, cropland 15 m/day). Forest soils have the best developed structure; tillage destroys it in cropland.
+* $d$: e-folding depth of the structural conductivity (`interflow_structural_depth_m`, 2.0 m: the soil and the weathered zone below it).
 * $\phi_d$: Drainable porosity ($-$).
-* $L_{hill}$: Hillslope length ($m$).
-* $\text{Slope}$: Slope of the terrain ($m/m$).
-* $\text{Multiplier}$: Calibration factor.
+* $L$: Hillslope length ($m$).
+
+Because the conductivity is concentrated near the surface, interflow rises steeply when the upper layers fill with free water.
+
+### Saturated area
+
+Rain on land that is saturated to the surface cannot enter the soil and runs off. The saturated area follows from the same hillslope store (Sloan and Moore, 1984): the saturated zone is a wedge that is thickest at the foot of the slope. While the drainable pores of the structured soil (the layers within the depth $d$) are less than half full, the wedge stays below the surface. Above that it reaches the surface over the lower part of the slope:
+
+$$
+A_s = \max(0, \; 2 S - 1)
+$$
+
+* $A_s$: Fraction of the land that is saturated to the surface ($-$).
+* $S$: Filling of the drainable pores of the structured soil with perched water, 0 when empty and 1 when saturated ($-$).
+
+The saturated zone builds up from below: free water over a layer that still takes up water is on its way down and not part of a saturated zone. The free water of a layer therefore counts as perched in proportion to the filling of the drainable pores of the layer below it (the lowest soil layer rests on the rock). This is the same water that drains sideways as interflow. Early in an event rain on a soil with room below does not run off as saturation excess; once the profile has filled from below it does.
+
+There is no shape parameter. Land where the groundwater table reaches the surface is saturated as well.
 
 $L_{hill}$ is derived from the drainage density ($D_d$) of the river network:
 
 $$ L_{hill} = \frac{1}{2 D_d} $$
 
-The drainage density is calculated by summing the length of all streams (defined as pixels with > 1 km² upstream area) within the grid cell and dividing by the cell area. To avoid unrealistic values in areas with sparse river networks, the hillslope length is capped at 1000 m.
+The drainage density is calculated by summing the length of all streams (defined as pixels with more than 0.2 km² upstream area, `channel_initiation_area_km2` of `setup_geomorphology`) within the grid cell and dividing by the cell area. This network is denser than the routing network, whose streams start at 1 km². To avoid unrealistic values in areas with sparse river networks, the hillslope length is capped at 1000 m.
 
 ## Groundwater percolation
 

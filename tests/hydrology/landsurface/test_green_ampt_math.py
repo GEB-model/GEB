@@ -146,7 +146,7 @@ def test_green_ampt_time_increases_monotonically_with_infiltration() -> None:
     assert np.all(np.diff(times) >= -1e-10)
 
 
-def test_green_ampt_salvucci_and_time_inverse_are_self_consistent() -> None:
+def test_green_ampt_sadeghi_and_time_inverse_are_self_consistent() -> None:
     """Check that the Sadeghi explicit I(t) and standard time inversion are consistent.
 
     Notes:
@@ -262,7 +262,8 @@ def test_green_ampt_sadeghi_matches_standard_green_ampt_with_coarse_correction()
     """Sadeghi explicit formula should stay within the stated bound vs standard GA.
 
     The paper reports that with the coarse-soil correction enabled the maximum
-    relative deviation from the standard Green-Ampt solution should be <= 0.3.
+    relative deviation from the standard Green-Ampt solution stays within 0.3 %
+    (up to K_s t / F = 0.983).
 
     This test compares the explicit approximation against a numerical solution of
     the implicit Green-Ampt relation across a small parameter sweep.
@@ -344,7 +345,7 @@ def test_green_ampt_verification_silty_clay_example() -> None:
 
         # Allow some tolerance because we are comparing an approximation (Sadeghi)
         # against values derived from the implicit exact solution.
-        # Sadeghi claims generally <2% relative error.
+        # Sadeghi et al. report an error within 0.3 %; the tolerance here is 2 %.
         rel_err = abs(f_calculated - expected_f_cm) / expected_f_cm
         assert rel_err < 0.02, (
             f"At t={t_hr}, expected {expected_f_cm}, got {f_calculated}"

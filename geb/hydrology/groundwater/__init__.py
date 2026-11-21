@@ -25,10 +25,13 @@ Groundwater submodule for hydrology in GEB.
 Provides groundwater simulation and ModFlow integration utilities.
 """
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
+from numba import njit, prange
+from scipy.ndimage import distance_transform_edt
 
 from geb.geb_types import (
     ArrayBool,
@@ -36,16 +39,166 @@ from geb.geb_types import (
     ArrayFloat64 as ArrayFloat64,
     ThreeDArrayFloat64,
     TwoDArrayBool,
+    TwoDArrayFloat32,
     TwoDArrayFloat64,
 )
 from geb.module import Module
-from geb.workflows import balance_check
+from geb.numba_config import NUMBA_CACHE
+from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import read_zarr
 
 from .model import ModFlowSimulation
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
+
+DEPTH_OF_CONSTANT_CONDUCTIVITY_M: float = 1.5
+
+
+def get_conductivity_depth_decay_factor(
+    layer_boundary_elevation_m: npt.NDArray[np.floating],
+    slope_m_per_m: npt.NDArray[np.floating],
+) -> npt.NDArray[np.float64]:
+    """Mean reduction of the hydraulic conductivity of each layer by its decay with depth.
+
+    The hydraulic conductivity of the aquifer data is that of the rock near the surface.
+    Below the soil it decreases exponentially with depth, faster in steep terrain where
+    the weathered layer is thin (Fan et al., 2013, Science 339, 940-943):
+
+        K(z) = K0 * exp(-(z - 1.5) / f),  f = 120 / (1 + 150 * slope) m,
+
+    with z the depth below the surface (constant conductivity in the upper 1.5 m) and
+    f = 5 m on slopes steeper than 0.16. The factor is the mean of K(z) / K0 over the
+    layer, so that the conductivity times the factor times the layer thickness is the
+    transmissivity of the layer.
+
+    Args:
+        layer_boundary_elevation_m: Elevation of the top and bottom of every layer,
+            from the surface downwards, shape (number of layers + 1, ...) (m).
+        slope_m_per_m: Terrain slope, shape (...) (m/m).
+
+    Returns:
+        Reduction factor per layer, shape (number of layers, ...) (-).
+    """
+    e_folding_depth_m = np.where(
+        slope_m_per_m <= 0.16, 120.0 / (1.0 + 150.0 * slope_m_per_m), 5.0
+    )
+
+    def integral_to_depth(depth_m: npt.NDArray[np.floating]) -> npt.NDArray[np.float64]:
+        return np.minimum(depth_m, DEPTH_OF_CONSTANT_CONDUCTIVITY_M) + (
+            e_folding_depth_m
+            * (
+                1.0
+                - np.exp(
+                    -np.maximum(depth_m - DEPTH_OF_CONSTANT_CONDUCTIVITY_M, 0.0)
+                    / e_folding_depth_m
+                )
+            )
+        )
+
+    depth_m = (layer_boundary_elevation_m[0] - layer_boundary_elevation_m).astype(
+        np.float64
+    )
+    thickness_m = np.maximum(depth_m[1:] - depth_m[:-1], 1e-6)
+    return (integral_to_depth(depth_m[1:]) - integral_to_depth(depth_m[:-1])) / (
+        thickness_m
+    )
+
+
+def get_response_time_conductance(
+    specific_yield: ArrayFloat32,
+    cell_area_m2: ArrayFloat32,
+    response_time_days: float,
+) -> ArrayFloat32:
+    """Drain conductance that empties the groundwater above the drain level in a set time.
+
+    The groundwater above the drain level, specific yield * (head - drain level) * area,
+    leaves as conductance * (head - drain level). With conductance = specific yield *
+    area / response time the cell is a linear store: the head above the drain level
+    falls to 1 / e of its value in the response time, in every cell alike.
+
+    Args:
+        specific_yield: Specific yield of the top layer per cell (-).
+        cell_area_m2: Cell area (m2).
+        response_time_days: Time in which the head above the drain level falls to 1 / e (days).
+
+    Returns:
+        Drain conductance per cell (m2/day).
+    """
+    return (specific_yield * cell_area_m2 / np.float32(response_time_days)).astype(
+        np.float32
+    )
+
+
+def get_karst_drain_conductance(
+    matrix_conductance_m2_per_day: ArrayFloat32,
+    karst_conductance_m2_per_day: ArrayFloat32,
+    karst_fraction: ArrayFloat32,
+) -> ArrayFloat32:
+    """Drain conductance of cells that are partly karst.
+
+    Karst conduits carry groundwater to the springs much faster than the rock matrix
+    does. The karst part of a cell drains with the karst conductance, the rest with
+    the matrix conductance.
+
+    Args:
+        matrix_conductance_m2_per_day: Drain conductance of rock without karst (m2/day).
+        karst_conductance_m2_per_day: Drain conductance of karst (m2/day).
+        karst_fraction: Karst fraction of each cell (-), clipped to 0-1.
+
+    Returns:
+        Drain conductance per cell (m2/day).
+    """
+    fraction = np.clip(karst_fraction, 0.0, 1.0)
+    return (
+        (1.0 - fraction) * matrix_conductance_m2_per_day
+        + fraction * karst_conductance_m2_per_day
+    ).astype(np.float32)
+
+
+@njit(cache=NUMBA_CACHE, parallel=True)
+def drain_groundwater_to_rivers(
+    head_m: ArrayFloat64,
+    drain_elevation_m: ArrayFloat64,
+    conductance_m2_per_hour: ArrayFloat64,
+    storage_coefficient_m2: ArrayFloat64,
+    drainage_m3: ArrayFloat64,
+    remaining_storage_m3: ArrayFloat64,
+) -> None:
+    """Drains groundwater above the drain level to the river network for one hour.
+
+    The drain outflow is conductance * (head - drain level). With the head falling as the
+    aquifer empties, dh/dt = -C (h - z) / (S_y A), the head above the drain level decays
+    exponentially over the hour, (h - z) * exp(-C dt / (S_y A)). This exact solution is
+    stable for any conductance (the cell drain empties a cell within hours) and never
+    drains below the drain level. Cells with the head at or below the drain level do not
+    drain. A cell cannot drain more than the groundwater it still holds (the drain
+    level can lie below the lowest level to which the aquifer can be emptied). The
+    head and the remaining storage are updated in place.
+
+    Args:
+        head_m: Water table of the top layer per cell (m), updated in place.
+        drain_elevation_m: Drain level per cell (m).
+        conductance_m2_per_hour: Drain conductance per cell (m2/hour).
+        storage_coefficient_m2: Specific yield of the top layer times the cell area (m2).
+        drainage_m3: Output: groundwater drained in this hour per cell (m3).
+        remaining_storage_m3: Groundwater that can still be taken from the cell (m3),
+            updated in place.
+    """
+    for i in prange(head_m.size):
+        excess_m: float = head_m[i] - drain_elevation_m[i]
+        if excess_m <= 0.0 or conductance_m2_per_hour[i] <= 0.0:
+            drainage_m3[i] = 0.0
+            continue
+        drained_m: float = excess_m * (
+            1.0 - np.exp(-conductance_m2_per_hour[i] / storage_coefficient_m2[i])
+        )
+        drained_m3: float = min(
+            drained_m * storage_coefficient_m2[i], max(remaining_storage_m3[i], 0.0)
+        )
+        drainage_m3[i] = drained_m3
+        remaining_storage_m3[i] -= drained_m3
+        head_m[i] -= drained_m3 / storage_coefficient_m2[i]
 
 
 class GroundWater(Module):
@@ -78,13 +231,12 @@ class GroundWater(Module):
 
     def spinup(self) -> None:
         """Initialize groundwater model parameters and state variables."""
+        # The conductivity is stored without the multiplier; the multiplier is applied
+        # at every model start (hydraulic_conductivity_m_per_day), so a run uses the
+        # multiplier of its own configuration everywhere.
         boundary_hydraulic_conductivity: ThreeDArrayFloat64 = read_zarr(
             self.model.files["other"]["groundwater/boundary_hydraulic_conductivity"]
-        ).values.astype(np.float64) * np.float32(
-            self.model.config["parameters"][
-                "groundwater_hydraulic_conductivity_multiplier"
-            ]
-        )
+        ).values.astype(np.float64)
         boundary_layer_boundary_elevation: ThreeDArrayFloat64 = read_zarr(
             self.model.files["other"]["groundwater/boundary_layer_boundary_elevation"]
         ).values.astype(np.float64)
@@ -142,6 +294,73 @@ class GroundWater(Module):
         """
         self.hydrology.grid.var.heads = heads
 
+    @property
+    def available_groundwater_m3(self) -> ArrayFloat64:
+        """Groundwater that wells and capillary rise can still take (m3).
+
+        The MODFLOW available storage minus the groundwater already drained to the rivers
+        in routing (net of riverbed seepage), which MODFLOW removes in its next step.
+
+        Returns:
+            Available groundwater per cell (m3).
+        """
+        net_drainage_m3 = np.maximum(
+            self.hydrology.grid.var.pending_groundwater_drainage_m3
+            - self.hydrology.grid.var.pending_river_transmission_loss_m3,
+            0.0,
+        )
+        return np.maximum(self.modflow.available_groundwater_m3 - net_drainage_m3, 0.0)
+
+    def get_drain_elevation(self, water_stage_m: ArrayFloat32) -> ArrayFloat64:
+        """Level to which groundwater drains in this routing hour.
+
+        Groundwater drains to the river water level, so groundwater drainage and riverbed
+        seepage use the same level: a cell drains where the head is above it and river
+        water seeps into the aquifer where the head is below it. The level is kept inside
+        the top layer: never above the aquifer top and 0.1 m above its bottom.
+
+        Args:
+            water_stage_m: River (or lake) water level per cell (m).
+
+        Returns:
+            Drain level per cell (m).
+        """
+        top_m = self.grid.var.layer_boundary_elevation[0].astype(np.float64)
+        bottom_m = self.grid.var.layer_boundary_elevation[1].astype(np.float64)
+        return np.clip(water_stage_m.astype(np.float64), bottom_m + 0.1, top_m)
+
+    def get_drainage_conductance(self) -> ArrayFloat32:
+        """Get the conductance of the groundwater drain to the river network.
+
+        Groundwater above the drain level leaves every cell in the same drainage time
+        (``drainage_response_time_days``, see ``get_response_time_conductance``): the
+        observed recessions of the rivers do not follow the mapped aquifer conductivity.
+        Karst conduits carry groundwater to the springs much faster than the rock
+        matrix, so the karst part of a cell drains in the karst drainage time.
+
+        Returns:
+            Drain conductance per grid cell (m2/day).
+        """
+        matrix_conductance_m2_per_day: ArrayFloat32 = get_response_time_conductance(
+            specific_yield=self.grid.var.specific_yield[0],
+            cell_area_m2=self.grid.var.cell_area,
+            response_time_days=self.model.config["hydrology"]["groundwater"][
+                "drainage_response_time_days"
+            ],
+        )
+        karst_conductance_m2_per_day: ArrayFloat32 = get_response_time_conductance(
+            specific_yield=self.grid.var.specific_yield[0],
+            cell_area_m2=self.grid.var.cell_area,
+            response_time_days=self.model.config["hydrology"]["karst"][
+                "drainage_response_time_days"
+            ],
+        )
+        return get_karst_drain_conductance(
+            matrix_conductance_m2_per_day=matrix_conductance_m2_per_day,
+            karst_conductance_m2_per_day=karst_conductance_m2_per_day,
+            karst_fraction=self.hydrology.karst.karst_fraction,
+        ).astype(np.float32)
+
     def initalize_modflow_model(self) -> None:
         """Initialize the ModFlow groundwater simulation model."""
         boundary_heads: ThreeDArrayFloat64 = read_zarr(
@@ -153,11 +372,55 @@ class GroundWater(Module):
         boundary_layer_boundary_elevation: ThreeDArrayFloat64 = read_zarr(
             self.model.files["other"]["groundwater/boundary_layer_boundary_elevation"]
         ).values.astype(np.float64)
+        # same multiplier as the interior conductivity, so flow across the model
+        # boundary is consistent with the flow inside
         boundary_hydraulic_conductivity: ThreeDArrayFloat64 = read_zarr(
             self.model.files["other"]["groundwater/boundary_hydraulic_conductivity"]
-        ).values.astype(np.float64)
+        ).values.astype(np.float64) * np.float64(self.hydraulic_conductivity_multiplier)
+        # Lateral flow through the aquifer: conductivity decreasing with depth. The
+        # drains and the riverbed are at the surface and keep the full conductivity.
+        slope_m_per_m: ArrayFloat32 = self.hydrology.grid.load2d(
+            self.model.files["grid"]["landsurface/slope_m_per_m"]
+        )
+        lateral_hydraulic_conductivity_m_per_day = (
+            self.hydraulic_conductivity_m_per_day
+            * get_conductivity_depth_decay_factor(
+                self.grid.var.layer_boundary_elevation, slope_m_per_m
+            )
+        ).astype(np.float32)
+        # the cells around the model take the slope of the nearest cell of the model
+        slope_2d = np.pad(
+            self.hydrology.grid.decompress(slope_m_per_m, fillvalue=np.nan),
+            1,
+            constant_values=np.nan,
+        )
+        nearest_row, nearest_column = distance_transform_edt(
+            np.isnan(slope_2d), return_distances=False, return_indices=True
+        )
+        boundary_slope_m_per_m = slope_2d[nearest_row, nearest_column]
+        boundary_hydraulic_conductivity = (
+            boundary_hydraulic_conductivity
+            * get_conductivity_depth_decay_factor(
+                boundary_layer_boundary_elevation, boundary_slope_m_per_m
+            )
+        )
+        # mean height of the land of each elevation zone above its nearest stream, and the
+        # level of the streams of the cell, for the depth to the water table per zone
+        self._zone_height_above_stream_m: TwoDArrayFloat32 = self.hydrology.grid.load3d(
+            self.model.files["grid"]["landsurface/elevation_zone_height_above_stream_m"]
+        ).astype(np.float32)
+        self._stream_elevation_m: ArrayFloat32 = self.hydrology.grid.load2d(
+            self.model.files["grid"]["routing/bankfull_river_elevation_m"]
+        ).astype(np.float32)
+        self.drain_conductance_m2_per_hour: ArrayFloat64 = (
+            self.get_drainage_conductance().astype(np.float64) / 24.0
+        )
         self.modflow = ModFlowSimulation(
-            working_directory=self.model.simulation_root_spinup / "modflow_model",
+            # One MODFLOW directory per spinup/run, so parallel runs in one model folder do
+            # not overwrite each other's MODFLOW input files.
+            working_directory=Path(self.model.config["simulation_root"])
+            / self.model.run_name
+            / "modflow_model",
             modflow_bin_folder=self.model.bin_folder / "modflow",
             topography=self.grid.var.elevation,
             gt=self.model.hydrology.grid.gt,
@@ -165,7 +428,7 @@ class GroundWater(Module):
             specific_yield=self.grid.var.specific_yield,
             layer_boundary_elevation=self.grid.var.layer_boundary_elevation,
             basin_mask=self.model.hydrology.grid.mask,
-            hydraulic_conductivity=self.grid.var.groundwater_hydraulic_conductivity_m_per_day,
+            hydraulic_conductivity=lateral_hydraulic_conductivity_m_per_day,
             heads=self.grid.var.heads,
             heads_update_callback=self.heads_update_callback,
             logger=self.model.logger,
@@ -173,7 +436,15 @@ class GroundWater(Module):
             boundary_mask=boundary_mask,
             boundary_layer_boundary_elevation=boundary_layer_boundary_elevation,
             boundary_hydraulic_conductivity=boundary_hydraulic_conductivity,
+            # The drain to the river network is not in MODFLOW: it is computed hourly in
+            # routing (drain_groundwater_to_rivers), in step with the river water level.
             verbose=False,
+        )
+        # MODFLOW's own cell area, so the hourly drainage matches its storage exactly
+        self.drain_storage_coefficient_m2: ArrayFloat64 = np.maximum(
+            self.grid.var.specific_yield[0].astype(np.float64)
+            * self.modflow.area.astype(np.float64),
+            1e-6,
         )
 
     def step(
@@ -181,20 +452,27 @@ class GroundWater(Module):
         groundwater_recharge_m: ArrayFloat32,
         groundwater_abstraction_m3: ArrayFloat32,
         capillary_rise_m: ArrayFloat32,
-    ) -> ArrayFloat32:
+        river_seepage_m3: ArrayFloat64,
+        river_drainage_m3: ArrayFloat64,
+    ) -> None:
         """Perform a groundwater model step.
 
         Args:
             groundwater_recharge_m: Recharge to the groundwater (m/step).
             groundwater_abstraction_m3: Groundwater abstraction (m3/step).
             capillary_rise_m: Capillary rise drawn from groundwater (m/step).
-
-        Returns:
-            Baseflow to rivers (m/step).
+            river_seepage_m3: Riverbed seepage into the aquifer during the previous day's
+                routing (m3/step).
+            river_drainage_m3: Groundwater drained to the rivers during the previous day's
+                routing (hourly, see drain_groundwater_to_rivers) (m3/step). Seepage and
+                drainage are netted per cell: a surplus is recharge, a deficit is taken from
+                the aquifer, never more than what the hourly head drained above the drain
+                level.
 
         Raises:
             AssertionError: If total groundwater abstraction exceeds available groundwater storage by more than numerical tolerance.
         """
+        timer: TimingModule = TimingModule("Groundwater")
         assert (groundwater_abstraction_m3 + 1e-7 >= 0).all()
         groundwater_abstraction_m3[groundwater_abstraction_m3 < 0] = 0
         assert (groundwater_recharge_m >= 0).all()
@@ -211,29 +489,44 @@ class GroundWater(Module):
             np.float64
         ) * self.grid.var.cell_area.astype(np.float64)
 
+        net_river_exchange_m3: ArrayFloat64 = river_seepage_m3 - river_drainage_m3
+        net_recharge_m = net_recharge_m + (
+            np.maximum(net_river_exchange_m3, 0.0) / self.grid.var.cell_area
+        ).astype(np.float32)
+
         total_groundwater_abstraction_m3: ArrayFloat64 = (
-            groundwater_abstraction_m3.astype(np.float64) + excess_capillary_rise_m3
+            groundwater_abstraction_m3.astype(np.float64)
+            + excess_capillary_rise_m3
+            + np.maximum(-net_river_exchange_m3, 0.0)
         )
 
+        available_groundwater_m3: ArrayFloat64 = self.modflow.available_groundwater_m3
         excess_storage_m3: ArrayFloat64 = (
-            total_groundwater_abstraction_m3 - self.modflow.available_groundwater_m3
+            total_groundwater_abstraction_m3 - available_groundwater_m3
         )
         epsilon_m3: ArrayFloat64 = (
-            np.float64(1e-4) + np.float64(1e-5) * self.modflow.available_groundwater_m3
+            np.float64(1e-4) + np.float64(1e-5) * available_groundwater_m3
         )
         if (excess_storage_m3 > epsilon_m3).any():
-            max_excess: float = float(excess_storage_m3.max())
+            worst_cell: int = int((excess_storage_m3 - epsilon_m3).argmax())
             raise AssertionError(
                 "Total groundwater abstraction exceeds available groundwater storage by "
-                f"more than numerical tolerance ({max_excess} m3 > tolerance)."
+                f"more than numerical tolerance ({excess_storage_m3[worst_cell]} m3 > "
+                f"tolerance) in cell {worst_cell}: storage "
+                f"{available_groundwater_m3[worst_cell]} m3, wells "
+                f"{groundwater_abstraction_m3[worst_cell]} m3, capillary rise above "
+                f"recharge {excess_capillary_rise_m3[worst_cell]} m3, net river drainage "
+                f"{max(-net_river_exchange_m3[worst_cell], 0.0)} m3."
             )
 
         # Only correct minor floating-point inaccuracies within epsilon tolerance
         epsilon_mask: ArrayBool = excess_storage_m3 > 0
         if epsilon_mask.any():
-            total_groundwater_abstraction_m3[epsilon_mask] = (
-                self.modflow.available_groundwater_m3[epsilon_mask]
-            )
+            total_groundwater_abstraction_m3[epsilon_mask] = available_groundwater_m3[
+                epsilon_mask
+            ]
+
+        timer.finish_split("Recharge & abstraction")
 
         if __debug__:
             groundwater_storage_pre = self.modflow.groundwater_content_m3
@@ -242,7 +535,10 @@ class GroundWater(Module):
             (net_recharge_m * self.grid.var.cell_area).astype(np.float32)
         )
         self.modflow.set_groundwater_abstraction_m3(total_groundwater_abstraction_m3)
+        timer.finish_split("Set MODFLOW forcing")
+
         self.modflow.step()
+        timer.finish_split("MODFLOW solve")
 
         if __debug__:
             influxes: list[npt.NDArray[np.float64] | np.float64] = [
@@ -251,7 +547,6 @@ class GroundWater(Module):
             ]
             outfluxes: list[npt.NDArray[np.float64] | np.float64] = [
                 total_groundwater_abstraction_m3,
-                self.modflow.drainage_m3.astype(np.float64),
                 self.boundary_outflow_m3,
             ]
 
@@ -265,23 +560,48 @@ class GroundWater(Module):
                 tolerance=groundwater_recharge_m.size,  # maximum of 1m3 per cell
             )
 
-        groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
+        timer.finish_split("Balance check")
 
-        # All groundwater drainage is discharged as baseflow to the river network
-        baseflow = groundwater_drainage.astype(np.float32)
+        # head of the top layer (m above sea level), e.g. for observation wells
+        groundwater_head_top_layer_m: ArrayFloat64 = self.modflow.heads[0]
 
         self.report(locals())
+        timer.finish_split("Reporting")
 
-        return baseflow
+        if self.model.timing:
+            self.model.logger.debug(timer)
 
     @property
-    def groundwater_content_m3(self) -> npt.NDArray[np.float32]:
+    def hydraulic_conductivity_multiplier(self) -> float:
+        """Multiplier on the aquifer hydraulic conductivity from the configuration (-)."""
+        return float(
+            self.model.config["hydrology"]["groundwater"][
+                "hydraulic_conductivity_multiplier"
+            ]
+        )
+
+    @property
+    def hydraulic_conductivity_m_per_day(self) -> npt.NDArray[np.float32]:
+        """Aquifer hydraulic conductivity per layer and cell, including the configured multiplier (m/day).
+
+        The grid variable stores the conductivity without the multiplier.
+        """
+        return (
+            self.grid.var.groundwater_hydraulic_conductivity_m_per_day
+            * np.float32(self.hydraulic_conductivity_multiplier)
+        ).astype(np.float32)
+
+    @property
+    def groundwater_content_m3(self) -> npt.NDArray[np.float64]:
         """Groundwater content in cubic meters.
+
+        Kept in float64: storage is large relative to daily fluxes, so a float32 copy
+        would lose the balance precision.
 
         Returns:
             Groundwater content in cubic meters in active grid cells.
         """
-        return self.modflow.groundwater_content_m3.astype(np.float32)
+        return self.modflow.groundwater_content_m3
 
     @property
     def boundary_inflow_m3(self) -> np.float64:
@@ -321,6 +641,34 @@ class GroundWater(Module):
             Groundwater depth in active grid cells.
         """
         return self.modflow.groundwater_depth.astype(np.float32)
+
+    def get_groundwater_depth_per_zone(
+        self, HRU_to_grid: npt.NDArray[np.int32], elevation_zone: npt.NDArray[np.int32]
+    ) -> ArrayFloat32:
+        """Depth of the water table below the land surface of each HRU (m).
+
+        A grid cell has one groundwater head, but its land lies at different heights
+        above the streams: the valley bottom close to the water table, the slopes and
+        plateaus far above it. The groundwater of the whole cell is connected, with the
+        water table at the height of the head above the stream level of the cell. The
+        depth to the water table of an HRU is therefore the height of its elevation zone
+        above the nearest stream minus the height of the head above the stream level.
+
+        Args:
+            HRU_to_grid: Grid cell of each HRU.
+            elevation_zone: Elevation zone of each HRU, counted from the stream upwards.
+
+        Returns:
+            Depth to the water table per HRU (m).
+        """
+        head_above_stream_m = (
+            self.modflow.heads[0].astype(np.float32) - self._stream_elevation_m
+        )
+        zone_height_m = self._zone_height_above_stream_m[elevation_zone, HRU_to_grid]
+        assert not np.isnan(zone_height_m).any()
+        return np.maximum(
+            zone_height_m - head_above_stream_m[HRU_to_grid], np.float32(0.0)
+        ).astype(np.float32)
 
     def decompress(self, data: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
         """Decompress data from compressed grid format to full grid format.

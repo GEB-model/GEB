@@ -1,4 +1,16 @@
 # dev
+
+# v1.0.0b39
+- Configuration (breaking, update custom `model.yml` files): Run settings sit at the top level, `agent_settings` is now `agents`, and the former `parameters` section is split over `hydrology` and `agents`. Unknown keys are rejected. The region moved to a separate `region.yml`. `geb run --with section.key=value` changes a setting for one run.
+- Land surface: More physical soil (stones, a weathered-rock layer below 2 m, thinner soil on steep slopes), infiltration (crusting, macropores, frozen soil), saturated area and interflow, FAO-56 dual crop coefficient evapotranspiration, improved snow, and up to three elevation zones per cell. The kernel runs considerably faster.
+- Land surface: Interflow and the saturated area follow from one hillslope store (Sloan and Moore, 1984). Macropore infiltration follows clay content, bulk density and land use (Jarvis et al., 2013), replacing `macropore_infiltration_capacity_mm_per_h` (remove it from custom `model.yml` files). The bulk density of the forest topsoil follows its organic matter (Adams, 1973).
+- Groundwater: Groundwater drains to the river every routing hour, replacing the MODFLOW river drain. Conductivity decreases with depth, and heads are reported at observation wells.
+- Routing: Floodplains and levees (FLOPROS standards), roughness that follows slope and hydraulic radius, and a riverbed from FathomDEM river surface profiles shared with SFINCS. Several water-balance fixes.
+- Build: New methods `setup_grid_elevation`, `setup_river_surface_profiles` and `setup_elevation_zones`; run `geb update-version` to see which methods to rerun.
+- Evaluation: The dashboard shows evapotranspiration at FLUXNET towers.
+- Agents: Fixed industry and livestock water use, which happened on only one day per year. Farmer irrigation now follows depletion of available water, with yearly limits per water source.
+
+# v1.0.0b38
 - Fixed a build failure in `setup_coastal_water_levels` for small coastal models without any GTSM station inside their bounds: the nearest offshore stations are now used, with a warning in the log.
 - Fixed a build failure in `setup_region` (shape mismatch between MERIT Hydro flow direction and elevation) for some regions: merged MERIT Hydro tiles now get exact 3-arcsecond grid coordinates, so all MERIT Hydro variables are clipped to the same pixels.
 - Fixed spinup failing with "divide by zero encountered in log" in the crop market's price model when a crop has years without production: those years are now left out of the price regression instead of setting production to 1. With the dynamic market enabled, a crop that is grown but has no estimated price model now raises a clear error.

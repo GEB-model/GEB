@@ -62,6 +62,20 @@
       return minWeight + norm * (maxWeight - minWeight);
     }
 
+    // Levee casing calculation:
+    // Rivers with simulated levees receive a subtle black casing on the outside of the river line.
+    // More protection is slightly thicker, but kept subtle.
+    function hasLevee(feature) {
+      return feature.properties.levee_height_m > 0.01;
+    }
+
+    function getLeveeCasingExtraWeight(feature) {
+      var protectionStandard = feature.properties.flood_protection_standard;
+      // Subtle logarithmic scaling: +1.2px at T=50, +1.4px at T=100, +2.1px at T=1000, +2.8px at T=10000
+      var extra = 1.2 + 0.7 * (Math.log10(Math.max(50, protectionStandard)) - Math.log10(50));
+      return Math.min(3.0, Math.max(1.0, extra));
+    }
+
     // Color gradient from light blue (shallow) to dark blue (deep)
     // Light sky blue (#7dd3fc): [125, 211, 252]
     // Dark navy blue (#1e3a8a): [30, 58, 138]
@@ -82,6 +96,26 @@
       return "rgb(" + r + "," + g + "," + b + ")";
     }
 
+    // Render subtle black levee casing layer beneath rivers
+    var leveeCasingLayer = L.geoJson(geoJsonData, {
+      filter: function(feature) {
+        return hasLevee(feature);
+      },
+      style: function(feature) {
+        var baseW = getWeight(feature);
+        var extraW = getLeveeCasingExtraWeight(feature);
+        return {
+          color: "#000000",
+          weight: baseW + extraW,
+          opacity: 0.95,
+          lineCap: "round",
+          lineJoin: "round",
+          interactive: false
+        };
+      }
+    });
+    leveeCasingLayer.addTo(layerGroup);
+
     var riverLayer = L.geoJson(geoJsonData, {
       style: function(feature) {
         return {
@@ -97,7 +131,14 @@
         var uparea = properties.uparea_m2 ? (properties.uparea_m2 / 1e6).toLocaleString() : 'N/A';
         var widthText = properties.width_m != null ? ' · Width: ' + properties.width_m + ' m' : '';
         var depthText = properties.depth_m != null ? ' · Depth: ' + properties.depth_m + ' m' : '';
-        tooltip.textContent = 'River ID: ' + riverId + ' · Upstream area: ' + uparea + ' km²' + widthText + depthText + ' (click for charts)';
+        // Levee properties are reported together with depth
+        var leveeText = '';
+        if (properties.depth_m != null) {
+          leveeText = hasLevee(feature)
+            ? ' · Levee: ' + properties.levee_height_m.toFixed(2) + ' m (T=' + Math.round(properties.flood_protection_standard) + ' yr)'
+            : ' · No levees';
+        }
+        tooltip.textContent = 'River ID: ' + riverId + ' · Upstream area: ' + uparea + ' km²' + widthText + depthText + leveeText + ' (click for charts)';
         layer.bindTooltip(tooltip, {sticky: true});
 
         var popupHtml = '<div class="geb-popup" data-station-id="river_' + escapeHtml(riverId) + '" data-river-id="' + escapeHtml(riverId) + '"></div>';

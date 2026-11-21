@@ -10,14 +10,7 @@ from geb.geb_types import (
     TwoDArrayFloat,
     TwoDArrayFloat32,
 )
-from geb.hydrology.landcovers import (
-    FOREST,
-    GRASSLAND_LIKE,
-    NON_PADDY_IRRIGATED,
-    OPEN_WATER,
-    PADDY_IRRIGATED,
-    SEALED,
-)
+from geb.hydrology.landcovers import GRASSLAND_LIKE
 from geb.module import Module
 from geb.workflows import balance_check
 
@@ -33,14 +26,9 @@ KERBY_RETARDANCE_PASTURE_GRASS: float = 0.40
 KERBY_RETARDANCE_DECIDUOUS_FOREST: float = 0.60
 KERBY_RETARDANCE_DENSE_CONIFEROUS_FOREST: float = 0.80
 
-KERBY_RETARDANCE_BY_LAND_COVER: dict[int, float] = {
-    FOREST: KERBY_RETARDANCE_DECIDUOUS_FOREST,
-    GRASSLAND_LIKE: KERBY_RETARDANCE_PASTURE_GRASS,
-    PADDY_IRRIGATED: KERBY_RETARDANCE_CULTIVATED,
-    NON_PADDY_IRRIGATED: KERBY_RETARDANCE_CULTIVATED,
-    SEALED: KERBY_RETARDANCE_PAVEMENT,
-    OPEN_WATER: KERBY_RETARDANCE_PAVEMENT,
-}
+# Water entering in the last hour of a day must still fit its whole unit hydrograph in the
+# buffer, so unit hydrographs are limited to the buffer length minus one day.
+HOURS_PER_DAY: int = 24
 
 
 def triangular_weights(peak_hour: float, lag_time_hours: int) -> ArrayFloat32:
@@ -106,7 +94,8 @@ def compute_slope_dependent_triangular_weights(
 ) -> TwoDArrayFloat32:
     """Computes cell-specific triangular unit hydrograph weights based on hillslope length, slope, and retardance roughness.
 
-    Calculates overland time of concentration using the Kerby (1959) overland sheet flow equation (TxDOT Eq. 4-14):
+    Calculates overland time of concentration using the Kerby (1959) overland sheet flow equation (TxDOT Eq. 4-14,
+    SI units with the length in metres):
         concentration_time_minutes = 1.44 * (roughness * hillslope_length)^0.467 * slope^-0.235  (minutes)
     where roughness is the Kerby retardance roughness coefficient (from TxDOT Table 4-5),
     hillslope_length is travel length in meters, and slope is topographic surface slope (m/m).
@@ -137,8 +126,9 @@ def compute_slope_dependent_triangular_weights(
         if slope <= 0.0:
             slope = min_slope
 
-        # Kerby (1959) overland sheet flow concentration time in hours:
-        # Tc = (1.44 / 60) * (N * L)^0.467 * S^-0.235 (TxDOT Eq. 4-14)
+        # Kerby (1959) overland sheet flow concentration time in hours, SI form with L in
+        # metres (TxDOT Eq. 4-14: K = 1.44 for metres, 0.828 for feet; 0.828 * 3.281^0.467 = 1.44):
+        # Tc = (1.44 / 60) * (N * L)^0.467 * S^-0.235
         tc_hours: float = (
             (1.44 / 60.0)
             * (
@@ -184,6 +174,12 @@ def compute_slope_dependent_triangular_weights(
             if area_current >= 1.0:
                 break
 
+        # A unit hydrograph longer than the buffer (very flat cells) is
+        # truncated; rescale the remaining weights so that all water is delivered.
+        if area_prev < 1.0:
+            for lag in range(lag_time_hours):
+                weights[lag, cell_idx] = np.float32(weights[lag, cell_idx] / area_prev)
+
     return weights
 
 
@@ -200,7 +196,10 @@ def apply_triangular(
         weights: 2D array of shape (lag_time_hours, num_cells) of triangular unit hydrograph weights.
         buffer_m: 2D rolling buffer array of shape (lag_time_hours, num_cells) modified in place.
     """
-    buffer_size_hours: int = weights.shape[0]
+    buffer_size_hours: int = buffer_m.shape[0]
+    assert weights.shape[0] + hourly_inflow_m.shape[0] <= buffer_size_hours, (
+        "unit hydrograph plus one day must fit in the buffer"
+    )
     daily_timesteps: int = hourly_inflow_m.shape[0]
     num_cells: int = hourly_inflow_m.shape[1]
 
@@ -209,7 +208,7 @@ def apply_triangular(
             inflow = hourly_inflow_m[hour, cell_idx]
             if inflow <= 0.0:
                 continue
-            for lag in range(buffer_size_hours):
+            for lag in range(weights.shape[0]):
                 weight = weights[lag, cell_idx]
                 if weight <= 0.0:
                     continue
@@ -267,11 +266,16 @@ class RunoffConcentrator(Module):
 
         self.lag_time_hours: int = lag_time_hours
         self.concentration_factor: float = float(
-            self.model.config["parameters"]["runoff_concentration_factor"]
+            self.model.config["hydrology"]["runoff_concentrator"][
+                "runoff_concentration_factor"
+            ]
         )
 
         if self.model.in_spinup:
             self.spinup()
+        # Weights follow the current configuration in every run, also when continuing
+        # from a checkpoint; they are set by the model (set_weights) once the HRU state
+        # (land use) is loaded.
 
     def set_weights(self) -> None:
         """Derive cell-specific Kerby retardance roughness and calculate triangular weights.
@@ -279,12 +283,12 @@ class RunoffConcentrator(Module):
         Derives Kerby retardance roughness from HRU land use types, maps them to grid cells,
         and computes unit hydrograph weights based on terrain slope and hillslope length.
         """
-        slope_m_per_m: ArrayFloat32 = self.grid.load2d(
-            self.model.files["grid"]["landsurface/slope_m_per_m"]
-        )
-        hillslope_length_m: ArrayFloat32 = self.grid.load2d(
-            self.model.files["grid"]["drainage/hillslope_length_m"]
-        )
+        slope_m_per_m: ArrayFloat32 = self.hydrology.to_grid(
+            HRU_data=self.hydrology.HRU.var.slope_m_per_m
+        ).astype(np.float32)
+        hillslope_length_m: ArrayFloat32 = self.hydrology.to_grid(
+            HRU_data=self.hydrology.HRU.var.hillslope_length_m
+        ).astype(np.float32)
 
         # Derive cell-specific Kerby retardance roughness from HRU land use types
         # based on TxDOT Hydraulic Design Manual Table 4-5:
@@ -304,16 +308,22 @@ class RunoffConcentrator(Module):
             dtype=np.float32,
         )
         retardance_hru: ArrayFloat32 = retardance_table[self.HRU.var.land_use_type]
+        # farmers' fields are cultivated, also when rainfed (grassland-like land use)
+        # or fallow at model start
+        retardance_hru[
+            (self.HRU.var.land_owners != -1)
+            & (self.HRU.var.land_use_type == GRASSLAND_LIKE)
+        ] = KERBY_RETARDANCE_CULTIVATED
         retardance_grid: ArrayFloat32 = self.hydrology.to_grid(
             HRU_data=retardance_hru
         ).astype(np.float32)
 
-        self.grid.var.overland_flow_buffer_weights = (
+        self.overland_flow_weights: TwoDArrayFloat32 = (
             compute_slope_dependent_triangular_weights(
                 hillslope_length_m=hillslope_length_m,
                 slope_m_per_m=slope_m_per_m,
                 retardance_roughness=retardance_grid,
-                lag_time_hours=self.lag_time_hours,
+                lag_time_hours=self.lag_time_hours - HOURS_PER_DAY,
                 concentration_factor=self.concentration_factor,
             )
         )
@@ -333,7 +343,6 @@ class RunoffConcentrator(Module):
     def step(
         self,
         interflow_m: TwoDArrayFloat32,
-        baseflow_m: ArrayFloat32,
         runoff_m: TwoDArrayFloat32,
     ) -> TwoDArrayFloat32:
         """Concentrate surface runoff using slope-dependent triangular weighting.
@@ -341,50 +350,44 @@ class RunoffConcentrator(Module):
         Args:
             runoff_m: 2D array with shape (24, n_cells) containing sub-daily surface runoff.
             interflow_m: 2D array with shape (24, n_cells) containing sub-daily interflow.
-            baseflow_m: 1D array with shape (n_cells,) containing daily baseflow.
 
         Returns:
             2D array with shape (24, n_cells) representing the runoff concentrated outflow.
         """
         assert (runoff_m >= 0).all()
         assert (interflow_m >= 0).all()
-        assert (baseflow_m >= 0).all()
 
         assert interflow_m.shape[0] == 24
         assert runoff_m.shape[0] == 24
         assert interflow_m.ndim == 2
-        assert baseflow_m.ndim == 1
         assert runoff_m.ndim == 2
 
         daily_hours: int = runoff_m.shape[0]
 
         if __debug__:
-            buffer_prev_m: TwoDArrayFloat32 = self.grid.var.overland_flow_buffer.copy()
+            buffer_prev_m: ArrayFloat32 = self.grid.var.overland_flow_buffer.sum(axis=0)
 
         # Apply cell-specific slope-dependent triangular weighting to runoff inflow
-        self._apply_triangular(runoff_m, self.grid.var.overland_flow_buffer_weights)
+        self._apply_triangular(runoff_m, self.overland_flow_weights)
 
         # Outflow is the first 24 buffer steps (the current day)
         outflow_runoff_m: TwoDArrayFloat32 = self.grid.var.overland_flow_buffer[
             :daily_hours
         ].copy()
 
-        baseflow_per_hour: ArrayFloat32 = (baseflow_m / daily_hours).astype(np.float32)
-
-        # Baseflow is distributed evenly across the day
-        total_outflow_m: TwoDArrayFloat32 = (
-            outflow_runoff_m + baseflow_per_hour + interflow_m
-        )
+        # Interflow is the outflow at the foot of the hillslope (kinematic storage
+        # model in the soil), so it enters the channel without a further delay.
+        total_outflow_m: TwoDArrayFloat32 = outflow_runoff_m + interflow_m
 
         # Advance buffer by one day (24 hours) to discard today's flow and prepare for tomorrow
         self._advance_buffer(daily_hours)
 
         if __debug__:
-            inflow_per_cell_m: ArrayFloat32 = (
-                runoff_m.sum(axis=0) + interflow_m.sum(axis=0) + baseflow_m
+            inflow_per_cell_m: ArrayFloat32 = runoff_m.sum(axis=0) + interflow_m.sum(
+                axis=0
             )
             outflow_per_cell_m: ArrayFloat32 = total_outflow_m.sum(axis=0)
-            storage_pre_per_cell_m: ArrayFloat32 = buffer_prev_m.sum(axis=0)
+            storage_pre_per_cell_m: ArrayFloat32 = buffer_prev_m
             storage_post_per_cell_m: ArrayFloat32 = (
                 self.grid.var.overland_flow_buffer.sum(axis=0)
             )
@@ -416,4 +419,3 @@ class RunoffConcentrator(Module):
         self.grid.var.overland_flow_buffer = np.tile(
             self.grid.full_compressed(0.0, dtype=np.float32), (self.lag_time_hours, 1)
         )
-        self.set_weights()

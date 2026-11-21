@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numba import njit, prange
 
+from geb.numba_config import NUMBA_CACHE
+
 if TYPE_CHECKING:
     from geb.model import GEBModel
 
@@ -101,7 +103,7 @@ class DecisionModule:
         return GDP_i_t * phi_i * amenity_value
 
     @staticmethod
-    @njit(cache=True)
+    @njit(cache=NUMBA_CACHE)
     def IterateThroughFloods(
         NPV_summed: np.ndarray,
         n_events: int,
@@ -160,7 +162,7 @@ class DecisionModule:
         return NPV_summed
 
     @staticmethod
-    @njit(cache=True)
+    @njit(cache=NUMBA_CACHE)
     def IterateThroughDroughts(
         NPV_summed: np.ndarray,
         n_events: int,
@@ -394,7 +396,7 @@ class DecisionModule:
         return EU_do_nothing_array
 
     @staticmethod
-    @njit(cache=True, parallel=True)
+    @njit(cache=NUMBA_CACHE, parallel=True)
     def calcEU_adapt_drought_numba(
         expenditure_cap: np.ndarray,
         loan_duration: int,

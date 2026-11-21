@@ -337,3 +337,19 @@ def test_plot_irrigation_reservoir_release_sensitivity() -> None:
         output_folder_reservoir_operators / "test_reservoir_operators_sensitivity.png"
     )
     plt.close(figure)
+
+
+def test_set_command_area_abstraction() -> None:
+    """Only the abstracted water leaves the reservoir towards the command area."""
+    from geb.agents.reservoir_operators import ReservoirOperators
+
+    operators = ReservoirOperators.__new__(ReservoirOperators)
+    operators.command_area_release_m3 = np.array([1000.0, 500.0, 0.0])
+    operators.remaining_command_area_release = operators.command_area_release_m3.copy()
+
+    operators.set_command_area_abstraction(np.array([400.0, 500.0, 0.0]))
+
+    np.testing.assert_array_equal(operators.command_area_release_m3, [400, 500, 0])
+    np.testing.assert_array_equal(
+        operators.remaining_command_area_release, [400, 500, 0]
+    )

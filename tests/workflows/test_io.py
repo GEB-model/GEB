@@ -1,6 +1,7 @@
 """Tests for I/O workflow functions."""
 
 import shutil
+import stat
 from datetime import datetime
 from pathlib import Path
 from time import time
@@ -20,6 +21,7 @@ import geb.workflows.io as io_module
 from geb.workflows.io import (
     ForcingReader,
     RemoteFile,
+    apply_shared_permissions,
     calculate_scaling,
     create_hash_from_parameters,
     fetch_and_save,
@@ -1253,3 +1255,44 @@ def test_fetch_and_save_retry(tmp_path: Path, caplog: pytest.LogCaptureFixture) 
         assert success is True
         assert dest.read_text() == "test"
         assert "Request failed: Timeout. Attempt 1 of 3." in caplog.text
+
+
+def test_apply_shared_permissions(tmp_path: Path) -> None:
+    """Test that files and directories with private modes are made shared.
+
+    Mimics files created by tempfile (0600/0700) and moved into the cache.
+    """
+    root: Path = tmp_path / "dataset"
+    sub: Path = root / "sub"
+    sub.mkdir(parents=True)
+    data_file: Path = sub / "data.bin"
+    data_file.write_bytes(b"data")
+    script: Path = sub / "script.sh"
+    script.write_text("#!/bin/sh")
+
+    root.chmod(0o700)
+    sub.chmod(0o700)
+    data_file.chmod(0o600)
+    script.chmod(0o700)
+
+    apply_shared_permissions(root)
+
+    for directory in (root, sub):
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o2775
+    assert stat.S_IMODE(data_file.stat().st_mode) == 0o664
+    assert stat.S_IMODE(script.stat().st_mode) == 0o775
+
+
+def test_apply_shared_permissions_not_recursive(tmp_path: Path) -> None:
+    """Test that only the given directory is changed when recursive is False."""
+    root: Path = tmp_path / "dataset"
+    root.mkdir()
+    data_file: Path = root / "data.bin"
+    data_file.write_bytes(b"data")
+    root.chmod(0o700)
+    data_file.chmod(0o600)
+
+    apply_shared_permissions(root, recursive=False)
+
+    assert stat.S_IMODE(root.stat().st_mode) == 0o2775
+    assert stat.S_IMODE(data_file.stat().st_mode) == 0o600

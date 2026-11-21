@@ -10,12 +10,16 @@ import pandas as pd
 import pytest
 import xarray as xr
 from affine import Affine
+from shapely.geometry import LineString
 
 from geb.build.modules.hydrography import (
     Hydrography,
     _extract_1sec_subgrid,
     calculate_dem_floodplain_geometry,
     calculate_stream_length,
+    hillslope_length_from_streams_length,
+    raise_to_downstream,
+    river_cell_surface_elevation,
 )
 
 
@@ -168,8 +172,10 @@ def test_calculate_dem_floodplain_geometry() -> None:
     )
 
     assert fp_slope_m_per_m.shape == (2, 2)
-    assert np.isnan(fp_slope_m_per_m.values[0, 0])
-    assert np.isnan(fp_slope_m_per_m.values[1, 0])
+    # cells that are not routed rivers carry small streams and get their own profile
+    assert not np.isnan(fp_slope_m_per_m.values[0, 0])
+    assert not np.isnan(fp_slope_m_per_m.values[1, 0])
+    assert (fp_slope_m_per_m.values[:, 0] >= 0.0).all()
     assert not np.isnan(fp_slope_m_per_m.values[0, 1])
     assert not np.isnan(fp_slope_m_per_m.values[1, 1])
     assert (fp_slope_m_per_m.values[:, 1] >= 0.0).all()
@@ -178,8 +184,13 @@ def test_calculate_dem_floodplain_geometry() -> None:
 
     # 3D 10-point profile assertions
     assert fp_profile_w_m.shape == (10, 2, 2)
-    assert np.isnan(fp_profile_w_m.values[:, 0, 0]).all()
-    assert np.isnan(fp_profile_w_m.values[:, 1, 0]).all()
+    assert not np.isnan(fp_profile_w_m.values[:, 0, 0]).any()
+    assert not np.isnan(fp_profile_w_m.values[:, 1, 0]).any()
+    assert (fp_profile_w_m.values[:, :, 0] >= 0.0).all()
+    for k in range(1, 10):
+        assert (
+            fp_profile_w_m.values[k, :, 0] >= fp_profile_w_m.values[k - 1, :, 0]
+        ).all()
     assert not np.isnan(fp_profile_w_m.values[:, 0, 1]).any()
     assert not np.isnan(fp_profile_w_m.values[:, 1, 1]).any()
     assert (fp_profile_w_m.values[:, :, 1] >= 0.0).all()
@@ -612,3 +623,123 @@ def test_setup_sea_level_projections_ar6_handles_transposed_variable(
     )
 
     pd.testing.assert_frame_equal(table_regular, table_transposed)
+
+
+def test_river_cell_surface_elevation() -> None:
+    """Routing cells take the profile at their outflow pixel along the river line."""
+    # high-resolution grid: 1 row of 9 pixels at 0.001 degree; routing grid: 1 x 3
+    high_res_x = (np.arange(9) * 0.001 + 0.0005).astype(np.float64)
+    high_res_y = np.array([50.0])
+    line = LineString([(x, 50.0) for x in high_res_x])
+    rivers = gpd.GeoDataFrame(
+        {"hydrography_xy": [[(0, 0), (1, 0), (2, 0)]]},
+        index=pd.Index([7], name="COMID"),
+        geometry=[line],
+        crs=4326,
+    )
+    distance = np.linspace(0.0, 8 * 0.001 * 111195 * np.cos(np.deg2rad(50.0)), 9)
+    profiles = gpd.GeoDataFrame(
+        {
+            "river_id": 7,
+            "distance_m": distance,
+            "water_surface_elevation_m": 10.0 - distance / 1000.0,
+        },
+        geometry=gpd.points_from_xy(high_res_x, np.full(9, 50.0)),
+        crs=4326,
+    )
+    # outflow pixels: last pixel of each routing cell
+    idxs_outflow = np.array([2, 5, 8])
+    surface = river_cell_surface_elevation(
+        rivers, profiles, idxs_outflow, high_res_x, high_res_y, (1, 3)
+    )
+    expected = 10.0 - distance[[2, 5, 8]] / 1000.0
+    np.testing.assert_allclose(surface[0], expected, rtol=1e-6)
+    assert (np.diff(surface[0]) < 0).all()
+
+
+def test_raise_to_downstream() -> None:
+    """Cells below their downstream cell are raised to it, along the whole chain."""
+    # chain 0 -> 1 -> 2 -> 3 (pit), plus a side cell 4 -> 1
+    idxs_ds = np.array([1, 2, 3, 3, 1], dtype=np.int64)
+    idxs_seq = np.array([3, 2, 1, 0, 4], dtype=np.int64)  # downstream to upstream
+    elevation = np.array([5.0, 2.0, 4.0, 1.0, 3.0], dtype=np.float32)
+
+    raised = raise_to_downstream(elevation, idxs_ds=idxs_ds, idxs_seq=idxs_seq)
+
+    np.testing.assert_array_equal(raised, [5.0, 4.0, 4.0, 1.0, 4.0])
+    # input is not modified
+    np.testing.assert_array_equal(elevation, [5.0, 2.0, 4.0, 1.0, 3.0])
+
+
+def test_hillslope_length_from_streams_length() -> None:
+    """Hillslope length is half the stream spacing, capped at 1000 m."""
+    cell_area = xr.DataArray(np.full(3, 1e6, dtype=np.float32), dims="x")
+    streams_length = xr.DataArray(
+        np.array([2000.0, 1000.0, 100.0], dtype=np.float32), dims="x"
+    )
+    hillslope_length = hillslope_length_from_streams_length(streams_length, cell_area)
+    np.testing.assert_allclose(hillslope_length.values, [250.0, 500.0, 1000.0])
+
+
+def test_calculate_dem_floodplain_geometry_without_rivers() -> None:
+    """Without routed rivers, cells with a stream still get a floodplain profile."""
+    import pyflwdir
+
+    elev_vals = np.array(
+        [
+            [12.0, 5.0, 5.0, 12.0],
+            [11.0, 4.0, 4.0, 11.0],
+            [10.0, 3.0, 3.0, 10.0],
+            [9.0, 2.0, 2.0, 9.0],
+        ],
+        dtype=np.float32,
+    )
+    ldd_vals = np.array(
+        [[2, 2, 2, 4], [2, 2, 2, 4], [2, 2, 2, 4], [5, 5, 5, 5]], dtype=np.uint8
+    )
+    transform = Affine(0.01, 0.0, 0.0, 0.0, -0.01, 0.0)
+    elev_high_res = xr.DataArray(
+        elev_vals,
+        coords={"y": [0.0, -0.01, -0.02, -0.03], "x": [0.0, 0.01, 0.02, 0.03]},
+        dims=("y", "x"),
+    )
+    flw_high_res = pyflwdir.from_array(ldd_vals, ftype="ldd", transform=transform)
+    upstream_area_high_res = xr.DataArray(
+        flw_high_res.upstream_area(unit="m2").astype(np.float32),
+        coords=elev_high_res.coords,
+        dims=elev_high_res.dims,
+    )
+    low_res_coords = {"y": [-0.005, -0.025], "x": [0.005, 0.025]}
+    cell_area_low_res = xr.DataArray(
+        np.full((2, 2), 4_000_000.0, dtype=np.float32),
+        coords=low_res_coords,
+        dims=("y", "x"),
+    )
+    river_length_low_res = xr.full_like(cell_area_low_res, 2000.0)
+    idxs_outflow_low_res = xr.DataArray(
+        np.array([[5, 7], [13, 15]], dtype=np.int64),
+        coords=low_res_coords,
+        dims=("y", "x"),
+    )
+    dx1, dy1 = 0.01 / 3.0, -0.01 / 3.0
+    elev_1sec = xr.DataArray(
+        np.repeat(np.repeat(elev_vals, 3, axis=0), 3, axis=1),
+        coords={"y": (np.arange(12) - 1) * dy1, "x": (np.arange(12) - 1) * dx1},
+        dims=("y", "x"),
+    )
+
+    side_slope, profile_widths = calculate_dem_floodplain_geometry(
+        flow_raster_high_res=flw_high_res,
+        elevation_high_res=elev_high_res,
+        elevation_1sec=elev_1sec,
+        upstream_area_high_res_m2=upstream_area_high_res,
+        idxs_outflow_low_res=idxs_outflow_low_res,
+        river_raster_low_res=np.full((2, 2), -1, dtype=np.int32),
+        cell_area_low_res=cell_area_low_res,
+        river_length_low_res=river_length_low_res,
+        ldd_scale_factor=2,
+    )
+
+    assert np.isfinite(side_slope.values).all()
+    assert np.isfinite(profile_widths.values).all()
+    assert (np.diff(profile_widths.values, axis=0) >= 0).all()

@@ -1,6 +1,5 @@
 """Command line interface for GEB."""
 
-import datetime
 import functools
 import inspect
 import json
@@ -23,6 +22,7 @@ from geb.runner import (
     OPTIMIZE_DEFAULT,
     PROFILE_RAM_DEFAULT,
     PROFILE_SPEED_DEFAULT,
+    REGION_DEFAULT,
     SKIP_DONE_DEFAULT,
     TIMING_DEFAULT,
     UPDATE_DEFAULT,
@@ -33,6 +33,7 @@ from geb.runner import (
     create_logger,
     init_fn,
     init_multiple_fn,
+    parse_override_value,
     run_model_with_method,
     set_fn,
     share_fn,
@@ -262,6 +263,13 @@ def click_run_options() -> Any:
 
         @universal_options
         @click.option(
+            "--with",
+            "-w",
+            "with_overrides",
+            multiple=True,
+            help="Override config values (key=value, same syntax as geb set). Can be repeated or provide multiple space-separated pairs.",
+        )
+        @click.option(
             "--save-checkpoint",
             "save_checkpoints",
             multiple=True,
@@ -283,17 +291,24 @@ def click_run_options() -> Any:
             default=SKIP_DONE_DEFAULT,
             help="Only run the method if the model is not already marked as done.",
         )
+        @click.pass_context
         @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def wrapper(ctx: click.Context, *args: Any, **kwargs: Any) -> Any:
             """Wrapper function for run options.
 
             Args:
+                ctx: Click context containing extra arguments.
                 *args: Positional arguments.
                 **kwargs: Keyword arguments.
 
             Returns:
                 The result of the wrapped function.
             """
+            extra_with: list[str] = list(kwargs.pop("with_overrides", ()))
+            for arg in ctx.args:
+                if "=" in arg:
+                    extra_with.append(arg)
+            kwargs["with_overrides"] = tuple(extra_with)
             return func(*args, **kwargs)
 
         return wrapper
@@ -301,11 +316,12 @@ def click_run_options() -> Any:
     return decorator
 
 
-@cli.command()
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click_run_options()
 def run(
     save_checkpoints: tuple[str, ...] = (),
     continue_from_checkpoint: str | None = None,
+    with_overrides: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> None:
     """Run model.
@@ -315,6 +331,7 @@ def run(
     Args:
         save_checkpoints: Checkpoint dates or 'end' to save checkpoints during or after run.
         continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
+        with_overrides: Config overrides to apply in-memory.
         **kwargs: Keyword arguments to pass to the run function.
 
     """
@@ -323,10 +340,12 @@ def run(
         method_args["save_checkpoints"] = save_checkpoints
     if continue_from_checkpoint is not None:
         method_args["continue_from_checkpoint"] = continue_from_checkpoint
-    run_model_with_method(method="run", method_args=method_args, **kwargs)
+    run_model_with_method(
+        method="run", method_args=method_args, with_overrides=with_overrides, **kwargs
+    )
 
 
-@cli.command()
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click_run_options()
 @click.option(
     "--multi",
@@ -351,6 +370,7 @@ def run_yearly(
     prefix: str,
     save_checkpoints: tuple[str, ...] = (),
     continue_from_checkpoint: str | None = None,
+    with_overrides: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> None:
     """Run model in yearly mode.
@@ -363,6 +383,7 @@ def run_yearly(
         prefix: Prefix for the output files.
         save_checkpoints: Checkpoint dates to save.
         continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
+        with_overrides: Config overrides to apply in-memory.
         **kwargs: Keyword arguments to pass to the run_yearly function.
 
     Raises:
@@ -383,17 +404,21 @@ def run_yearly(
 
     if not multi:
         run_model_with_method(
-            method="run_yearly", method_args=base_method_args, **kwargs
+            method="run_yearly",
+            method_args=base_method_args,
+            with_overrides=with_overrides,
+            **kwargs,
         )
         return
 
     assert n_runs is not None
     for run_id in range(n_runs):
+        args: dict[str, Any] = base_method_args.copy()
+        args["model_name"] = f"{prefix}run_{run_id}"
         wd = kwargs["working_directory"]
-        run_name = f"{prefix}run_{run_id}"
-        output_path_agents = wd / "output" / run_name / "report" / "agents.households"
+        output_path_agents = wd / "output" / args["model_name"] / "report" / "agents.households"
         output_path_government = (
-            wd / "output" / run_name / "report" / "agents.government"
+            wd / "output" / args["model_name"] / "report" / "agents.government"
         )
         if output_path_agents.exists() and output_path_government.exists():
             click.echo(
@@ -403,16 +428,18 @@ def run_yearly(
         else:
             run_model_with_method(
                 method="run_yearly",
-                method_args={"model_name": f"{prefix}run_{run_id}"},
+                method_args=args,
+                with_overrides=with_overrides,
                 **kwargs,
             )
 
 
-@cli.command()
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click_run_options()
 def spinup(
     save_checkpoints: tuple[str, ...] = (),
     continue_from_checkpoint: str | None = None,
+    with_overrides: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> None:
     """Run model spinup.
@@ -422,6 +449,7 @@ def spinup(
     Args:
         save_checkpoints: Checkpoint dates to save checkpoints during spinup.
         continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
+        with_overrides: Config overrides to apply in-memory.
         **kwargs: Keyword arguments to pass to the spinup function.
 
     """
@@ -430,10 +458,15 @@ def spinup(
         method_args["save_checkpoints"] = save_checkpoints
     if continue_from_checkpoint is not None:
         method_args["continue_from_checkpoint"] = continue_from_checkpoint
-    run_model_with_method(method="spinup", method_args=method_args, **kwargs)
+    run_model_with_method(
+        method="spinup",
+        method_args=method_args,
+        with_overrides=with_overrides,
+        **kwargs,
+    )
 
 
-@cli.command()
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click.argument("method", required=True)
 @click.option(
     "--method-arg",
@@ -448,6 +481,7 @@ def exec(
     method_args_raw: tuple[str, ...],
     save_checkpoints: tuple[str, ...] = (),
     continue_from_checkpoint: str | None = None,
+    with_overrides: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> None:
     """Execute a specific method on the model.
@@ -457,6 +491,7 @@ def exec(
         method_args_raw: Arguments to pass to the method, as KEY=VALUE strings.
         save_checkpoints: Checkpoint dates to save.
         continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
+        with_overrides: Config overrides to apply in-memory.
         **kwargs: Keyword arguments to pass to the method.
 
     Raises:
@@ -476,21 +511,37 @@ def exec(
     if continue_from_checkpoint is not None:
         method_args["continue_from_checkpoint"] = continue_from_checkpoint
 
-    run_model_with_method(method=method, method_args=method_args, **kwargs)
+    run_model_with_method(
+        method=method,
+        method_args=method_args,
+        with_overrides=with_overrides,
+        **kwargs,
+    )
 
 
 def click_build_options(
-    build_config: Path = BUILD_DEFAULT, build_config_help_extra: str | None = None
+    build_config: Path = BUILD_DEFAULT,
+    region: Path | None = REGION_DEFAULT,
+    build_config_help_extra: str | None = None,
 ) -> Any:
     """Decorator to add build options to a click command.
 
     Args:
         build_config: Default path to the build config file.
+        region: Default path to the region config file, or None for commands that
+            do not use a region config file.
         build_config_help_extra: Extra help text for the build config option.
 
     Returns:
         Decorator function.
     """
+    build_config_help = (
+        f"Path of the model build configuration file. Defaults to '{build_config}'."
+    )
+    if build_config_help_extra:
+        build_config_help += f"""
+
+        {build_config_help_extra}"""
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         """Decorator function to add build options to a click command.
@@ -501,13 +552,6 @@ def click_build_options(
         Returns:
             Decorated function.
         """
-        build_config_help = (
-            f"Path of the model build configuration file. Defaults to '{build_config}'."
-        )
-        if build_config_help_extra:
-            build_config_help += f"""
-
-            {build_config_help_extra}"""
 
         @universal_options
         @click.option(
@@ -530,7 +574,15 @@ def click_build_options(
             """
             return func(*args, **kwargs)
 
-        return wrapper
+        if region is None:
+            return wrapper
+        return click.option(
+            "--region",
+            "-r",
+            type=click.Path(path_type=Path),
+            default=Path(region),
+            help=f"Path of the model region configuration file. Defaults to '{region}'.",
+        )(wrapper)
 
     return decorator
 
@@ -548,6 +600,13 @@ def click_build_options(
     help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
 )
 @click.option(
+    "--region",
+    "-r",
+    type=click.Path(path_type=Path),
+    default=Path(REGION_DEFAULT),
+    help=f"Path of the model region configuration file. Defaults to '{REGION_DEFAULT}'.",
+)
+@click.option(
     "--from-example",
     default="geul",
     help="Name of the example to use as a base for the model. Defaults to 'geul'.",
@@ -556,7 +615,7 @@ def click_build_options(
     "--basin-id",
     default=None,
     type=str,
-    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file. Cannot be used together with --ISO3.",
+    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the region file. Cannot be used together with --ISO3.",
 )
 @click.option(
     "--ISO3",
@@ -569,7 +628,7 @@ def click_build_options(
     "--overwrite",
     is_flag=True,
     default=False,
-    help="If set, overwrite existing config and build config files.",
+    help="If set, overwrite existing config, build config, and region files.",
 )
 def init(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model."""
@@ -613,45 +672,7 @@ def set(
     for arg in ctx.args:
         if "=" in arg:
             key, value = arg.split("=", 1)
-
-            # Try to convert value to appropriate type
-            def is_float(element: str) -> bool:
-                try:
-                    float(element)
-                    return True
-                except ValueError:
-                    return False
-
-            def is_date(element: str) -> bool:
-                try:
-                    datetime.date.fromisoformat(element)
-                    return True
-                except ValueError:
-                    return False
-
-            def is_datetime(element: str) -> bool:
-                try:
-                    datetime.datetime.fromisoformat(element)
-                    return True
-                except ValueError:
-                    return False
-
-            if value.isdigit():
-                value = int(value)
-            elif is_float(value):
-                value = float(value)
-            elif is_date(value):
-                value = datetime.date.fromisoformat(value)
-            elif is_datetime(value):
-                value = datetime.datetime.fromisoformat(value)
-            elif value.lower() == "true":
-                value = True
-            elif value.lower() == "false":
-                value = False
-            else:
-                value: str = value  # Keep as string if it cannot be converted to a more specific type
-
-            params[key] = value
+            params[key] = parse_override_value(value)
         else:
             click.echo(
                 f"Warning: Ignoring invalid argument '{arg}'. Expected format: key=value",
@@ -700,7 +721,7 @@ def build(*args: Any, **kwargs: Any) -> None:
 
 
 @cli.command()
-@click_build_options()
+@click_build_options(region=None)
 @click.option(
     "--from-model",
     type=click.Path(path_type=Path),
@@ -721,6 +742,7 @@ def alter(*args: Any, **kwargs: Any) -> None:
 @cli.command()
 @click_build_options(
     build_config=UPDATE_DEFAULT,
+    region=None,
     build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
 )
 def update(*args: Any, **kwargs: Any) -> None:
@@ -734,7 +756,7 @@ def update(*args: Any, **kwargs: Any) -> None:
 
 
 @cli.command()
-@click_build_options()
+@click_build_options(region=None)
 def update_version(*args: Any, **kwargs: Any) -> None:
     """Update the model version file to the current model version.
 

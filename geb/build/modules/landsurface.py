@@ -6,12 +6,16 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pyflwdir
 import shapely
 import xarray as xr
+from numba import njit, prange
 from pyflwdir.dem import fill_depressions
 from shapely.ops import linemerge
 
 from geb.build.methods import build_method
+from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE, OPEN_WATER, SEALED
+from geb.numba_config import NUMBA_CACHE
 from geb.workflows.io import get_window, parse_and_set_zarr_CRS
 from geb.workflows.raster import (
     calculate_cell_area_m2,
@@ -28,6 +32,158 @@ from geb.workflows.raster import (
 
 from ..workflows.soilgrids import process_soilgrids
 from .base import BuildModelBase
+
+# Maximum number of elevation zones per grid cell: bottom (0), midslope (1), top (2).
+N_ELEVATION_ZONES: int = 3
+
+# Order in which zones that cover too little of a cell are merged into a neighbour,
+# as (small zone, zone it merges into). A small top or bottom zone joins the
+# midslope; a small midslope joins the bottom zone, or the top zone when the cell
+# has no bottom zone. Each step uses the zones as left by the previous steps.
+ELEVATION_ZONE_MERGE_ORDER: np.ndarray = np.array(
+    [[2, 1], [0, 1], [1, 0], [1, 2]], dtype=np.int8
+)
+
+
+@njit(cache=NUMBA_CACHE, parallel=True)
+def assign_elevation_zones(
+    height: np.ndarray,
+    open_water: np.ndarray,
+    factor: int,
+    bottom_zone_height_m: float,
+    top_zone_relief_factor: float,
+    minimum_zone_fraction: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Assigns every subgrid pixel to an elevation zone of its grid cell.
+
+    See ``LandSurface.setup_elevation_zones`` for the rules. Each grid cell is a
+    block of ``factor`` x ``factor`` subgrid pixels and is handled on its own.
+
+    Args:
+        height: Height above the nearest stream of every subgrid pixel, NaN outside
+            the model domain (m).
+        open_water: Whether a subgrid pixel is open water.
+        factor: Number of subgrid pixels along one side of a grid cell.
+        bottom_zone_height_m: Height above the stream of the upper edge of the
+            bottom zone (m).
+        top_zone_relief_factor: The land above the bottom zone is split in two
+            zones when it spans more than this number of times the bottom zone
+            height (-).
+        minimum_zone_fraction: Smallest fraction of the cell a zone may cover (-).
+
+    Returns:
+        zones: Zone of every subgrid pixel, numbered from 0 without gaps in every
+            cell; -1 outside the model domain.
+        zone_height: Mean height above the stream of each zone (zone, y, x), NaN
+            where the zone does not exist (m).
+        zone_fraction: Fraction of the cell covered by each zone (zone, y, x) (-).
+    """
+    n_rows: int = height.shape[0] // factor
+    n_cols: int = height.shape[1] // factor
+    n_pixels: int = factor * factor
+
+    zones = np.full(height.shape, -1, dtype=np.int8)
+    zone_height = np.full((N_ELEVATION_ZONES, n_rows, n_cols), np.nan, np.float32)
+    zone_fraction = np.zeros((N_ELEVATION_ZONES, n_rows, n_cols), np.float32)
+
+    for row in prange(n_rows):
+        # buffers with the pixels of one cell, reused for every cell in the row
+        cell_height = np.empty(n_pixels, dtype=np.float32)
+        cell_water = np.empty(n_pixels, dtype=np.bool_)
+        cell_zone = np.empty(n_pixels, dtype=np.int8)
+        count = np.empty(N_ELEVATION_ZONES, dtype=np.int64)
+        new_number = np.empty(N_ELEVATION_ZONES, dtype=np.int8)
+
+        for col in range(n_cols):
+            for i in range(factor):
+                for j in range(factor):
+                    cell_height[i * factor + j] = height[
+                        row * factor + i, col * factor + j
+                    ]
+                    cell_water[i * factor + j] = open_water[
+                        row * factor + i, col * factor + j
+                    ]
+            n_inside: int = 0
+            for k in range(n_pixels):
+                if not np.isnan(cell_height[k]):
+                    n_inside += 1
+            if n_inside == 0:
+                continue  # cell outside the model domain: all zones stay empty
+
+            # Relief of the cell: the 95th percentile of the height, so that a few
+            # high pixels do not decide the zones.
+            relief: float = float(np.nanpercentile(cell_height, 95))
+            # The land above the bottom zone spans from the bottom zone height up to
+            # the relief. It forms a midslope zone when it has any height, and is
+            # split halfway into a midslope and a top zone when it spans more than
+            # top_zone_relief_factor times the bottom zone height.
+            upper_span: float = relief - bottom_zone_height_m
+            has_midslope: bool = upper_span > 0.0
+            has_top: bool = upper_span > top_zone_relief_factor * bottom_zone_height_m
+            top_edge: float = bottom_zone_height_m + upper_span / 2.0
+
+            for k in range(n_pixels):
+                if np.isnan(cell_height[k]):
+                    cell_zone[k] = -1  # outside the model domain
+                elif cell_water[k]:
+                    cell_zone[k] = 0  # open water is always in the lowest zone
+                elif has_top and cell_height[k] > top_edge:
+                    cell_zone[k] = 2
+                elif has_midslope and cell_height[k] > bottom_zone_height_m:
+                    cell_zone[k] = 1
+                else:
+                    cell_zone[k] = 0
+
+            # Merge zones that cover too little of the cell with their neighbour,
+            # but only into a zone that exists in the cell.
+            count[:] = 0
+            for k in range(n_pixels):
+                if cell_zone[k] >= 0:
+                    count[cell_zone[k]] += 1
+            for step in range(ELEVATION_ZONE_MERGE_ORDER.shape[0]):
+                small: int = ELEVATION_ZONE_MERGE_ORDER[step, 0]
+                into: int = ELEVATION_ZONE_MERGE_ORDER[step, 1]
+                fraction: float = count[small] / n_inside
+                if (
+                    count[small] > 0
+                    and fraction < minimum_zone_fraction
+                    and count[into] > 0
+                ):
+                    for k in range(n_pixels):
+                        if cell_zone[k] == small:
+                            cell_zone[k] = into
+                    count[into] += count[small]
+                    count[small] = 0
+
+            # Number the remaining zones from 0 without gaps, so the lowest zone of
+            # every cell is zone 0.
+            next_number: int = 0
+            for zone in range(N_ELEVATION_ZONES):
+                new_number[zone] = next_number
+                if count[zone] > 0:
+                    next_number += 1
+
+            # Write the zones back to the subgrid and compute per zone the fraction
+            # of the cell it covers and its mean height above the stream.
+            height_sum = np.zeros(N_ELEVATION_ZONES, dtype=np.float64)
+            for i in range(factor):
+                for j in range(factor):
+                    k: int = i * factor + j
+                    zone_k: int = cell_zone[k]
+                    if zone_k >= 0:
+                        zone_k = new_number[zone_k]
+                        height_sum[zone_k] += cell_height[k]
+                    zones[row * factor + i, col * factor + j] = zone_k
+            for zone in range(N_ELEVATION_ZONES):
+                n_in_zone: int = count[zone]
+                if n_in_zone > 0:
+                    renumbered: int = new_number[zone]
+                    zone_fraction[renumbered, row, col] = n_in_zone / n_inside
+                    zone_height[renumbered, row, col] = (
+                        height_sum[renumbered] / n_in_zone
+                    )
+
+    return zones, zone_height, zone_fraction
 
 
 class LandSurface(BuildModelBase):
@@ -89,7 +245,7 @@ class LandSurface(BuildModelBase):
         DEMs: list[dict[str, str | float]] = [
             {
                 "name": "fathomdem",
-                "zmin": 0.001,
+                "zmin_coastal": 0.001,
                 "fill_depressions": False,
             },
             {
@@ -115,9 +271,10 @@ class LandSurface(BuildModelBase):
                 the path must be set.
             path: The path to the DEM file. Only required if the name is not supported.
             zmin: The minimum elevation where to use the DEM. Elevations below this value will be set to NaN.
-            zmin_coastal: The minimum elevation where to use the DEM for coastal subbasins. Elevations below this value will be set to NaN.
+            zmin_coastal: Used as zmin in models with coastal subbasins, where the coastal DEMs fill the sea below it;
+                not used in models without coastal subbasins, so that land below sea level keeps its elevation.
             zmax: The maximum elevation where to use the DEM. Elevations above this value will be set to NaN.
-            zmax_coastal: The maximum elevation where to use the DEM for coastal subbasins. Elevations above this value will be set to NaN.
+            zmax_coastal: Used as zmax in models with coastal subbasins; not used in other models.
             fill_depressions: Whether to fill depressions in the DEM. Default is False. Note that this may use a lot of memory for large DEMs.
             nodata: The nodata value in the DEM. Optional, only required if the DEM does not have a nodata value defined.
             crs: The CRS to set for custom DEMs when the file does not define one (EPSG code or CRS string).
@@ -149,7 +306,19 @@ class LandSurface(BuildModelBase):
             self.geom["routing/subbasins"].union_all().buffer(0.1)
         )
 
-        if self.geom["routing/subbasins"]["is_coastal"].any():
+        has_coastal_subbasins: bool = bool(
+            self.geom["routing/subbasins"]["is_coastal"].any()
+        )
+        for DEM in DEMs:
+            zmin_coastal: str | float | None = DEM.pop("zmin_coastal", None)
+            zmax_coastal: str | float | None = DEM.pop("zmax_coastal", None)
+            if has_coastal_subbasins:
+                if zmin_coastal is not None:
+                    DEM["zmin"] = zmin_coastal
+                if zmax_coastal is not None:
+                    DEM["zmax"] = zmax_coastal
+
+        if has_coastal_subbasins:
             # deltaDTM must be present if coastal DEMs are used
             if not any(DEM.get("name", "") == "delta_dtm" for DEM in DEMs):
                 raise ValueError(
@@ -416,22 +585,20 @@ class LandSurface(BuildModelBase):
         land_use_classes_subgrid = reclassify(
             land_use_classification_source_subgrid,
             remap_dict={
-                0: np.int8(
-                    5
-                ),  # map nodata in source to permanent water bodies, as these are mostly ocean in the land cover dataset
-                10: np.int8(0),  # tree cover
-                20: np.int8(1),  # shrubland
-                30: np.int8(1),  # grassland
-                40: np.int8(
-                    1
-                ),  # cropland, setting to non-irrigated. Initiated as irrigated based on agents
-                50: np.int8(4),  # built-up
-                60: np.int8(1),  # bare / sparse vegetation
-                70: np.int8(1),  # snow and ice
-                80: np.int8(5),  # permanent water bodies
-                90: np.int8(1),  # herbaceous wetland
-                95: np.int8(5),  # mangroves
-                100: np.int8(1),  # moss and lichen
+                # nodata in the source is mostly ocean, so it becomes open water
+                0: np.int8(OPEN_WATER),
+                10: np.int8(FOREST),  # tree cover
+                20: np.int8(GRASSLAND_LIKE),  # shrubland
+                30: np.int8(GRASSLAND_LIKE),  # grassland
+                # cropland starts as non-irrigated; agents set irrigated land later
+                40: np.int8(GRASSLAND_LIKE),
+                50: np.int8(SEALED),  # built-up
+                60: np.int8(GRASSLAND_LIKE),  # bare / sparse vegetation
+                70: np.int8(GRASSLAND_LIKE),  # snow and ice
+                80: np.int8(OPEN_WATER),  # permanent water bodies
+                90: np.int8(GRASSLAND_LIKE),  # herbaceous wetland
+                95: np.int8(OPEN_WATER),  # mangroves
+                100: np.int8(GRASSLAND_LIKE),  # moss and lichen
             },
             method="lookup",
         )
@@ -522,6 +689,9 @@ class LandSurface(BuildModelBase):
             soil layer (1-3; 1 is the top layer). The storage depth data is set as attributes of the model with names of the
             form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
             with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
+
+            The volumetric coarse fragment (stone) content of each layer (SoilGrids v2
+            ``cfvo``) is stored as 'soil/coarse_fragments_percentage' (% of layer volume).
         """
         # Keep this commented code because we want to include differentiation between valley and hillslope soils later
         # soil_depth = self.data_catalog.fetch("GlobalSoilRegolithSediment").read()
@@ -541,12 +711,14 @@ class LandSurface(BuildModelBase):
             "clay": 0.1,  # g/kg -> g/100g (%)
             "bdod": 0.01,  # cg/cm³ -> gr/cm³
             "soc": 0.01,  # dg/kg -> g/100g (%)
+            "cfvo": 0.1,  # cm3/dm3 -> % of volume
         }
         soilgrids_output_names: dict[str, str] = {
             "silt": "soil/silt_percentage",
             "clay": "soil/clay_percentage",
             "bdod": "soil/bulk_density_kg_per_dm3",
             "soc": "soil/soil_organic_carbon_percentage",
+            "cfvo": "soil/coarse_fragments_percentage",
         }
         soil_layer_names: list[str] = [
             "0-5cm",
@@ -564,6 +736,10 @@ class LandSurface(BuildModelBase):
                 conversion_factor=conversion_factor,
                 soil_layer_names=soil_layer_names,
             )
+            if variable_name == "cfvo":
+                # Stones hold no water, so the model scales the water storage and
+                # conductivity of each layer by the fine-earth fraction.
+                soilgrids_variable = soilgrids_variable.clip(0.0, 100.0)
 
             soilgrids_variable: xr.DataArray = self.set_subgrid(
                 soilgrids_variable,
@@ -609,11 +785,167 @@ class LandSurface(BuildModelBase):
 
         self.set_subgrid(depth_to_bedrock_m, name="soil/depth_to_bedrock_m")
 
+    @build_method(depends_on=["setup_elevation"], required=True)
+    def setup_grid_elevation(self) -> None:
+        """Sets up the mean and lowest elevation of each grid cell from the subgrid elevation.
+
+        All elevations of the model grid come from the subgrid elevation, so that they
+        are consistent with each other: the mean elevation of the cell
+        (``landsurface/elevation_m``: top of the groundwater model, temperature lapse)
+        and the lowest elevation in the cell (``landsurface/elevation_min_m``: the
+        stream of cells without a represented river, see setup_river_surface_profiles).
+        The hydrography DEM (MERIT Hydro) only sets the flow directions; it lies about
+        2 m above FathomDEM.
+        """
+        outside: xr.DataArray = self.subgrid["mask"]
+        elevation: np.ndarray = (
+            self.subgrid["landsurface/elevation"]
+            .where(~outside)
+            .values.astype(np.float32)
+        )
+        factor: int = self.subgrid_factor
+        grid_mask: xr.DataArray = self.grid["mask"]
+        n_rows, n_cols = grid_mask.shape
+        assert elevation.shape == (n_rows * factor, n_cols * factor)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            cell_elevation: np.ndarray = elevation.reshape(
+                n_rows, factor, n_cols, factor
+            )
+            cell_mean_elevation = np.nanmean(cell_elevation, axis=(1, 3))
+            cell_minimum_elevation = np.nanmin(cell_elevation, axis=(1, 3))
+        for values, name in (
+            (cell_mean_elevation, "landsurface/elevation_m"),
+            (cell_minimum_elevation, "landsurface/elevation_min_m"),
+        ):
+            grid_elevation = self.full_like(
+                grid_mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+            )
+            grid_elevation.data = values.astype(np.float32)
+            self.set_grid(grid_elevation, name=name)
+
+    @build_method(
+        depends_on=["setup_elevation", "setup_regions_and_land_use"], required=True
+    )
+    def setup_elevation_zones(
+        self,
+        bottom_zone_height_m: float = 3.0,
+        top_zone_relief_factor: float = 4.0,
+        minimum_zone_fraction: float = 0.05,
+        channel_initiation_area_km2: float = 0.2,
+    ) -> None:
+        """Divides every grid cell in up to three zones by height above the nearest stream.
+
+        The land inside a grid cell differs in its position on the hillslope: the valley
+        bottom lies next to the stream with the water table close to the surface, the
+        slopes and plateaus lie well above it. Each subgrid pixel is assigned to one of
+        at most three zones, counted from the stream upwards: the bottom zone (0), the
+        midslope (1) and the top (2). The land surface model splits its hydrological
+        response units by zone.
+
+        The height above the nearest stream follows the flow directions of the subgrid
+        elevation; a stream starts where the upstream area exceeds the channel
+        initiation area (the same threshold as for the hillslope length).
+
+        The number of zones depends on the relief of the cell:
+
+        - the bottom zone is the land within ``bottom_zone_height_m`` of the stream;
+        - the land above it is one zone, or two zones split halfway up to the highest
+          land of the cell (95th percentile of the height) when it spans more than
+          ``top_zone_relief_factor`` times ``bottom_zone_height_m``;
+        - a zone smaller than ``minimum_zone_fraction`` of the cell is merged with the
+          neighbouring zone;
+        - open water is always part of the lowest zone of the cell.
+
+        Zones are numbered from 0 without gaps in every cell, so the lowest zone of a
+        cell is always zone 0.
+
+        Args:
+            bottom_zone_height_m: Height above the stream of the upper edge of the bottom zone (m).
+            top_zone_relief_factor: The land above the bottom zone is split in two zones when it
+                spans more than this number of times the bottom zone height (-).
+            minimum_zone_fraction: Smallest fraction of the cell a zone may cover (-).
+            channel_initiation_area_km2: Upstream area above which a subgrid pixel is a stream (km2).
+        """
+        # Height above the nearest stream (HAND) of every subgrid pixel. Water flows
+        # along the D8 flow directions of the depression-filled subgrid elevation, and
+        # a pixel is a stream once its upstream area exceeds the channel initiation
+        # area. The height of a pixel is its elevation minus that of the stream pixel
+        # it drains to.
+        outside: np.ndarray = self.subgrid["mask"].values.astype(bool)
+        elevation_da: xr.DataArray = self.subgrid["landsurface/elevation"]
+        nodata: float = -9999.0
+        elevation: np.ndarray = elevation_da.values.astype(np.float32)
+        elevation[outside] = nodata
+        _, flow_directions = fill_depressions(elevation, nodata=nodata)
+        flow_raster = pyflwdir.from_array(
+            flow_directions,
+            ftype="d8",
+            transform=elevation_da.rio.transform(recalc=True),
+            latlon=True,
+        )
+        is_stream: np.ndarray = (
+            flow_raster.upstream_area("km2") > channel_initiation_area_km2
+        )
+        height: np.ndarray = flow_raster.hand(is_stream, elevation).astype(np.float32)
+        # Pixels outside the model domain get NaN; small negative heights from the
+        # depression filling are set to 0 (the pixel lies at stream level).
+        height = np.where(outside | (height == nodata), np.nan, np.maximum(height, 0.0))
+
+        open_water: np.ndarray = (
+            self.subgrid["landsurface/land_use_classes"].values == OPEN_WATER
+        )
+        grid_mask: xr.DataArray = self.grid["mask"]
+        assert height.shape == (
+            grid_mask.shape[0] * self.subgrid_factor,
+            grid_mask.shape[1] * self.subgrid_factor,
+        )
+
+        zones, zone_height, zone_fraction = assign_elevation_zones(
+            height,
+            open_water,
+            self.subgrid_factor,
+            bottom_zone_height_m,
+            top_zone_relief_factor,
+            minimum_zone_fraction,
+        )
+
+        zones_da: xr.DataArray = self.full_like(
+            self.subgrid["landsurface/land_use_classes"],
+            fill_value=-1,
+            nodata=-1,
+            dtype=np.int8,
+        )
+        zones_da.data = zones
+        self.set_subgrid(zones_da, name="landsurface/elevation_zones")
+
+        for values, name in (
+            (zone_height, "landsurface/elevation_zone_height_above_stream_m"),
+            (zone_fraction, "landsurface/elevation_zone_fraction"),
+        ):
+            zone_da = xr.DataArray(
+                values,
+                dims=("zone", "y", "x"),
+                coords={
+                    "zone": np.arange(N_ELEVATION_ZONES),
+                    "y": grid_mask.y,
+                    "x": grid_mask.x,
+                },
+            )
+            zone_da.attrs["_FillValue"] = np.nan
+            self.set_grid(zone_da, name=name)
+
     @build_method(depends_on=[], required=True)
     def setup_vegetation(
         self,
     ) -> None:
-        """Sets up the vegetation parameters for the model."""
+        """Sets up the vegetation parameters for the model.
+
+        Stores, per grid cell, the crop group number and the leaf area index per
+        10-day period for forest and grassland-like vegetation (LISFLOOD), and the
+        evergreen fraction of tree cover (ESA CCI Land Cover plant functional types).
+        """
         for vegetation_type in ("forest", "grassland_like"):
             crop_group_number: xr.DataArray = self.data_catalog.fetch(
                 f"lisflood_crop_group_number_{vegetation_type}"
@@ -663,6 +995,36 @@ class LandSurface(BuildModelBase):
             self.set_other(
                 leaf_area_index, name=f"vegetation/leaf_area_index_{vegetation_type}"
             )
+
+        # Evergreen fraction of tree cover from the ESA CCI Land Cover plant functional
+        # type map (2020, 300 m): (needleleaved + broadleaved evergreen trees) / all
+        # trees. The model approximates the evergreen part of forest as constant at its
+        # annual maximum leaf area index. Satellite LAI underestimates the winter LAI of
+        # evergreen canopies (snow, low sun angles, understory die-back), while their
+        # true seasonal change is small (~10-30 %). Cells without trees get 0.
+        tree_types: list[str] = ["TREES-NE", "TREES-BE", "TREES-ND", "TREES-BD"]
+        pft: xr.Dataset = self.data_catalog.fetch("esa_cci_land_cover_pft_2020").read(
+            variables=tree_types, bounds=self.bounds
+        )
+        evergreen_percentage: xr.DataArray = pft["TREES-NE"] + pft["TREES-BE"]
+        tree_percentage: xr.DataArray = (
+            evergreen_percentage + pft["TREES-ND"] + pft["TREES-BD"]
+        )
+
+        # Average numerator and denominator to the grid separately (area-weighted ratio).
+        evergreen_on_grid: xr.DataArray = resample_like(
+            evergreen_percentage, self.grid["mask"], method="conservative"
+        )
+        trees_on_grid: xr.DataArray = resample_like(
+            tree_percentage, self.grid["mask"], method="conservative"
+        )
+        evergreen_fraction: xr.DataArray = xr.where(
+            trees_on_grid > 0.0, evergreen_on_grid / trees_on_grid, 0.0
+        ).astype(np.float32)
+        evergreen_fraction = evergreen_fraction.fillna(0.0).clip(0.0, 1.0)
+        evergreen_fraction = evergreen_fraction.rio.write_crs(self.grid["mask"].rio.crs)
+        evergreen_fraction.attrs["_FillValue"] = np.nan
+        self.set_grid(evergreen_fraction, name="vegetation/forest_evergreen_fraction")
 
     @build_method(depends_on=[], required=False)
     def setup_forest_restoration_potential(self) -> None:

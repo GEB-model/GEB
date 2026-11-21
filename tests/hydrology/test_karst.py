@@ -58,9 +58,10 @@ def test_karst_step(karst: Karst, coverage: float, capture_fraction: float) -> N
     interflow_m: np.ndarray = np.full((24, 6), 0.00025, dtype=np.float32)
     soil_m: np.ndarray = np.full(6, 0.002, dtype=np.float32)
     previous_storage_m: np.ndarray = karst.storage_m.copy()
+    # Only the karst part of a cell captures water (weighted by the karst fraction).
     # Sealed and open-water HRUs (the last two) must retain all their input flows.
-    karst_presence_cell_0: float = 1.0 if coverage > 0.0 else 0.0
-    karst_presence_cell_1: float = 1.0 if (coverage / 2) > 0.0 else 0.0
+    karst_presence_cell_0: float = coverage
+    karst_presence_cell_1: float = coverage / 2
     eligible_karst_fraction: np.ndarray = np.array(
         [
             karst_presence_cell_0,

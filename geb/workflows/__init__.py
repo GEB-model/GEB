@@ -19,9 +19,9 @@ class TimingModule:
         Args:
             name: The name of the timing module. Will be used when printing the timing results.
         """
-        self.name = name
-        self.times = [time()]
-        self.split_names = []
+        self.name: str = name
+        self.times: list[float] = [time()]
+        self.split_names: list[str] = []
 
     def finish_split(self, name: str) -> None:
         """Finish split with with name given.
@@ -33,6 +33,17 @@ class TimingModule:
             name: The name of the split. This is the name of the previous split.
         """
         self.times.append(time())
+        self.split_names.append(name)
+
+    def add_split_duration(self, name: str, duration: float) -> None:
+        """Add a split with an explicitly provided duration.
+
+        Args:
+            name: The name of the split.
+            duration: Duration of the split in seconds.
+        """
+        last_time: float = self.times[-1]
+        self.times.append(last_time + duration)
         self.split_names.append(name)
 
     def __str__(self) -> str:

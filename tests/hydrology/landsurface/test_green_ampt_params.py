@@ -229,3 +229,89 @@ def test_get_green_ampt_params_layered_no_interference() -> None:
     assert abs(dtheta - 0.3) < 1e-4, (
         f"Lower layer moisture incorrectly affected upper layer suction! dtheta={dtheta}, expected 0.3"
     )
+
+
+def test_get_green_ampt_params_capillary_drive_vanishes_at_saturation() -> None:
+    """The capillary drive (suction * moisture deficit) vanishes when the soil ahead is saturated.
+
+    The suction head itself stays finite: Rawls et al. (1983) give half the bubbling
+    pressure at saturation. The drive vanishes through the moisture deficit.
+    """
+    soil_layer_height_m: np.ndarray = np.array([0.5, 0.5], dtype=np.float32)
+    ws: np.ndarray = np.array([0.2, 0.2], dtype=np.float32)
+    # Fully saturated: w == ws
+    w: np.ndarray = np.array([0.2, 0.2], dtype=np.float32)
+    wres: np.ndarray = np.array([0.02, 0.02], dtype=np.float32)
+    bubbling: np.ndarray = np.array([0.2, 0.2], dtype=np.float32)
+    lamb: np.ndarray = np.array([0.3, 0.3], dtype=np.float32)
+
+    _, suction, moisture_deficit = get_green_ampt_params(
+        np.float32(0.0), soil_layer_height_m, w, ws, wres, bubbling, lamb
+    )
+    np.testing.assert_allclose(suction, 0.5 * bubbling[0], rtol=1e-4)
+    # the moisture deficit is floored at 1e-4, so the drive is at most 1e-5 m
+    assert suction * moisture_deficit <= np.float32(2e-5)
+
+
+def test_infiltration_wetting_front_decay_during_hiatus() -> None:
+    """Test that wetting front decays gradually during rain pauses rather than resetting instantly."""
+    from geb.hydrology.landsurface.water import infiltration
+
+    n_layers = 6
+    soil_height = np.array([0.05, 0.1, 0.15, 0.3, 0.4, 1.0], dtype=np.float32)
+    ws = soil_height * 0.4
+    wres = soil_height * 0.05
+    w = soil_height * 0.35  # Near saturation
+    ksat = np.full(n_layers, 1e-6, dtype=np.float32)  # 3.6 mm/hr
+    bubbling = np.full(n_layers, 0.2, dtype=np.float32)
+    lamb = np.full(n_layers, 0.3, dtype=np.float32)
+    enthalpy = np.zeros(n_layers, dtype=np.float32)
+    heat_cap = np.full(n_layers, 2e6, dtype=np.float32)
+
+    initial_front_depth = np.float32(0.15)  # 15 cm deep wetting front
+
+    (
+        topwater_out,
+        runoff,
+        recharge,
+        infil,
+        front_depth_out,
+        suction_out,
+        deficit_out,
+        active_idx,
+        _,
+    ) = infiltration(
+        seed=np.int64(123),
+        ws=ws,
+        wres=wres,
+        saturated_hydraulic_conductivity_m_per_s=ksat,
+        groundwater_toplayer_conductivity_m_per_s=np.float32(1e-6),
+        land_use_type=np.int32(1),
+        w=w,
+        topwater_m=np.float32(0.0),  # No topwater / rain hiatus!
+        wetting_front_depth_m=initial_front_depth,
+        wetting_front_suction_head_m=np.float32(0.05),
+        wetting_front_moisture_deficit=np.float32(0.05),
+        green_ampt_active_layer_idx=np.int32(2),
+        variable_runoff_shape_beta=np.float32(1.0),
+        bubbling_pressure_m_positive=bubbling,
+        soil_layer_height_m=soil_height,
+        lambda_pore_size_distribution=lamb,
+        soil_enthalpy_J_per_m2=enthalpy,
+        solid_heat_capacity_J_per_m2_K=heat_cap,
+        rain_temperature_C=np.float32(5.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=np.ones((1, 6), dtype=np.float32) / 6.0,
+        distribute_rainfall_lognormally=False,
+        dunne_effective_saturation=np.float32(0.0),
+        surface_crust_factor=np.float32(0.2),
+        macropore_infiltration_capacity_m_per_s=np.float32(0.0),
+    )
+
+    # Infiltration and runoff must be 0
+    assert infil == 0.0
+    assert runoff == 0.0
+    # Wetting front must NOT have been wiped to 0 instantly!
+    assert 0.0 < front_depth_out < initial_front_depth
+    # Parameter update must remain active
+    assert active_idx >= 0

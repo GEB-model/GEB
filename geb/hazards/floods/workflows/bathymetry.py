@@ -85,6 +85,127 @@ def skip_subgrid_tiles_without_river_bed_levels() -> Generator[None, None, None]
         )
 
 
+@contextmanager
+def capture_subgrid_initial_water_level(
+    grid_mask: xr.DataArray,
+    nr_subgrid_pixels: int,
+) -> Generator[xr.DataArray, None, None]:
+    """Captures initial water levels on the coarse grid during subgrid river burning.
+
+    Wraps `hydromt_sfincs.workflows.bathymetry.burn_river_rect` so that as each
+    subgrid tile is burned during `SfincsSubgridTable.create`, any subgrid pixel
+    whose elevation is lowered (`burned < unburned`) is detected directly in memory.
+    For each active coarse cell (`grid_mask == 1`) containing burned subgrid pixels,
+    the initial water level is set to the minimum unburned elevation of the burned
+    subgrid pixels in that cell.
+
+    Notes:
+        This temporarily replaces `burn_river_rect` in the hydromt-sfincs
+        bathymetry workflow and restores it on exit.
+
+    Args:
+        grid_mask: Active cell mask for the coarse SFINCS grid (1 = active cell).
+        nr_subgrid_pixels: Number of subgrid pixels per coarse cell along each axis.
+
+    Yields:
+        Coarse-grid DataArray of initial water levels (meters), populated as
+        subgrid tiles are burned, with NaN in cells without burned river pixels.
+    """
+    initial_water_level: xr.DataArray = xr.full_like(
+        grid_mask, np.nan, dtype=np.float32
+    )
+    initial_water_level.attrs["_FillValue"] = np.nan
+
+    grid_transform = grid_mask.rio.transform(recalc=True)
+    original_burn_river_rect: Callable[..., Any] = (
+        hydromt_sfincs_bathymetry.burn_river_rect
+    )
+
+    def burn_river_rect_with_capture(
+        da_elv: xr.DataArray,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[xr.DataArray, xr.DataArray]:
+        """Burns rivers into a subgrid tile and records coarse initial water levels.
+
+        Args:
+            da_elv: Unburned subgrid elevation tile (meters).
+            *args: Positional arguments forwarded to `burn_river_rect`.
+            **kwargs: Keyword arguments forwarded to `burn_river_rect`.
+
+        Returns:
+            Tuple of burned elevation DataArray (meters) and burned Manning DataArray.
+        """
+        unburned_subgrid: np.ndarray = da_elv.values[
+            :-nr_subgrid_pixels, :-nr_subgrid_pixels
+        ].copy()
+        da_elv_burned, da_man_burned = original_burn_river_rect(
+            da_elv,
+            *args,
+            **kwargs,
+        )
+        burned_subgrid: np.ndarray = da_elv_burned.values[
+            :-nr_subgrid_pixels, :-nr_subgrid_pixels
+        ]
+        river_pixels: np.ndarray = burned_subgrid < unburned_subgrid
+        if river_pixels.any():
+            tile_transform = da_elv.rio.transform(recalc=True)
+            block_column_start: int = round(
+                (tile_transform.c - grid_transform.c) / grid_transform.a
+            )
+            block_row_start: int = round(
+                (tile_transform.f - grid_transform.f) / grid_transform.e
+            )
+            n_rows_block: int = unburned_subgrid.shape[0] // nr_subgrid_pixels
+            n_cols_block: int = unburned_subgrid.shape[1] // nr_subgrid_pixels
+            block_row_end: int = block_row_start + n_rows_block
+            block_column_end: int = block_column_start + n_cols_block
+
+            cell_shape: tuple[int, int, int, int] = (
+                n_rows_block,
+                nr_subgrid_pixels,
+                n_cols_block,
+                nr_subgrid_pixels,
+            )
+            has_river_pixels: np.ndarray = river_pixels.reshape(cell_shape).any(
+                axis=(1, 3)
+            )
+            cell_river_surface: np.ndarray = (
+                np.where(river_pixels, unburned_subgrid, np.inf)
+                .reshape(cell_shape)
+                .min(axis=(1, 3))
+            )
+            active_river_cells: np.ndarray = has_river_pixels & (
+                grid_mask.values[
+                    block_row_start:block_row_end, block_column_start:block_column_end
+                ]
+                == 1
+            )
+            block_view: np.ndarray = initial_water_level.values[
+                block_row_start:block_row_end, block_column_start:block_column_end
+            ]
+            block_view[active_river_cells] = np.fmin(
+                block_view[active_river_cells],
+                cell_river_surface[active_river_cells],
+            )
+
+        return da_elv_burned, da_man_burned
+
+    setattr(
+        hydromt_sfincs_bathymetry,
+        "burn_river_rect",
+        burn_river_rect_with_capture,
+    )
+    try:
+        yield initial_water_level
+    finally:
+        setattr(
+            hydromt_sfincs_bathymetry,
+            "burn_river_rect",
+            original_burn_river_rect,
+        )
+
+
 def _validate_inputs(
     elevation_grid: xr.DataArray, manning_grid: xr.DataArray, rivers: gpd.GeoDataFrame
 ) -> None:
@@ -109,7 +230,6 @@ def _validate_inputs(
         "depth",
         "downstream_ID",
         "manning",
-        "topological_stream_order",
     ]:
         if col not in rivers.columns:
             raise ValueError(f"Required column '{col}' not found in GeoDataFrame.")
@@ -397,7 +517,7 @@ def _burn(
     ],
     elevation_grid: xr.DataArray,
     manning_grid: xr.DataArray,
-) -> tuple[xr.DataArray, xr.DataArray]:
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
     """Burns the river network into the DEM and Manning's n grid.
 
     Args:
@@ -413,10 +533,12 @@ def _burn(
         Tuple containing:
             - Modified elevation DataArray with rivers burned in (meters).
             - Modified Manning's n DataArray with river roughness values (s/m^(1/3)).
+            - Initial water level DataArray on burned river cells (meters), with NaN elsewhere.
     """
     grid_shape = (shape[-2], shape[-1])
     global_burn_elevation = np.full(grid_shape, fill_value=np.inf, dtype=np.float32)
     global_burn_manning = np.full(grid_shape, fill_value=-np.inf, dtype=np.float32)
+    global_burn_depth = np.full(grid_shape, fill_value=-np.inf, dtype=np.float32)
 
     # Extract the elevation values for path-of-least-resistance lookups
     dem_base = elevation_grid.values
@@ -503,6 +625,9 @@ def _burn(
         global_burn_manning[p_rows, p_cols] = np.fmax(
             global_burn_manning[p_rows, p_cols], river["manning"]
         )
+        global_burn_depth[p_rows, p_cols] = np.fmax(
+            global_burn_depth[p_rows, p_cols], river["depth"]
+        )
 
     update_mask = np.isfinite(global_burn_elevation)
 
@@ -511,36 +636,50 @@ def _burn(
     out_mannings = manning_grid.copy()
     out_mannings.values[update_mask] = global_burn_manning[update_mask]
 
-    return elevation_grid, out_mannings
+    initial_water_level: xr.DataArray = xr.full_like(
+        elevation_grid, np.nan, dtype=np.float32
+    )
+    initial_water_level.attrs["_FillValue"] = np.nan
+    initial_water_level.values[update_mask] = (
+        global_burn_elevation[update_mask] + global_burn_depth[update_mask]
+    )
+
+    return elevation_grid, out_mannings, initial_water_level
 
 
 def burn_rivers(
     elevation_grid: xr.DataArray,
     manning_grid: xr.DataArray,
     rivers: gpd.GeoDataFrame,
-) -> tuple[xr.DataArray, xr.DataArray]:
+    river_bed_points: gpd.GeoDataFrame,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
     """Burns river networks into a Digital Elevation Model (DEM).
 
-    This workflow modifies the terrain elevation and roughness grids to
-    explicitly include river channels, ensuring they are hydrologically
-    consistent (i.e., they always flow downhill).
+    The riverbed comes from the river profiles of the model build (water surface from
+    FathomDEM minus the river depth, see ``geb.workflows.river_profiles``), so the
+    flood model and the hydrological routing use the same rivers. Every DEM cell
+    within half the river width of a river line gets the bed elevation of the nearest
+    profile point and the river roughness.
 
     Args:
         elevation_grid: Elevation DataArray with CRS and transform (meters).
         manning_grid: Manning's n DataArray with CRS and transform (s/m^(1/3)).
-        rivers: GeoDataFrame containing river geometries and attributes.
+        rivers: GeoDataFrame containing river geometries and attributes, indexed by
+            river ID.
+        river_bed_points: Riverbed points of these rivers (``river_bed_profiles``) in
+            the CRS of the elevation grid, ordered from upstream to downstream per
+            river.
 
     Returns:
         Tuple containing:
             - Modified elevation DataArray with rivers burned in (meters).
             - Modified Manning's n DataArray with river roughness values (s/m^(1/3)).
+            - Initial water level DataArray on burned river cells (meters), with NaN elsewhere.
+
+    Raises:
+        ValueError: If a river has no riverbed points.
     """
     _validate_inputs(elevation_grid, manning_grid, rivers)
-
-    # Sort rivers by topological stream order to ensure headwaters are processed before outlets.
-    rivers: gpd.GeoDataFrame = rivers.sort_values(
-        "topological_stream_order", ascending=True
-    )  # ty:ignore[invalid-assignment]
 
     out_elevation = elevation_grid.copy()
     transform = out_elevation.rio.transform()
@@ -555,7 +694,6 @@ def burn_rivers(
     # Conversion factors for geographic coordinates to meters.
     m_x = 111320.0 * np.cos(np.radians(y_orig)) if is_geo else 1.0
     m_y = 111320.0 if is_geo else 1.0
-    sampling_dist = min(abs(transform[0]) * m_x, abs(transform[4]) * m_y)
 
     def to_m(
         x: np.ndarray | float, y: np.ndarray | float
@@ -571,28 +709,31 @@ def burn_rivers(
             y
         ) / m_y + (y_orig if is_geo else 0)
 
-    # Create river network and node registry
-    river_network, node_registry = _initialize_network_and_nodes(
-        rivers, out_elevation, transform, shape, is_geo, sampling_dist, to_m
-    )
-
-    # Use the sorted order from the GeoDataFrame throughout the workflow.
-    ordered_indices = list(range(len(river_network)))
-
-    # Ensure that the bed elevation always decreases in the downstream direction.
-    _enforce_upstream_propagation(river_network, ordered_indices, node_registry)
-
-    # Interpolate the bed elevation for every point along the river segments.
-    _interpolate_longitudinal_profiles(
-        river_network, ordered_indices, node_registry, transform, shape, out_elevation
-    )
+    points_by_river = river_bed_points.groupby("river_id")
+    river_network: list[dict] = []
+    for river_id, river in rivers.iterrows():
+        if river_id not in points_by_river.groups:
+            raise ValueError(f"River {river_id} has no riverbed points.")
+        points = points_by_river.get_group(river_id)
+        river_network.append(
+            {
+                "xs": points.geometry.x.to_numpy(),
+                "ys": points.geometry.y.to_numpy(),
+                "target_z": points["bed_elevation_m"].to_numpy(dtype=np.float32),
+                "width": float(river["width"]),
+                "depth": float(river["depth"]),
+                "manning": float(river["manning"]),
+                "geom": river.geometry,
+            }
+        )
 
     # Actually modify the elevation and roughness grids.
-    out_elevation, out_mannings = _burn(
+    out_elevation, out_mannings, initial_water_level = _burn(
         river_network, shape, transform, to_m, to_deg, out_elevation, manning_grid
     )
 
     return (
         out_elevation,
         out_mannings,
+        initial_water_level,
     )

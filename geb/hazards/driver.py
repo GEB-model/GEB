@@ -36,8 +36,6 @@ class HazardDriver(Module):
 
         self.model: GEBModel = model
         self.config = self.model.config["hazards"]
-        if "events" not in self.model.config["hazards"]["floods"]:
-            self.config["floods"]["events"] = []
 
         self.flood_events: list[Event] = [
             Event(
@@ -261,7 +259,7 @@ class HazardDriver(Module):
                             )
 
                     end_time: datetime = datetime.combine(
-                        self.model.config["general"]["end_time"], datetime.min.time()
+                        self.model.config["end_time"], datetime.min.time()
                     )
 
                     if self.model.current_time == end_time:

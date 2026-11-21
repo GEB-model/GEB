@@ -394,4 +394,5 @@ class FathomDem(Adapter):
         # Convert vertical units from centimeters to meters (float32) while preserving chunks and nodata
         da = (da.astype(np.float32) / 100).astype(np.float32)
         da.attrs["_FillValue"] = np.nan
+        da.attrs["VERTICAL_UNITS"] = "meters"
         return da

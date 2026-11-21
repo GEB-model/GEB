@@ -18,6 +18,7 @@ from geb.geb_types import (
     TwoDArrayFloat32,
     TwoDArrayInt32,
 )
+from geb.numba_config import NUMBA_CACHE
 
 from .geometry import (
     InertialGeometry,
@@ -51,12 +52,54 @@ from .topology import (
     WaterbodyCoupling,
     WaterbodyLinks,
     build_routing_topology,
+    get_downstream_bed_elevation,
 )
 
 __all__: list[str] = [
     "LocalInertial",
     "determine_optimal_inertial_threads",
 ]
+
+
+@njit(cache=NUMBA_CACHE)
+def get_channel_bed_elevation(
+    bank_elevation_m: ArrayFloat32,
+    bankfull_depth_m: ArrayFloat32,
+    is_channel: ArrayBool,
+    downstream_idx: ArrayInt32,
+    upstream_to_downstream: ArrayInt32,
+) -> ArrayFloat32:
+    """Riverbed elevation: bank elevation minus bankfull depth in the river channel.
+
+    The river elevation of the DEM (the water surface along the river) is the bank, i.e.
+    the bankfull water level, as in CaMa-Flood (Yamazaki et al. 2011) and the riverbed
+    burned into SFINCS; the floodplain profile (height above nearest drainage) starts at
+    this level. The channel bed lies one bankfull depth below it, so the simulated water
+    level reaches the DEM river surface at bankfull discharge. Cells without a channel
+    (kinematic cells, waterbodies) keep the bank elevation. Where the bankfull depth grows
+    less downstream than the bank drops, the bed is lowered to stay non-increasing
+    downstream.
+
+    Args:
+        bank_elevation_m: Bank (bankfull water level) elevation per cell (m).
+        bankfull_depth_m: Bankfull depth per cell (m).
+        is_channel: Whether a cell has a local inertial river channel.
+        downstream_idx: Downstream cell per cell (-1 for pits).
+        upstream_to_downstream: Cells ordered from upstream to downstream.
+
+    Returns:
+        Bed elevation per cell (m).
+    """
+    bed: ArrayFloat32 = bank_elevation_m.copy()
+    for cell in range(bed.size):
+        if is_channel[cell]:
+            bed[cell] = bank_elevation_m[cell] - bankfull_depth_m[cell]
+    for j in range(upstream_to_downstream.size):
+        cell = upstream_to_downstream[j]
+        ds = downstream_idx[cell]
+        if ds >= 0 and is_channel[ds] and bed[ds] > bed[cell]:
+            bed[ds] = bed[cell]
+    return bed
 
 
 @njit(fastmath=True, parallel=True)
@@ -218,10 +261,12 @@ class LocalInertial:
         retention_basin_release_threshold_factor: float,
         bankfull_river_elevation_m: ArrayFloat32,
         manning_n: ArrayFloat32,
+        floodplain_manning_n: ArrayFloat32,
         use_kinematic: ArrayBool,
         rivers_gdf: gpd.GeoDataFrame,
         shape_exponent: ArrayFloat32,
         bankfull_depth_m: ArrayFloat32,
+        levee_depth_m: ArrayFloat32,
         floodplain_side_slope_m_per_m: ArrayFloat32,
         floodplain_profile_widths_m: TwoDArrayFloat32,
         waterbody_lake_area: ArrayFloat32,
@@ -230,6 +275,10 @@ class LocalInertial:
         waterbody_outflow_bed_elev: ArrayFloat32,
         river_storage_alpha: ArrayFloat32,
         river_storage_beta: ArrayFloat32,
+        stream_width_m: ArrayFloat32,
+        stream_bankfull_depth_m: ArrayFloat32,
+        stream_floodplain_width_m: ArrayFloat32,
+        stream_floodplain_conveyance: ArrayFloat32,
         in_spinup: bool,
         min_slope: float = 1e-4,
         max_threads: int | None = None,
@@ -248,12 +297,17 @@ class LocalInertial:
             retention_node_id: Identifier map linking cells to retention basins.
             controlled_retention: Flag defining controlled vs uncontrolled retention dynamics.
             retention_basin_release_threshold_factor: Release threshold factor for retention basins.
-            bankfull_river_elevation_m: Channel bed elevation above datum (meters).
+            bankfull_river_elevation_m: Bank elevation above datum (meters): the river water
+                surface of the DEM, taken as the bankfull water level. The bed of local inertial
+                river reaches lies one bankfull depth below it (see get_channel_bed_elevation).
             manning_n: Manning roughness coefficient per reach (s/m^(1/3)).
+            floodplain_manning_n: Manning roughness coefficient of the floodplain per reach (s/m^(1/3)).
             use_kinematic: Boolean flag selecting kinematic (True) vs inertial (False) routing per cell.
             rivers_gdf: Vector GeoDataFrame containing river geometry attributes.
             shape_exponent: Power-law cross-sectional shape exponent per reach (dimensionless).
             bankfull_depth_m: Bankfull channel depth before floodplain spilling (meters).
+            levee_depth_m: Levee crest depth above the channel bed per reach (meters); equals
+                bankfull depth where there are no levees.
             floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
             waterbody_lake_area: Surface area of each waterbody (m²).
             floodplain_profile_widths_m: 10-point cross-sectional top widths at fixed depth levels (meters).
@@ -262,6 +316,10 @@ class LocalInertial:
             waterbody_outflow_bed_elev: Channel bed elevation at each waterbody outlet (meters).
             river_storage_alpha: Kinematic wave alpha parameter per reach (s^beta / m^(3*beta - 1)).
             river_storage_beta: Kinematic wave beta parameter per reach (dimensionless).
+            stream_width_m: Bankfull channel width for the kinematic wave (meters).
+            stream_bankfull_depth_m: Bankfull depth for the kinematic wave (meters); infinite without a valley floor.
+            stream_floodplain_width_m: Valley floor width next to the channel for the kinematic wave (meters).
+            stream_floodplain_conveyance: Conveyance coefficient of the valley floor (m^(4/3)/s); zero without one.
             min_slope: Minimum allowable slope for ocean/pit boundary boundaries (dimensionless).
             in_spinup: Whether the model is in spinup mode.
             max_threads: Maximum number of parallel threads for local inertial routing (None for auto-detection).
@@ -321,10 +379,13 @@ class LocalInertial:
 
         self.river_length = river_length
         self.river_width = river_width
-        self.bed_elevation = bankfull_river_elevation_m
+        self.bank_elevation: ArrayFloat32 = bankfull_river_elevation_m.astype(
+            np.float32
+        )
         self.retention_max_storage_m3 = retention_max_storage_m3
         self.controlled_retention = controlled_retention
         self.bankfull_depth = bankfull_depth_m
+        self.levee_depth = levee_depth_m.astype(np.float32)
 
         n_nodes_total = is_pit.size
         is_ocean_pit_orig = np.zeros(n_nodes_total, dtype=np.bool_)
@@ -349,6 +410,20 @@ class LocalInertial:
         unmasked_ds: ArrayInt32 = river_network.idxs_ds[indices_init]
         ds_node_orig: ArrayInt32 = mapper[unmasked_ds]
         ds_node_orig[is_pit] = -1
+
+        self._ds_node_orig: ArrayInt32 = ds_node_orig
+        self._is_channel: ArrayBool = ~use_kinematic & (self.waterbody_ids == -1)
+        if not np.isfinite(self.bankfull_depth[self._is_channel]).all():
+            raise ValueError(
+                "Bankfull depth must be finite in all river channel cells."
+            )
+        self.bed_elevation: ArrayFloat32 = get_channel_bed_elevation(
+            bank_elevation_m=self.bank_elevation,
+            bankfull_depth_m=self.bankfull_depth.astype(np.float32),
+            is_channel=self._is_channel,
+            downstream_idx=ds_node_orig.astype(np.int32),
+            upstream_to_downstream=self.idxs_up_to_downstream.astype(np.int32),
+        )
 
         has_ds: ArrayBool = ds_node_orig != -1
         is_routed_river_reach: ArrayBool = (
@@ -442,6 +517,7 @@ class LocalInertial:
         river_length_perm: ArrayFloat32 = self.river_length[sorted_idxs]
         self._river_width: ArrayFloat32 = self.river_width[sorted_idxs]
         self._bankfull_depth: ArrayFloat32 = self.bankfull_depth[sorted_idxs]
+        self._levee_depth: ArrayFloat32 = self.levee_depth[sorted_idxs]
         bed_elevation_perm: ArrayFloat32 = self.bed_elevation[sorted_idxs]
         use_kinematic_perm: ArrayBool = use_kinematic[sorted_idxs]
         is_pit_perm: ArrayBool = is_pit[sorted_idxs]
@@ -473,6 +549,9 @@ class LocalInertial:
         self._manning_n_sq_inertial: ArrayFloat32 = (
             manning_n_inertial * manning_n_inertial
         )
+        self._floodplain_manning_n_inertial: ArrayFloat32 = floodplain_manning_n[
+            sorted_idxs[inertial_start:inertial_end]
+        ].astype(np.float32)
 
         ds_perm: ArrayInt32 = ds_node_orig[sorted_idxs]
         ds_node: ArrayInt32 = np.where(
@@ -507,6 +586,9 @@ class LocalInertial:
         self._bed_elevation_inertial: ArrayFloat32 = bed_elevation_perm[
             inertial_start:inertial_end
         ]
+        self._ds_node_perm: ArrayInt32 = ds_node
+        self._river_length_perm: ArrayFloat32 = river_length_perm
+        self._is_pit_perm: ArrayBool = is_pit_perm
         routing_topo: RoutingTopology = build_routing_topology(
             n_kinematic=self.n_kinematic,
             n_inertial=self.n_inertial,
@@ -529,6 +611,18 @@ class LocalInertial:
             river_storage_beta_kin=river_storage_beta[
                 self.sorted_idxs[: self.n_kinematic]
             ].astype(np.float32),
+            stream_width_kin=stream_width_m[
+                self.sorted_idxs[: self.n_kinematic]
+            ].astype(np.float32),
+            bankfull_depth_kin=stream_bankfull_depth_m[
+                self.sorted_idxs[: self.n_kinematic]
+            ].astype(np.float32),
+            floodplain_width_kin=stream_floodplain_width_m[
+                self.sorted_idxs[: self.n_kinematic]
+            ].astype(np.float32),
+            floodplain_conveyance_kin=stream_floodplain_conveyance[
+                self.sorted_idxs[: self.n_kinematic]
+            ].astype(np.float32),
         )
 
         self._routing_topology: RoutingTopology = routing_topo
@@ -539,6 +633,13 @@ class LocalInertial:
         )
         self._wb_links: WaterbodyLinks = routing_topo.waterbody_links
         self._ret_links: RetentionLinks = routing_topo.retention_links
+        # Kinematic reaches draining into an inertial reach.
+        self._kin_to_inertial: ArrayInt32 = np.unique(
+            self._kinematic_topology.inertial_up_kin_indices
+        ).astype(np.int32)
+        self._kin_to_inertial_state: ArrayFloat32 = np.empty(
+            self._kin_to_inertial.size, dtype=np.float32
+        )
 
         self._compute_static_geometry()
 
@@ -559,6 +660,11 @@ class LocalInertial:
             n_up_nodes, dtype=np.float32
         )
         self._updated_discharge_perm: ArrayFloat32 = np.empty(
+            n_up_nodes, dtype=np.float32
+        )
+        # End-of-timestep discharge: the momentum state carried to the next timestep
+        # (as opposed to the timestep-mean discharge in _updated_discharge_perm).
+        self._discharge_state_perm: ArrayFloat32 = np.empty(
             n_up_nodes, dtype=np.float32
         )
 
@@ -612,6 +718,8 @@ class LocalInertial:
         )
 
         self._waterbody_inflow_perm: ArrayFloat32 = np.empty(n_wb, dtype=np.float32)
+        self._waterbody_outflow_m3: ArrayFloat32 = np.empty(n_wb, dtype=np.float32)
+        self._prescribed_outflow_m3: ArrayFloat32 = np.empty(n_wb, dtype=np.float32)
         self._retention_inflow_perm: ArrayFloat32 = np.empty(n_ret, dtype=np.float32)
         self._retention_outflow_perm: ArrayFloat32 = np.empty(n_ret, dtype=np.float32)
 
@@ -642,12 +750,12 @@ class LocalInertial:
         )
 
         self._discharge_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
+        self._discharge_state_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._actual_evap_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._actual_trans_loss_out: ArrayFloat32 = np.empty(
             n_up_nodes, dtype=np.float32
         )
         self._over_abs_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
-        self._iteration_count: int = 0
 
     def initialize_stage(
         self,
@@ -771,6 +879,9 @@ class LocalInertial:
         bankfull_depth_inertial: ArrayFloat32 = self._bankfull_depth[
             inertial_start:inertial_end
         ]
+        levee_depth_inertial: ArrayFloat32 = self._levee_depth[
+            inertial_start:inertial_end
+        ]
         self._geometry: InertialGeometry = build_inertial_geometry(
             river_length=self._river_length_inertial,
             river_width=river_width_inertial,
@@ -782,56 +893,72 @@ class LocalInertial:
             ds_bed_elevation=self._topology.ds_bed_elevation,
             interface_bed_elevation_max=self._routing_topology.interface_bed_elev_max,
             manning_n_sq=self._manning_n_sq_inertial,
+            floodplain_manning_n=self._floodplain_manning_n_inertial,
             inv_dx_interface=self._routing_topology.inv_dx_interface,
             pit_slope=self._pit_slope[inertial_start:inertial_end],
+            levee_depth=levee_depth_inertial,
         )
 
     def update_channel_geometry(
         self,
         river_width: ArrayFloat32,
         bankfull_depth_m: ArrayFloat32,
+        levee_depth_m: ArrayFloat32,
+        manning_n: ArrayFloat32,
     ) -> None:
-        """Updates channel bankfull top width and depth dynamically during simulation.
+        """Updates channel bankfull top width, depth, levee depth and roughness dynamically during simulation.
 
         Args:
             river_width: Updated channel bankfull top width (meters).
             bankfull_depth_m: Updated bankfull channel depth (meters).
+            levee_depth_m: Updated levee crest depth above the channel bed (meters); equals
+                bankfull depth where there are no levees.
+            manning_n: Updated Manning roughness coefficient of the channel (s/m^(1/3)).
         """
+        manning_n_inertial: ArrayFloat32 = manning_n[
+            self.sorted_idxs[self.n_kinematic : self.n_kinematic + self.n_inertial]
+        ].astype(np.float32)
+        self._manning_n_sq_inertial = manning_n_inertial * manning_n_inertial
         self.river_width = river_width.astype(np.float32)
         self._river_width = self.river_width[self.sorted_idxs]
         self.bankfull_depth = bankfull_depth_m.astype(np.float32)
         self._bankfull_depth = self.bankfull_depth[self.sorted_idxs]
+        self.levee_depth = levee_depth_m.astype(np.float32)
+        self._levee_depth = self.levee_depth[self.sorted_idxs]
+        self._set_bed_elevation()
         self._compute_static_geometry()
 
-    def calculate_river_storage_from_discharge(
-        self,
-        discharge: ArrayFloat32,
-        river_storage_alpha: ArrayFloat32,
-        river_length: ArrayFloat32,
-        river_storage_beta: ArrayFloat32,
-        waterbody_id: ArrayInt32,
-    ) -> ArrayFloat64:
-        """Calculates storage from discharge for all river reaches.
+    def _set_bed_elevation(self) -> None:
+        """Sets the riverbed from the bank elevation and the current bankfull depth.
 
-        Args:
-            discharge: River discharge array (m³/s).
-            river_storage_alpha: Storage equation alpha parameter.
-            river_length: Channel length (meters).
-            river_storage_beta: Storage equation beta parameter.
-            waterbody_id: Waterbody ID map (-1 indicates regular channel).
-
-        Returns:
-            River storage volume array (m³).
+        The river storage is the state, so the stages follow the new bed at the next stage
+        computation.
         """
-        cross_sectional_area: ArrayFloat32 = (
-            river_storage_alpha
-            * np.maximum(discharge, np.float32(0.0)) ** river_storage_beta
+        self.bed_elevation = get_channel_bed_elevation(
+            bank_elevation_m=self.bank_elevation,
+            bankfull_depth_m=self.bankfull_depth.astype(np.float32),
+            is_channel=self._is_channel,
+            downstream_idx=self._ds_node_orig.astype(np.int32),
+            upstream_to_downstream=self.idxs_up_to_downstream.astype(np.int32),
         )
-        river_storage: ArrayFloat64 = (cross_sectional_area * river_length).astype(
-            np.float64
+        bed_elevation_perm: ArrayFloat32 = self.bed_elevation[self.sorted_idxs]
+        self._bed_elevation_inertial = bed_elevation_perm[
+            self.n_kinematic : self.n_kinematic + self.n_inertial
+        ]
+        ds_bed_elevation, interface_bed_elev_max = get_downstream_bed_elevation(
+            n_kinematic=self.n_kinematic,
+            n_inertial=self.n_inertial,
+            ds_node=self._ds_node_perm,
+            bed_elevation_perm=bed_elevation_perm,
+            river_length_perm=self._river_length_perm,
+            is_pit_perm=self._is_pit_perm,
+            is_ocean_pit_perm=self._is_ocean_pit,
+            pit_slope_perm=self._pit_slope,
         )
-        river_storage[waterbody_id != -1] = 0.0
-        return river_storage
+        self._topology = self._topology._replace(ds_bed_elevation=ds_bed_elevation)
+        self._routing_topology = self._routing_topology._replace(
+            topology=self._topology, interface_bed_elev_max=interface_bed_elev_max
+        )
 
     def calculate_discharge_from_river_storage(
         self,
@@ -859,55 +986,38 @@ class LocalInertial:
         discharge[waterbody_id != -1] = np.nan
         return discharge
 
-    def get_available_storage(
-        self,
-        discharge: ArrayFloat32,
-        river_storage_alpha: ArrayFloat32,
-        river_storage_beta: ArrayFloat32,
-        maximum_abstraction_ratio: float = 0.9,
-    ) -> ArrayFloat64:
-        """Calculates allowable volume for abstraction while ensuring environmental minimums.
+    def _time_centre_kinematic_inflow_to_inertial(self, dt_f32: np.float32) -> None:
+        """Time-centres the outflow of kinematic reaches that drain into inertial reaches.
+
+        The inertial reaches receive the kinematic inflow as a constant rate over the
+        whole timestep. The end-of-timestep kinematic discharge would deliver a rising
+        limb too early and a falling limb too late, so the inflow is the mean of the
+        discharge at the start and end of the timestep, (Q_prev + Q_new) / 2. The
+        kinematic reach storage is corrected for the difference to Q_new * dt, which the
+        kinematic step removed, so mass is conserved; the centred outflow is limited to
+        what the reach holds. The end-of-timestep discharge Q_new remains the state.
 
         Args:
-            discharge: River discharge array (m³/s).
-            river_storage_alpha: Storage equation alpha parameter.
-            river_storage_beta: Storage equation beta parameter.
-            maximum_abstraction_ratio: Fraction of river storage accessible for abstraction.
-
-        Returns:
-            Available river storage volume array (m³).
+            dt_f32: Routing timestep duration (seconds).
         """
-        return (
-            self.get_total_storage(discharge, river_storage_alpha, river_storage_beta)
-            * maximum_abstraction_ratio
+        k: ArrayInt32 = self._kin_to_inertial
+        if k.size == 0:
+            return
+        q_new: ArrayFloat32 = self._updated_discharge_perm[k]
+        self._kin_to_inertial_state[:] = q_new
+        dt: float = float(dt_f32)
+        q_new_vol: ArrayFloat64 = q_new.astype(np.float64) * dt
+        centred_vol: ArrayFloat64 = np.minimum(
+            0.5
+            * (
+                self._discharge_prev_perm[k].astype(np.float64)
+                + q_new.astype(np.float64)
+            )
+            * dt,
+            q_new_vol + self._river_storage_perm[k],
         )
-
-    def get_total_storage(
-        self,
-        discharge: ArrayFloat32,
-        river_storage_alpha: ArrayFloat32,
-        river_storage_beta: ArrayFloat32,
-    ) -> ArrayFloat64:
-        """Calculates total reach storage volume.
-
-        Args:
-            discharge: River discharge array (m³/s).
-            river_storage_alpha: Storage equation alpha parameter.
-            river_storage_beta: Storage equation beta parameter.
-
-        Returns:
-            Total river storage volume array (m³).
-        """
-        total_storage: ArrayFloat64 = self.calculate_river_storage_from_discharge(
-            discharge,
-            river_storage_alpha,
-            self.river_length,
-            river_storage_beta,
-            self.waterbody_ids,
-        )
-
-        assert not np.isnan(total_storage).any()
-        return total_storage
+        self._river_storage_perm[k] += q_new_vol - centred_vol
+        self._updated_discharge_perm[k] = (centred_vol / dt).astype(np.float32)
 
     def step(
         self,
@@ -933,11 +1043,14 @@ class LocalInertial:
         ArrayFloat32,
         ArrayFloat32,
         ArrayFloat32,
+        ArrayFloat32,
+        ArrayFloat32,
     ]:
         """Executes a full macro-timestep routing update.
 
         Args:
-            Q_prev_m3_s: Channel discharge at start of timestep (m³/s).
+            Q_prev_m3_s: Channel discharge at the end of the previous timestep, the
+                momentum state returned as discharge_state_m3_s (m³/s).
             river_storage_m3: Total reach storage volume (m³).
             sideflow_m3: Lateral sideflow forcing volume per reach (m³).
             evaporation_m3: Potential evaporation volume per reach (m³).
@@ -951,7 +1064,7 @@ class LocalInertial:
 
         Returns:
             A tuple containing:
-                - Q_out_m3_s: Calculated channel discharge at end of step (m³/s).
+                - Q_out_m3_s: Timestep-mean channel discharge (m³/s).
                 - river_storage_m3: Updated river reach storage (m³).
                 - actual_evap_m3: Actual evaporation volume per reach (m³).
                 - actual_trans_loss_m3: Actual river transmission loss volume per reach (m³).
@@ -962,6 +1075,9 @@ class LocalInertial:
                 - retention_storage_m3: Updated storage volume per retention basin (m³).
                 - retention_inflow_m3: Diverted inflow volume per retention basin (m³).
                 - retention_outflow_m3: Released outflow volume per retention basin (m³).
+                - waterbody_outflow_m3: Volume released per waterbody (m³).
+                - discharge_state_m3_s: Channel discharge at the end of the timestep,
+                  to be passed as Q_prev_m3_s in the next timestep (m³/s).
 
         Raises:
             ValueError: If non-finite values are encountered in input forcing or state arrays.
@@ -995,10 +1111,8 @@ class LocalInertial:
             self._evaporation_perm[:] = evaporation_m3
             self._transmission_loss_perm[:] = transmission_loss_m3
 
-        self._iteration_count += 1
         self._substep_buffers.wb_extra_lateral_accum_m3.fill(0.0)
         self._substep_buffers.terminal_wb_outflow_accum_m3.fill(0.0)
-        diagnostics: RoutingStepDiagnostics | None = None
 
         inertial_start: int = self.n_kinematic
         inertial_end: int = self.n_kinematic + self.n_inertial
@@ -1010,10 +1124,14 @@ class LocalInertial:
                 np.sum(self._sideflow_perm[inertial_start:inertial_end])
             )
 
+        # Working copy: releases handled once per timestep zero their prescribed
+        # outflow so they are not released again in the inertial substeps.
+        self._prescribed_outflow_m3[:] = outflow_per_waterbody_m3
         wb_coupling: WaterbodyCoupling = WaterbodyCoupling(
             storage_m3=waterbody_storage_m3,
-            prescribed_outflow_m3=outflow_per_waterbody_m3,
+            prescribed_outflow_m3=self._prescribed_outflow_m3,
             inflow_m3=self._waterbody_inflow_perm,
+            outflow_m3=self._waterbody_outflow_m3,
             lake_area=self._wb_lake_area,
             lake_factor=self._wb_lake_factor,
             outflow_height=self._wb_outflow_height,
@@ -1045,6 +1163,7 @@ class LocalInertial:
         self._actual_evaporation_perm.fill(0.0)
         self._actual_trans_loss_perm.fill(0.0)
         self._waterbody_inflow_perm.fill(0.0)
+        self._waterbody_outflow_m3.fill(0.0)
         self._retention_inflow_perm.fill(0.0)
         self._retention_outflow_perm.fill(0.0)
         self._updated_discharge_perm.fill(0.0)
@@ -1056,6 +1175,8 @@ class LocalInertial:
         _transfer_waterbody_outflows(
             wb=wb_coupling,
             kin=self._kinematic_topology,
+            dt_f32=dt_f32,
+            terminal_wb_outflow_accum_m3=self._substep_buffers.terminal_wb_outflow_accum_m3,
         )
 
         if self.n_kinematic > 0:
@@ -1080,6 +1201,7 @@ class LocalInertial:
                 wb=wb_coupling,
                 ret=ret_coupling,
             )
+            self._time_centre_kinematic_inflow_to_inertial(dt_f32)
 
         if self.n_inertial > 0:
             river_storage_m3_inertial: ArrayFloat64 = self._river_storage_inertial
@@ -1166,16 +1288,19 @@ class LocalInertial:
                 if need_restore:
                     numba.set_num_threads(orig_threads)
 
+        # The momentum state is the end-of-timestep discharge: for inertial reaches
+        # the discharge after the last substep, for kinematic reaches the discharge
+        # at the end of the timestep.
+        self._discharge_state_perm[:] = self._updated_discharge_perm
+        if self.n_inertial > 0:
+            self._discharge_state_perm[inertial_start:inertial_end] = (
+                self._substep_buffers.substep_discharge_inertial
+            )
+        self._discharge_state_perm[self._kin_to_inertial] = self._kin_to_inertial_state
+
         terminal_wb_outflow_m3: np.float32 = (
             self._substep_buffers.terminal_wb_outflow_accum_m3[0]
         )
-
-        # if (
-        #     self.n_inertial > 0
-        #     and diagnostics is not None
-        #     and diagnostics.limiting_reach_idx >= 0
-        # ):
-        #     self._print_limiting_substep(diagnostics)
 
         if __debug__:
             storage_inertial_after: float = float(
@@ -1251,12 +1376,15 @@ class LocalInertial:
                 river_storage_m3,
             )
             out_discharge = self._discharge_out
+            self._discharge_state_out[self.sorted_idxs] = self._discharge_state_perm
+            out_discharge_state = self._discharge_state_out
             out_storage = river_storage_m3
             out_actual_evap = self._actual_evap_out
             out_actual_trans_loss = self._actual_trans_loss_out
             out_over_abs = self._over_abs_out
         else:
             out_discharge = self._updated_discharge_perm
+            out_discharge_state = self._discharge_state_perm
             out_storage = self._river_storage_perm
             out_actual_evap = self._actual_evaporation_perm
             out_actual_trans_loss = self._actual_trans_loss_perm
@@ -1274,6 +1402,8 @@ class LocalInertial:
             retention_storage_m3,
             self._retention_inflow_perm,
             self._retention_outflow_perm,
+            self._waterbody_outflow_m3,
+            out_discharge_state,
         )
 
     def _check_inertial_water_balance(
@@ -1354,58 +1484,3 @@ class LocalInertial:
                 f"over_abs={over_abstraction_m3:.2f}, net_outflow={net_inertial_outflow_m3:.2f}"
             )
         return balance_err
-
-    def _print_limiting_substep(
-        self,
-        diagnostics: RoutingStepDiagnostics,
-    ) -> None:
-        """Prints diagnostic information for the cell requiring the smallest substep.
-
-        Args:
-            diagnostics: Encapsulated routing step stability diagnostics.
-        """
-        limiting_reach_idx: int = diagnostics.limiting_reach_idx
-        river_id: int = int(self._river_ids[self.n_kinematic + limiting_reach_idx])
-        grid_idx: int = int(self.sorted_idxs[self.n_kinematic + limiting_reach_idx])
-        dx: float = float(self._river_length_inertial[limiting_reach_idx])
-        up_count: int = int(
-            self._routing_topology.inertial_up_count[limiting_reach_idx]
-        )
-
-        h_v: float = float(diagnostics.h_vol)
-        h_f: float = float(diagnostics.h_flow)
-        h_g: float = float(diagnostics.h_gov)
-        c: float = float(diagnostics.celerity)
-        q: float = float(diagnostics.limiting_flow)
-        v: float = float(diagnostics.limiting_storage)
-        min_dt: float = float(diagnostics.min_stable_timestep_s)
-        num_substeps: int = diagnostics.num_inertial_substeps
-
-        if h_v >= h_f:
-            gov_str: str = (
-                f"channel storage depth (h_vol={h_v:.2f} m >= h_flow={h_f:.2f} m, "
-                f"storage={v:.1f} m³)"
-            )
-        else:
-            gov_str: str = (
-                f"flow normal depth / Manning (h_flow={h_f:.2f} m > h_vol={h_v:.2f} m, "
-                f"flow={q:.2f} m³/s)"
-            )
-
-        confluence_info: str = (
-            f", confluence of {up_count} tributaries" if up_count > 1 else ""
-        )
-
-        substep_str: str = (
-            f"{num_substeps} substep"
-            if num_substeps == 1
-            else f"{num_substeps} substeps"
-        )
-
-        print(
-            f"[Routing Iteration {self._iteration_count}] Cell reach_idx={limiting_reach_idx} "
-            f"(river_id={river_id}, grid_idx={grid_idx}) "
-            f"requires smallest substep dt={min_dt:.2f} s ({substep_str}).\n"
-            f"  Why: reach length dx={dx:.1f} m, governing depth h={h_g:.2f} m via {gov_str}, "
-            f"wave celerity c={c:.2f} m/s{confluence_info}."
-        )

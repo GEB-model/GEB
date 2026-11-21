@@ -137,7 +137,7 @@ class WaterBodies(Module):
 
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
-        self.hydrological_year_start_month = self.model.config["general"][
+        self.hydrological_year_start_month = self.model.config["hydrology"][
             "hydrological_year_start_month"
         ]
         if self.model.in_spinup:
@@ -279,24 +279,6 @@ class WaterBodies(Module):
                 0, order_of_waterbodies.size, dtype=np.int32
             )
             return waterbody_mapping[waterbody_id_unmapped], waterbody_mapping
-
-    def load_waterbody_data(
-        self,
-        order_of_waterbodies_in_grid: ArrayInt32,
-    ) -> gpd.GeoDataFrame:
-        """Loads water body data from disk and sorts it based on the order of water bodies in the grid.
-
-        Args:
-            order_of_waterbodies_in_grid: The order of water bodies in the grid. Original ids.
-
-        Returns:
-            A GeoDataFrame containing the water body data with the index set to the mapped water body IDs.
-        """
-        waterbody_data: gpd.GeoDataFrame = read_geom(
-            self.model.files["geom"]["waterbodies/waterbody_data"],
-        ).set_index("waterbody_id")  # ty:ignore[invalid-assignment]
-
-        return waterbody_data.loc[order_of_waterbodies_in_grid]
 
     def routing_lakes(self, routing_step_length_seconds: int | float) -> ArrayFloat32:
         """Lake routine to calculate lake outflow.

@@ -32,7 +32,7 @@ from shapely.geometry import Point, box, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from geb import GEB_PACKAGE_DIR
+from geb import GEB_PACKAGE_DIR, TILE_REQUEST_HEADERS
 from geb.build.data_catalog import DataCatalog
 from geb.build.methods import build_method
 from geb.build.version_updates import get_and_maybe_do_version_updates
@@ -1275,7 +1275,8 @@ def create_cluster_visualization_map(
     ctx.add_basemap(
         ax,
         crs=cluster_outlines_mercator.crs,
-        source=ctx.providers.CartoDB.Positron,  # ty:ignore[unresolved-attribute]
+        source=ctx.providers.OpenStreetMap.Mapnik,  # ty:ignore[unresolved-attribute]
+        headers=TILE_REQUEST_HEADERS,
         alpha=0.5,
         zoom="auto",
     )
@@ -1359,6 +1360,7 @@ def create_multi_basin_configs(
 
     top_level_config_path: Path = working_directory / "model.yml"
     top_level_build_config_path: Path = working_directory / "build.yml"
+    top_level_region_config_path: Path = working_directory / "region.yml"
 
     print("Creating build.yml in main init multiple directory...")
     top_level_build_config_path.write_text(
@@ -1371,6 +1373,11 @@ def create_multi_basin_configs(
     top_level_config_path.write_text(example_model_config_path.read_text())
 
     print(f"Created model.yml in {working_directory}")
+    print("Creating region.yml in init_multiple_dir directory...")
+    top_level_region_config_path.write_text(
+        (example_directory / "region.yml").read_text()
+    )
+    print(f"Created region.yml in {working_directory}")
 
     print("Creating cluster directories and configuration files...")
     cluster_directories: list[Path] = []
@@ -1405,12 +1412,15 @@ def create_multi_basin_configs(
 
         model_config: dict[str, Any] = {
             "inherits": relative_model_config,
-            "general": {"region": {"subbasin": cluster_subbasin_ids}},
         }
         if total_basin_area_km2 is not None:
             model_config["basin"] = {"total_area_km2": round(total_basin_area_km2, 2)}
 
         write_params(model_config, base_model_config_path)
+
+        base_region_config_path: Path = base_dir / "region.yml"
+        region_config: dict[str, Any] = {"subbasin": cluster_subbasin_ids}
+        write_params(region_config, base_region_config_path)
 
         print(
             f"  Created configuration files in {base_dir.relative_to(working_directory)}"
