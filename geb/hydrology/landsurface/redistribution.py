@@ -3,6 +3,8 @@
 import numpy as np
 from numba import njit
 
+from geb.geb_types import ArrayFloat32
+from geb.numba_config import NUMBA_CACHE
 from geb.workflows.numba_stack_array import stack_empty
 
 from .constants import (
@@ -12,11 +14,12 @@ from .constants import (
     SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
 )
+from .water import set_hillslope_store
 
 _N_SOIL_LAYERS_PLUS_ONE: int = N_SOIL_LAYERS + 1
 
 
-@njit(cache=True, fastmath=True, inline="always")
+@njit(cache=NUMBA_CACHE, fastmath=True, inline="always")
 def calculate_saturated_matric_flux_potential(
     saturated_hydraulic_conductivity_m_per_s: np.float32,
     bubbling_pressure_m_positive: np.float32,
@@ -42,7 +45,7 @@ def calculate_saturated_matric_flux_potential(
     ) / (np.float32(1.0) - lambda_ * pore_size_index)
 
 
-@njit(cache=True, fastmath=True, inline="always")
+@njit(cache=NUMBA_CACHE, fastmath=True, inline="always")
 def calculate_capillary_rise_and_percolation_parameters(
     groundwater_depth_m: np.float32,
     total_soil_depth_m: np.float32,
@@ -57,6 +60,7 @@ def calculate_capillary_rise_and_percolation_parameters(
     dconductivity_dS_bottom: np.float32,
     liquid_fraction: np.float32,
     gw_ksat_m_per_s: np.float32,
+    cos_slope: np.float32,
     max_capillary_flux_m_per_s: np.float32 = np.float32(np.inf),
 ) -> tuple[np.float32, np.float32]:
     """Calculate water flux between bottom soil and groundwater, and its sensitivity to soil moisture.
@@ -80,6 +84,7 @@ def calculate_capillary_rise_and_percolation_parameters(
         liquid_fraction: Unfrozen liquid water fraction of bottom soil layer (0 to 1).
         gw_ksat_m_per_s: Saturated hydraulic conductivity of groundwater toplayer (m/s).
         max_capillary_flux_m_per_s: Maximum allowable upward capillary flux based on available groundwater supply (m/s).
+        cos_slope: Cosine of hillslope slope angle projecting normal gravity drainage (-).
 
     Returns:
         A tuple of (groundwater_flux_m_per_s, dgroundwater_flux_dS).
@@ -141,12 +146,19 @@ def calculate_capillary_rise_and_percolation_parameters(
 
     # Total vertical flux in Richards equation is the sum of matric suction and gravity:
     # - groundwater_capillary_flux_m_per_s (<= 0): upward pull from matric suction
-    # - conductivity_bottom (>= 0): downward drainage from gravity
+    # - conductivity_bottom * cos_slope (>= 0): downward drainage from slope-normal gravity
+    # A soil whose base lies in the groundwater cannot drain into it.
+    if groundwater_depth_m >= total_soil_depth_m:
+        gravity_drainage_m_per_s: np.float32 = conductivity_bottom * cos_slope
+        dgravity_drainage_dS: np.float32 = dconductivity_dS_bottom * cos_slope
+    else:
+        gravity_drainage_m_per_s = np.float32(0.0)
+        dgravity_drainage_dS = np.float32(0.0)
     groundwater_flux_potential_m_per_s = (
-        groundwater_capillary_flux_m_per_s + conductivity_bottom
+        groundwater_capillary_flux_m_per_s + gravity_drainage_m_per_s
     )
     dgroundwater_flux_potential_dS = (
-        dgroundwater_capillary_flux_dS + dconductivity_dS_bottom
+        dgroundwater_capillary_flux_dS + dgravity_drainage_dS
     )
 
     # Moisture content controls how much liquid water is available to move:
@@ -168,7 +180,218 @@ def calculate_capillary_rise_and_percolation_parameters(
     return groundwater_flux_potential_m_per_s, dgroundwater_flux_potential_dS
 
 
-@njit(cache=True, fastmath=True, inline="always")
+@njit(cache=NUMBA_CACHE, fastmath=True, inline="always")
+def fill_soil_below_water_table(
+    water_content_m: np.ndarray,
+    water_content_saturated_m: np.ndarray,
+    soil_enthalpy_J_per_m2: np.ndarray,
+    soil_layer_height: np.ndarray,
+    groundwater_depth_m: np.float32,
+    groundwater_temperature_C: np.float32,
+    max_fill_m: np.float32,
+) -> np.float32:
+    """Fills the soil below the water table with groundwater.
+
+    The part of a soil layer that lies below the water table is saturated: the layer
+    holds at least that share of its saturated water content. Water that is missing
+    is taken from the groundwater, with its heat. Water content and enthalpy are
+    updated in place.
+
+    Args:
+        water_content_m: Water content per layer (m), updated in place.
+        water_content_saturated_m: Saturated water content per layer (m).
+        soil_enthalpy_J_per_m2: Enthalpy per layer (J/m2), updated in place.
+        soil_layer_height: Thickness per layer (m).
+        groundwater_depth_m: Depth of the water table below the surface (m).
+        groundwater_temperature_C: Temperature of the groundwater (C).
+        max_fill_m: Groundwater that can be taken (m).
+
+    Returns:
+        Groundwater taken up by the soil (m).
+    """
+    filled_m: np.float32 = np.float32(0.0)
+    layer_bottom_m: np.float32 = np.float32(0.0)
+    for i in range(N_SOIL_LAYERS):
+        layer_bottom_m += soil_layer_height[i]
+        submerged_fraction: np.float32 = min(
+            max(
+                (layer_bottom_m - groundwater_depth_m) / soil_layer_height[i],
+                np.float32(0.0),
+            ),
+            np.float32(1.0),
+        )
+        fill_m: np.float32 = min(
+            submerged_fraction * water_content_saturated_m[i] - water_content_m[i],
+            max_fill_m - filled_m,
+        )
+        if fill_m > np.float32(0.0):
+            water_content_m[i] += fill_m
+            soil_enthalpy_J_per_m2[i] += (
+                fill_m
+                * RHO_WATER_KG_PER_M3
+                * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+                * groundwater_temperature_C
+            )
+            filled_m += fill_m
+    return filled_m
+
+
+@njit(cache=NUMBA_CACHE, fastmath=True, inline="always")
+def set_hillslope_interflow(
+    water_content_m: ArrayFloat32,
+    water_content_field_capacity_m: ArrayFloat32,
+    water_content_saturated_m: ArrayFloat32,
+    water_content_residual_m: ArrayFloat32,
+    soil_layer_height_m: ArrayFloat32,
+    horizontal_saturated_hydraulic_conductivity_m_per_s: ArrayFloat32,
+    interflow_structural_conductivity_m_per_s: np.float32,
+    interflow_structural_depth_m: np.float32,
+    slope_m_per_m: np.float32,
+    hillslope_length_m: np.float32,
+    groundwater_depth_m: np.float32,
+    liquid_fractions: ArrayFloat32,
+    q_interflow: ArrayFloat32,
+    dq_interflow_dS: ArrayFloat32,
+) -> None:
+    """Lateral outflow of the soil at the foot of the hillslope (kinematic storage model).
+
+    Sloan, P. G., & Moore, I. D. (1984). Modeling subsurface stormflow on steeply
+    sloping forested watersheds. Water Resources Research, 20(12), 1815-1822,
+    doi:10.1029/WR020i012p01815. The soil above the rock is one store. Its saturated
+    zone is a wedge that rests on the base and thickens linearly towards the foot of
+    the hillslope, where it leaves the soil:
+
+    - While the wedge stays inside the soil (their eq. 9) it is twice as thick at the
+      foot as on average. With S the share of the drainable pores that hold perched
+      water, the lower 2 S of the pore space is saturated at the foot.
+    - Above half filling (S > 0.5) the wedge reaches the surface at the foot (their
+      eq. 11-12): the whole soil is saturated there and the subsurface outflow cannot
+      grow further. The additional water widens the part of the slope that is
+      saturated to the surface (2 S - 1), where rain runs off (see
+      calculate_hillslope_saturated_area_fraction).
+
+    The outflow per unit width is the hydraulic gradient, sin(slope) (their eq. 6),
+    times the transmissivity of the zone that is saturated at the foot. Sloan and
+    Moore have one conductivity; here the lateral conductivity differs per layer (soil
+    matrix plus the structure of the soil, which declines with depth), so the
+    transmissivity is the sum of conductivity times saturated thickness over the
+    layers, counted from the base up. When the wedge rises into the conductive upper
+    layers at the foot of the slope the outflow increases steeply. For one
+    conductivity K and soil thickness D this is their result, 2 K sin(slope) S D / L up
+    to half filling and K sin(slope) D / L above it.
+
+    The layer thicknesses are vertical and Sloan and Moore measure the thickness
+    normal to the slope, a factor cos(slope); the hillslope length is horizontal, as
+    the water depths are per unit of horizontal area. The slope term is therefore
+    sin cos = s / (1 + s^2).
+
+    The store (perched water and drainable pore space, see set_hillslope_store) is
+    the one that also gives the saturated area for the infiltration. The outflow is
+    taken from the layers in proportion to their perched water.
+
+    Args:
+        water_content_m: Water content per layer (m).
+        water_content_field_capacity_m: Water content at field capacity per layer (m).
+        water_content_saturated_m: Water content at saturation per layer (m).
+        water_content_residual_m: Residual water content per layer (m).
+        soil_layer_height_m: Thickness per layer (m).
+        horizontal_saturated_hydraulic_conductivity_m_per_s: Lateral conductivity of
+            the soil matrix per layer (m/s).
+        interflow_structural_conductivity_m_per_s: Lateral conductivity of the soil
+            structure at the surface (m/s).
+        interflow_structural_depth_m: e-folding depth of the structural conductivity (m).
+        slope_m_per_m: Slope of the hillslope (m/m).
+        hillslope_length_m: Horizontal length of the hillslope (m).
+        groundwater_depth_m: Depth of the water table below the surface (m).
+        liquid_fractions: Unfrozen fraction of the water per layer (-).
+        q_interflow: Output: lateral outflow per layer (m/s).
+        dq_interflow_dS: Output: its derivative to the effective saturation of the
+            layer (m/s), for the implicit solver.
+    """
+    perched_m = stack_empty(N_SOIL_LAYERS, np.float32)
+    free_m = stack_empty(N_SOIL_LAYERS, np.float32)
+    capacity_m = stack_empty(N_SOIL_LAYERS, np.float32)
+    transmissivity_m2_per_s = stack_empty(N_SOIL_LAYERS, np.float32)
+
+    total_perched_m, total_capacity_m = set_hillslope_store(
+        water_content_m,
+        water_content_field_capacity_m,
+        water_content_saturated_m,
+        soil_layer_height_m,
+        groundwater_depth_m,
+        perched_m,
+        free_m,
+        capacity_m,
+    )
+    layer_top_depth_m: np.float32 = np.float32(0.0)
+    for i in range(N_SOIL_LAYERS):
+        q_interflow[i] = np.float32(0.0)
+        dq_interflow_dS[i] = np.float32(0.0)
+        # transmissivity of the layer when it is saturated: lateral conductivity
+        # (matrix plus structure at the middle of the layer) times its thickness
+        # above the water table
+        lateral_conductivity_m_per_s: np.float32 = (
+            horizontal_saturated_hydraulic_conductivity_m_per_s[i]
+            + interflow_structural_conductivity_m_per_s
+            * np.exp(
+                -(layer_top_depth_m + np.float32(0.5) * soil_layer_height_m[i])
+                / interflow_structural_depth_m
+            )
+        )
+        above_water_table: np.float32 = min(
+            max(
+                (groundwater_depth_m - layer_top_depth_m) / soil_layer_height_m[i],
+                np.float32(0.0),
+            ),
+            np.float32(1.0),
+        )
+        transmissivity_m2_per_s[i] = (
+            lateral_conductivity_m_per_s * above_water_table * soil_layer_height_m[i]
+        )
+        layer_top_depth_m += soil_layer_height_m[i]
+
+    if total_perched_m <= np.float32(0.0) or total_capacity_m <= np.float32(0.0):
+        return
+
+    # drainable pore space that is saturated at the foot of the slope, from the base up
+    saturated_at_foot_m: np.float32 = min(
+        np.float32(2.0) * total_perched_m, total_capacity_m
+    )
+    transmissivity_at_foot_m2_per_s: np.float32 = np.float32(0.0)
+    for i in range(N_SOIL_LAYERS - 1, -1, -1):
+        if saturated_at_foot_m <= np.float32(0.0):
+            break
+        if capacity_m[i] <= np.float32(0.0):
+            continue
+        saturated_m: np.float32 = min(capacity_m[i], saturated_at_foot_m)
+        transmissivity_at_foot_m2_per_s += (
+            transmissivity_m2_per_s[i] * saturated_m / capacity_m[i]
+        )
+        saturated_at_foot_m -= saturated_m
+
+    sine_times_cosine_of_slope: np.float32 = slope_m_per_m / (
+        np.float32(1.0) + slope_m_per_m * slope_m_per_m
+    )
+    outflow_m_per_s: np.float32 = (
+        sine_times_cosine_of_slope
+        * transmissivity_at_foot_m2_per_s
+        / hillslope_length_m
+    )
+    for i in range(N_SOIL_LAYERS):
+        if perched_m[i] <= np.float32(0.0):
+            continue
+        q_interflow[i] = (
+            outflow_m_per_s * perched_m[i] / total_perched_m * liquid_fractions[i]
+        )
+        # the outflow of a layer falls with its own free water
+        dq_interflow_dS[i] = (
+            q_interflow[i]
+            / free_m[i]
+            * (water_content_saturated_m[i] - water_content_residual_m[i])
+        )
+
+
+@njit(cache=NUMBA_CACHE, fastmath=True, inline="always")
 def distribute_soil_water_ross(
     timestep_length_s: np.float32,
     water_content_m: np.ndarray,
@@ -179,19 +402,18 @@ def distribute_soil_water_ross(
     solid_heat_capacity_J_per_m2_K: np.ndarray,
     vertical_saturated_hydraulic_conductivity_m_per_s: np.ndarray,
     horizontal_saturated_hydraulic_conductivity_m_per_s: np.ndarray,
-    interface_dist_m: np.ndarray,
     soil_layer_height: np.ndarray,
     bubbling_pressure_m_positive: np.ndarray,
     lambda_: np.ndarray,
-    pore_size_index: np.ndarray,
     slope_m_per_m: np.float32,
     hillslope_length_m: np.float32,
-    interflow_multiplier: np.float32,
+    interflow_structural_conductivity_m_per_s: np.float32,
     green_ampt_active_layer_idx: np.int32,
     topwater_m: np.float32,
     gw_ksat_m_per_s: np.float32,
     groundwater_depth_m: np.float32,
     deep_soil_temperature_C: np.float32,
+    interflow_structural_depth_m: np.float32,
     max_capillary_rise_m: np.float32 = np.float32(np.inf),
 ) -> tuple[
     np.float32,
@@ -214,14 +436,15 @@ def distribute_soil_water_ross(
         solid_heat_capacity_J_per_m2_K: Heat capacity of the solid fraction in each layer (J/m2/K).
         vertical_saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for vertical redistribution (m/s).
         horizontal_saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for horizontal interflow (m/s).
-        interface_dist_m: Distance between centers of soil layers (m).
         soil_layer_height: Height of each soil layer (m).
         bubbling_pressure_m_positive: Bubbling pressure in each layer (m). Must be positive.
         lambda_: van Genuchten n parameter minus one (lambda) (-).
-        pore_size_index: Pore size index (3 + 2/lambda) (-).
         slope_m_per_m: Hillslope slope (m/m).
         hillslope_length_m: Hillslope length (m).
-        interflow_multiplier: Calibration multiplier for interflow (-).
+        interflow_structural_conductivity_m_per_s: Lateral conductivity of the soil
+            structure at the surface (m/s), added to the matrix conductivity.
+        interflow_structural_depth_m: e-folding depth (m) of the structural lateral
+            conductivity.
         green_ampt_active_layer_idx: Index of wetting front layer.
         topwater_m: Topwater storage (m).
         gw_ksat_m_per_s: Saturated hydraulic conductivity of the groundwater toplayer (m/s).
@@ -242,6 +465,20 @@ def distribute_soil_water_ross(
     top_soil_percolation_to_layer_2_m = np.float32(0.0)
     top_soil_rise_from_layer_2_m = np.float32(0.0)
 
+    groundwater_temperature_C: np.float32 = max(
+        deep_soil_temperature_C, np.float32(0.0)
+    )
+    groundwater_fill_m: np.float32 = fill_soil_below_water_table(
+        water_content_m=water_content_m,
+        water_content_saturated_m=water_content_saturated_m,
+        soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2,
+        soil_layer_height=soil_layer_height,
+        groundwater_depth_m=groundwater_depth_m,
+        groundwater_temperature_C=groundwater_temperature_C,
+        max_fill_m=max_capillary_rise_m,
+    )
+    max_capillary_rise_m = max_capillary_rise_m - groundwater_fill_m
+
     # Use stack-backed scratch arrays to avoid per-call heap/NRT allocation overhead.
     effective_saturation = stack_empty(N_SOIL_LAYERS, np.float32)
     liquid_fractions = stack_empty(N_SOIL_LAYERS, np.float32)
@@ -256,18 +493,17 @@ def distribute_soil_water_ross(
     dq_dS_iplus1 = stack_empty(_N_SOIL_LAYERS_PLUS_ONE, np.float32)
     dq_interflow_dS = stack_empty(N_SOIL_LAYERS, np.float32)
 
-    a = stack_empty(N_SOIL_LAYERS, np.float32)
     b = stack_empty(N_SOIL_LAYERS, np.float32)
-    c = stack_empty(N_SOIL_LAYERS, np.float32)
     d = stack_empty(N_SOIL_LAYERS, np.float32)
-    dS = stack_empty(N_SOIL_LAYERS, np.float32)
     inv_timestep_s: np.float32 = np.float32(1.0) / timestep_length_s
+    cos_slope: np.float32 = np.float32(1.0) / np.sqrt(
+        np.float32(1.0) + slope_m_per_m * slope_m_per_m
+    )
 
     for i in range(N_SOIL_LAYERS):
         # Effective saturation and suction potential, limit to [0.001, 0.999] for numerical stability.
-        s_eff = (water_content_m[i] - water_content_residual_m[i]) / (
-            water_content_saturated_m[i] - water_content_residual_m[i]
-        )
+        available_capacity = water_content_saturated_m[i] - water_content_residual_m[i]
+        s_eff = (water_content_m[i] - water_content_residual_m[i]) / available_capacity
         s_eff = max(np.float32(0.001), min(np.float32(0.999), s_eff))
         effective_saturation[i] = s_eff
 
@@ -296,10 +532,13 @@ def distribute_soil_water_ross(
         if green_ampt_active_layer_idx >= 0 and i < green_ampt_active_layer_idx:
             sat_cond_s = np.float32(1e-25)
 
+        pore_size_index_i: np.float32 = np.float32(3.0) + (np.float32(2.0) / lambda_[i])
+
         # Campbell conductivity function
         # Campbell, G. S. (1974). A simple method for determining unsaturated conductivity
         # from moisture retention data. Soil science, 117(6), 311-314.
-        K[i] = sat_cond_s * s_eff ** pore_size_index[i]
+        s_eff_pow_pore_size = s_eff**pore_size_index_i
+        K[i] = sat_cond_s * s_eff_pow_pore_size
 
         # Ross (2003) rewrites the Richards equation using the matric flux
         # potential, a Kirchhoff-style transform of hydraulic conductivity.
@@ -314,92 +553,33 @@ def distribute_soil_water_ross(
             saturated_hydraulic_conductivity_m_per_s=sat_cond_s,
             bubbling_pressure_m_positive=bubbling_pressure_m_positive[i],
             lambda_=lambda_[i],
-            pore_size_index=pore_size_index[i],
+            pore_size_index=pore_size_index_i,
         )
         # Then equation 2 gives:
-        phi_exponent_i = pore_size_index[i] - (np.float32(1.0) / lambda_[i])
+        phi_exponent_i = pore_size_index_i - (np.float32(1.0) / lambda_[i])
         phi[i] = phi_e_val * (s_eff**phi_exponent_i)
 
         # Derivatives of K and phi with respect to saturation, needed for the implicit solver.
-        dK_dS[i] = pore_size_index[i] * (K[i] / s_eff)
+        dK_dS[i] = pore_size_index_i * (K[i] / s_eff)
         dphi_dS[i] = phi_exponent_i * (phi[i] / s_eff)
 
-        # Check whether this layer has an active wetting front.
-        in_active_wetting_front: bool = bool(
-            green_ampt_active_layer_idx >= 0 and i <= green_ampt_active_layer_idx
-        )
-
-        if in_active_wetting_front:
-            # Active wetting front (storm quickflow):
-            # Water in the perched transmission zone drains laterally via saturated lateral conductivity
-            # Lateral flow operates on drainable water above field capacity.
-            free_water_m = max(
-                np.float32(0.0),
-                water_content_m[i] - water_content_field_capacity_m[i],
-            )
-            drainable_porosity = max(
-                np.float32(1e-6),
-                (water_content_saturated_m[i] - water_content_field_capacity_m[i])
-                / soil_layer_height[i],
-            )
-            lateral_K_m_per_s = (
-                horizontal_saturated_hydraulic_conductivity_m_per_s[i]
-                * np.float32(10.0)
-                * interflow_multiplier
-            )
-            interflow_drainage_rate_s = (lateral_K_m_per_s * slope_m_per_m) / (
-                drainable_porosity * hillslope_length_m
-            )
-            q_interflow[i] = (
-                interflow_drainage_rate_s * free_water_m * liquid_fractions[i]
-            )
-
-            # Saturated lateral conductivity does not depend on S; derivative is purely dW/dS:
-            if free_water_m > np.float32(0.0):
-                dq_interflow_dS[i] = (
-                    interflow_drainage_rate_s
-                    * (water_content_saturated_m[i] - water_content_residual_m[i])
-                    * liquid_fractions[i]
-                )
-            else:
-                dq_interflow_dS[i] = np.float32(0.0)
-        else:
-            # Inactive wetting front:
-            # Drains more slowly via unsaturated matrix conductivity down to residual storage.
-            free_water_m = max(
-                np.float32(0.0),
-                water_content_m[i] - water_content_residual_m[i],
-            )
-            drainable_porosity = max(
-                np.float32(1e-6),
-                (water_content_saturated_m[i] - water_content_residual_m[i])
-                / soil_layer_height[i],
-            )
-            lateral_K_matrix_s = horizontal_saturated_hydraulic_conductivity_m_per_s[
-                i
-            ] * (s_eff ** pore_size_index[i])
-            lateral_K_m_per_s = (
-                lateral_K_matrix_s * np.float32(10.0) * interflow_multiplier
-            )
-            interflow_drainage_rate_s = (lateral_K_m_per_s * slope_m_per_m) / (
-                drainable_porosity * hillslope_length_m
-            )
-            q_interflow[i] = (
-                interflow_drainage_rate_s * free_water_m * liquid_fractions[i]
-            )
-
-            d_lateral_K_matrix_dS = pore_size_index[i] * (lateral_K_matrix_s / s_eff)
-            d_lateral_K_dS = d_lateral_K_matrix_dS * np.float32(10.0)
-            d_interflow_drainage_rate_dS = (
-                (d_lateral_K_dS * slope_m_per_m)
-                / (drainable_porosity * hillslope_length_m)
-            ) * interflow_multiplier
-
-            dq_interflow_dS[i] = (
-                d_interflow_drainage_rate_dS * free_water_m
-                + interflow_drainage_rate_s
-                * (water_content_saturated_m[i] - water_content_residual_m[i])
-            ) * liquid_fractions[i]
+    # Lateral outflow at the foot of the hillslope (interflow), from the soil as one store
+    set_hillslope_interflow(
+        water_content_m,
+        water_content_field_capacity_m,
+        water_content_saturated_m,
+        water_content_residual_m,
+        soil_layer_height,
+        horizontal_saturated_hydraulic_conductivity_m_per_s,
+        interflow_structural_conductivity_m_per_s,
+        interflow_structural_depth_m,
+        slope_m_per_m,
+        hillslope_length_m,
+        groundwater_depth_m,
+        liquid_fractions,
+        q_interflow,
+        dq_interflow_dS,
+    )
 
     # q holds vertical fluxes at layer interfaces:
     # q[0] is the top boundary (no imposed surface infiltration flux here),
@@ -437,33 +617,41 @@ def distribute_soil_water_ross(
         # Dimensionless ratio (m/m): larger values push the Ross blend toward
         # a stronger upwind-like treatment of the conductivity term.
         # A 1e-3 m floor avoids singular behavior when suction head is tiny.
-        # Note that in equation 18 in Ross (2003), g is also included. However,
-        # g is NOT the gravity but is the cosine of the slope angle, which we assume
-        # to be 1.0.
+        # In equation 18 of Ross (2003), g is the cosine of the slope angle
+        # projecting gravity normal to the hillslope surface.
+        # On-the-fly interface distance between layer centers:
+        # Computing (soil_layer_height[i] + soil_layer_height[i + 1]) * 0.5 in registers avoids allocating
+        # a 25 MB 2D delta_z array in DRAM and eliminates 30 million array slice fetches per daily timestep.
+        interface_dist: np.float32 = (
+            soil_layer_height[i] + soil_layer_height[i + 1]
+        ) * np.float32(0.5)
+
         v: np.float32 = min(
-            interface_dist_m[i] / max(np.float32(1e-3), suction_head_magnitude_m),
+            (interface_dist * cos_slope)
+            / max(np.float32(1e-3), suction_head_magnitude_m),
             np.float32(100.0),
         )
+
+        pore_size_index_i = np.float32(3.0) + (np.float32(2.0) / lambda_[i])
 
         # Ross rational approximation for the conductivity blend weight.
         # See equation 18 in Ross (2003). This equation aims to avoid expensive
         # power functions.
         weight_numerator = (
             np.float32(60.0)
-            + np.float32(10.0) * (np.float32(7.0) + lambda_[i] * pore_size_index[i]) * v
+            + np.float32(10.0) * (np.float32(7.0) + lambda_[i] * pore_size_index_i) * v
             + (
                 np.float32(16.0)
                 + lambda_[i]
-                * pore_size_index[i]
-                * (np.float32(5.0) + lambda_[i] * pore_size_index[i])
+                * pore_size_index_i
+                * (np.float32(5.0) + lambda_[i] * pore_size_index_i)
             )
             * (v**2)
         )
         weight_denominator = np.float32(2.0) * (
             np.float32(60.0)
             + np.float32(60.0) * v
-            + (np.float32(11.0) + (lambda_[i] ** 2) * (pore_size_index[i] ** 2))
-            * (v**2)
+            + (np.float32(11.0) + (lambda_[i] ** 2) * (pore_size_index_i**2)) * (v**2)
         )
         conductivity_blend_weight = max(
             np.float32(0.0), min(np.float32(1.0), weight_numerator / weight_denominator)
@@ -485,22 +673,25 @@ def distribute_soil_water_ross(
 
         # Interface flux q[i+1] has:
         # 1) a matric-flux-potential gradient term,
-        # 2) a conductivity (gravity) term blended by Ross weight.
+        # 2) a conductivity (gravity) term blended by Ross weight and projected
+        #    normal to the hillslope by cos(slope).
         # The derivatives dq_dS_i and dq_dS_iplus1 are Jacobian terms that
         # populate the tridiagonal matrix entries for the implicit solve.
-        q[i + 1] = (
-            matric_flux_potential_layer_i - matric_flux_potential_layer_iplus1
-        ) / interface_dist_m[i] + (
+        gravity_flux = cos_slope * (
             conductivity_blend_weight * conductivity_layer_i
             + (np.float32(1.0) - conductivity_blend_weight) * conductivity_layer_iplus1
         )
-        dq_dS_i[i + 1] = (dmatric_flux_potential_dS_layer_i / interface_dist_m[i]) + (
-            conductivity_blend_weight * dconductivity_dS_layer_i
+        q[i + 1] = (
+            matric_flux_potential_layer_i - matric_flux_potential_layer_iplus1
+        ) / interface_dist + gravity_flux
+        dq_dS_i[i + 1] = (dmatric_flux_potential_dS_layer_i / interface_dist) + (
+            cos_slope * conductivity_blend_weight * dconductivity_dS_layer_i
         )
         dq_dS_iplus1[i + 1] = (
-            -dmatric_flux_potential_dS_layer_iplus1 / interface_dist_m[i]
+            -dmatric_flux_potential_dS_layer_iplus1 / interface_dist
         ) + (
-            (np.float32(1.0) - conductivity_blend_weight)
+            cos_slope
+            * (np.float32(1.0) - conductivity_blend_weight)
             * dconductivity_dS_layer_iplus1
         )
 
@@ -510,7 +701,14 @@ def distribute_soil_water_ross(
         total_soil_depth_m += soil_layer_height[k]
 
     bottom_layer_index: int = N_SOIL_LAYERS - 1
+    pore_size_index_bottom: np.float32 = np.float32(3.0) + (
+        np.float32(2.0) / lambda_[bottom_layer_index]
+    )
 
+    # (outside the call: numba cannot compile inline conditionals in keyword arguments)
+    max_capillary_flux_m_per_s: np.float32 = np.float32(np.inf)
+    if np.isfinite(max_capillary_rise_m):
+        max_capillary_flux_m_per_s = max_capillary_rise_m / timestep_length_s
     (
         q[N_SOIL_LAYERS],
         dq_dS_i[N_SOIL_LAYERS],
@@ -520,7 +718,7 @@ def distribute_soil_water_ross(
         bottom_layer_thickness_m=soil_layer_height[bottom_layer_index],
         bubbling_pressure_m_positive=bubbling_pressure_m_positive[bottom_layer_index],
         lambda_=lambda_[bottom_layer_index],
-        pore_size_index=pore_size_index[bottom_layer_index],
+        pore_size_index=pore_size_index_bottom,
         saturated_hydraulic_conductivity_m_per_s=vertical_saturated_hydraulic_conductivity_m_per_s[
             bottom_layer_index
         ],
@@ -530,11 +728,8 @@ def distribute_soil_water_ross(
         dconductivity_dS_bottom=dK_dS[bottom_layer_index],
         liquid_fraction=liquid_fractions[bottom_layer_index],
         gw_ksat_m_per_s=gw_ksat_m_per_s,
-        max_capillary_flux_m_per_s=(
-            max_capillary_rise_m / timestep_length_s
-            if np.isfinite(max_capillary_rise_m)
-            else np.float32(np.inf)
-        ),
+        max_capillary_flux_m_per_s=max_capillary_flux_m_per_s,
+        cos_slope=cos_slope,
     )
 
     dq_dS_i[0] = np.float32(0.0)  # No flux at top, so no saturation dependence.
@@ -556,8 +751,6 @@ def distribute_soil_water_ross(
 
         # Matrix coefficients for the implicit Backward Euler step.
         # Include dq_interflow_dS in the diagonal element b[i]
-        a[i] = -dq_dS_i[i]  # Jacobian of flux from layer above (naturally 0 at top)
-        c[i] = dq_dS_iplus1[i + 1]  # Jacobian of flux to layer below
         b[i] = -dq_dS_iplus1[i] + dq_dS_i[i + 1] + dq_interflow_dS[i] + storage_term
 
         # The imbalance term accounts for the difference between the linear approximation
@@ -565,18 +758,22 @@ def distribute_soil_water_ross(
         # Include q_interflow[i] in the imbalance (it's an outflow)
         d[i] = q[i] - q[i + 1] - q_interflow[i]
 
-    # Thomas algorithm to solve the tridiagonal system Ax=d for dS
-
+    # Thomas algorithm to solve the tridiagonal system Ax=d for saturation change dS:
+    # Memory optimization:
+    # - Subdiagonal a[i] is read directly from -dq_dS_i[i] (Jacobian of flux from layer above).
+    # - Superdiagonal c[i] is read directly from dq_dS_iplus1[i + 1] (Jacobian of flux to layer below).
+    # - RHS vector d is reused to store the forward substitution d' and is overwritten in-place with the solution dS.
+    # This eliminates 3 scratch stack arrays (a, c, dS) with 100% bit-for-bit equivalence.
     # Forward pass:
     for i in range(1, N_SOIL_LAYERS):
-        m = a[i] / b[i - 1]
-        b[i] = b[i] - m * c[i - 1]
-        d[i] = d[i] - m * d[i - 1]
+        elimination_factor: np.float32 = -dq_dS_i[i] / b[i - 1]
+        b[i] = b[i] - elimination_factor * dq_dS_iplus1[i]
+        d[i] = d[i] - elimination_factor * d[i - 1]
 
-    # Backward substitution:
-    dS[N_SOIL_LAYERS - 1] = d[N_SOIL_LAYERS - 1] / b[N_SOIL_LAYERS - 1]
+    # Backward substitution writing solution dS directly into d:
+    d[N_SOIL_LAYERS - 1] = d[N_SOIL_LAYERS - 1] / b[N_SOIL_LAYERS - 1]
     for i in range(N_SOIL_LAYERS - 2, -1, -1):
-        dS[i] = (d[i] - c[i] * dS[i + 1]) / b[i]
+        d[i] = (d[i] - dq_dS_iplus1[i + 1] * d[i + 1]) / b[i]
 
     # Total interflow tracking
     total_lateral_outflow_m = np.float32(0.0)
@@ -587,7 +784,7 @@ def distribute_soil_water_ross(
     # update layer water contents, and advect enthalpy with the moving water.
     for i in range(N_SOIL_LAYERS - 1):
         corrected_q_interface_m_per_s = q[i + 1] + (
-            dq_dS_i[i + 1] * dS[i] + dq_dS_iplus1[i + 1] * dS[i + 1]
+            dq_dS_i[i + 1] * d[i] + dq_dS_iplus1[i + 1] * d[i + 1]
         )
         flux_m: np.float32 = corrected_q_interface_m_per_s * timestep_length_s
 
@@ -684,7 +881,7 @@ def distribute_soil_water_ross(
         N_SOIL_LAYERS - 1
     )  # lowest soil layer is the interface with groundwater
     linearized_gw_flux_m_per_s: np.float32 = q[N_SOIL_LAYERS] + (
-        dq_dS_i[N_SOIL_LAYERS] * dS[bottom_layer]
+        dq_dS_i[N_SOIL_LAYERS] * d[bottom_layer]
     )
     # Downward gravity drainage cannot turn into upward capillary rise through Taylor linearization
     if q[N_SOIL_LAYERS] >= np.float32(0.0):
@@ -693,6 +890,11 @@ def distribute_soil_water_ross(
         )
     else:
         corrected_groundwater_flux_m_per_s = linearized_gw_flux_m_per_s
+    # A soil whose base lies in the groundwater cannot drain into it.
+    if groundwater_depth_m < total_soil_depth_m:
+        corrected_groundwater_flux_m_per_s = min(
+            corrected_groundwater_flux_m_per_s, np.float32(0.0)
+        )
 
     groundwater_boundary_flux_m: np.float32 = (
         corrected_groundwater_flux_m_per_s * timestep_length_s
@@ -733,21 +935,13 @@ def distribute_soil_water_ross(
     # Since interflow is in the matrix, it's already accounted for in dS,
     # but we need to get it separately for to be able to return the total
     # interflow, and to apply the enthalpy loss from interflow advection.
+    interflow_temp_C: np.float32 = np.float32(0.0)
     for i in range(N_SOIL_LAYERS):
-        corrected_q_interflow_m_per_s = q_interflow[i] + (dq_interflow_dS[i] * dS[i])
-        in_active_wetting_front_apply: bool = bool(
-            green_ampt_active_layer_idx >= 0 and i <= green_ampt_active_layer_idx
+        corrected_q_interflow_m_per_s = q_interflow[i] + (dq_interflow_dS[i] * d[i])
+        available_for_interflow_m = max(
+            np.float32(0.0),
+            water_content_m[i] - water_content_field_capacity_m[i],
         )
-        if in_active_wetting_front_apply:
-            available_for_interflow_m = max(
-                np.float32(0.0),
-                water_content_m[i] - water_content_field_capacity_m[i],
-            )
-        else:
-            available_for_interflow_m = max(
-                np.float32(0.0),
-                water_content_m[i] - water_content_residual_m[i],
-            )
 
         actual_interflow_m = max(
             np.float32(0.0),
@@ -831,6 +1025,15 @@ def distribute_soil_water_ross(
         )
     else:
         percolation_to_groundwater_enthalpy_loss_J_per_m2 = np.float32(0.0)
+
+    # the groundwater that filled the soil below the water table left the aquifer
+    capillary_rise_from_groundwater_m += groundwater_fill_m
+    percolation_to_groundwater_enthalpy_loss_J_per_m2 -= (
+        groundwater_fill_m
+        * RHO_WATER_KG_PER_M3
+        * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+        * groundwater_temperature_C
+    )
 
     return (
         top_soil_percolation_to_layer_2_m,

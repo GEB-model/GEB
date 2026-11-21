@@ -50,6 +50,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayWithScalar,
 )
+from geb.numba_config import NUMBA_CACHE
 from geb.workflows.io import (
     WorkingDirectory,
     create_hash_from_parameters,
@@ -64,7 +65,7 @@ if TYPE_CHECKING:
 MODFLOW_VERSION: str = "6.8.1"
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def get_water_table_depth(
     layer_boundary_elevation: TwoDArrayFloat,
     head: TwoDArrayFloat,
@@ -114,7 +115,7 @@ def get_water_table_depth(
     return water_table_depth
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def get_groundwater_storage_m(
     layer_boundary_elevation: TwoDArrayFloat,
     head: TwoDArrayFloat,
@@ -150,9 +151,13 @@ def get_groundwater_storage_m(
                     * layer_thickness
                     * (layer_head - layer_top)
                 )
+                # A layer thinner than the minimum remaining storage (e.g. the 0.1 m
+                # upper layer of a two-layer model) has no available storage.
                 storage[cell_ix] += (
-                    layer_thickness - min_remaining_layer_storage_m
-                ) * layer_specific_yield + elastic_term
+                    max(layer_thickness - min_remaining_layer_storage_m, 0.0)
+                    * layer_specific_yield
+                    + elastic_term
+                )
             elif layer_head - min_remaining_layer_storage_m > layer_bottom:
                 storage[cell_ix] += (
                     layer_head - layer_bottom - min_remaining_layer_storage_m
@@ -160,7 +165,7 @@ def get_groundwater_storage_m(
     return storage
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def distribute_well_abstraction_m3_per_layer(
     well_rate: ArrayFloat,
     layer_boundary_elevation: TwoDArrayFloat,
@@ -299,7 +304,6 @@ class ModFlowSimulation:
     _heads_ptr: ArrayFloat64
     _potential_well_rate_ptr: ArrayFloat64
     _actual_well_rate_ptr: ArrayFloat64
-    _drainage_ptr: ArrayFloat64
     _recharge_ptr: ArrayFloat64
     _boundary_heads_ptr: ArrayFloat64
     _boundary_flow_ptr: ArrayFloat64
@@ -412,8 +416,6 @@ class ModFlowSimulation:
         assert (self.topography >= self.layer_boundary_elevation[0]).all()
         self.specific_yield = specific_yield
         self.specific_storage = specific_storage
-        self.hydraulic_conductivity_drainage = hydraulic_conductivity[0]
-
         self.ext_gt = (gt[0] - gt[1], gt[1], gt[2], gt[3] - gt[5], gt[4], gt[5])
 
         arguments = dict(locals())
@@ -859,36 +861,6 @@ class ModFlowSimulation:
             save_flows=self.save_flows,
         )
 
-        # Drainage
-        # Drainage rate is set as conductivity * area / drainage length
-        # For conductivity we set the conductivity of the top layer
-        # area the total size of the cell, and as we are are approximating
-        # transmissivity, we can set the drainage length to 1
-        drainage = []
-        for geb_idx, mf_idx in enumerate(self.geb_to_mf):
-            drn_cell_id = mf_active_cells[mf_idx]
-            drn_rate = (
-                self.hydraulic_conductivity_drainage[geb_idx] * cell_areas[mf_idx] / 1
-            )
-            drn_elev = self.layer_boundary_elevation[0, geb_idx]
-            drainage.append((0, drn_cell_id, drn_elev, drn_rate))
-
-        flopy.mf6.ModflowGwfdrn(
-            groundwater_flow,
-            maxbound=len(drainage),
-            stress_period_data={
-                0: {
-                    "filename": "drainage.bin",
-                    "factor": 1.0,
-                    "data": drainage,
-                    "iprn": 1,
-                    "binary": True,
-                },
-            },
-            print_flows=self.save_flows,
-            save_flows=self.save_flows,
-        )
-
         flopy.mf6.ModflowGwfchd(
             groundwater_flow,
             maxbound=len(self.chd_data),
@@ -1052,9 +1024,6 @@ class ModFlowSimulation:
         )
         self._actual_well_rate_ptr = self.mf6.get_value_ptr(
             self.mf6.get_var_address("SIMVALS", self.name, "WEL_0")
-        )
-        self._drainage_ptr = self.mf6.get_value_ptr(
-            self.mf6.get_var_address("SIMVALS", self.name, "DRN_0")
         )
         self._recharge_ptr = self.mf6.get_value_ptr(
             self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
@@ -1283,23 +1252,6 @@ class ModFlowSimulation:
         self._potential_well_rate_ptr[:] = well_rate_per_layer
 
     @property
-    def drainage_m3(self) -> npt.NDArray[np.float64]:
-        """Get the drainage, value in m3/step.
-
-        Returns:
-            The drainage, value in m3/step.
-        """
-        drainage = -self._drainage_ptr
-        assert not np.isnan(drainage).any()
-        # TODO: This assert can become more strict when soil depth is considered
-        assert (drainage / self.area < self.hydraulic_conductivity_drainage * 100).all()
-        return drainage
-
-    @property
-    def _drainage_m(self) -> npt.NDArray[np.float64]:
-        return self.drainage_m3 / self.area
-
-    @property
     def _recharge_m(self) -> npt.NDArray[np.float64]:
         """Get the groundwater recharge for active GEB cells.
 
@@ -1378,6 +1330,9 @@ class ModFlowSimulation:
         to be as simple as possible, without the need to specify multiple time steps
         in advance. We instead use the BMI interface to set the data for the
         'current' time step, and then re-solve the time step.
+
+        Raises:
+            RuntimeError: If MODFLOW does not converge within the outer iterations.
         """
         t0 = time()
         # loop over subcomponents
@@ -1393,7 +1348,10 @@ class ModFlowSimulation:
                 if has_converged:
                     break
             else:
-                self.logger.error("MODFLOW did not converge")
+                raise RuntimeError(
+                    f"MODFLOW did not converge in {self.max_iter} outer iterations "
+                    f"(solution {solution_id}, time {self.mf6.get_current_time()})."
+                )
 
             self.mf6.finalize_solve(solution_id)
 
@@ -1406,49 +1364,14 @@ class ModFlowSimulation:
         assert not np.isnan(self.heads[-1] - self.layer_boundary_elevation[-1]).any()
 
         if self.verbose:
-            self.logger.debug("MODFLOW")
             self.logger.debug(
-                f"\ttimestep {int(self.mf6.get_current_time())} converged in {round(time() - t0, 2)} seconds"
-            )
-            self.logger.debug(
-                "\tHead statictics: mean",
-                self.heads.mean(),
-                "min",
-                self.heads.min(),
-                "max",
-                self.heads.max(),
-            )
-            self.logger.debug(
-                "\tGroundwater depth: mean",
-                self.groundwater_depth.mean(),
-                "min",
-                self.groundwater_depth.min(),
-                "max",
-                self.groundwater_depth.max(),
-            )
-            self.logger.debug(
-                "\tGroundwater content: mean", self.groundwater_content_m3.mean()
-            )
-            self.logger.debug(
-                "\tRecharge (mean)",
-                (self.recharge_m * self.area).mean(),
-                "m3",
-                self.recharge_m.mean(),
-                "m",
-            )
-            self.logger.debug(
-                "\tAbstraction (mean)",
-                self.actual_well_rate.mean(),
-                "m3",
-                (self.actual_well_rate.sum(axis=0) / self.area).mean(),
-                "m",
-            )
-            self.logger.debug(
-                "\tDrainage (mean)",
-                self.drainage_m3.mean(),
-                "m3",
-                self._drainage_m.mean(),
-                "m",
+                f"MODFLOW time step {int(self.mf6.get_current_time())} converged in "
+                f"{round(time() - t0, 2)} s; head mean {self.heads.mean():.3f} min "
+                f"{self.heads.min():.3f} max {self.heads.max():.3f}; groundwater depth "
+                f"mean {self.groundwater_depth.mean():.3f} m; content mean "
+                f"{self.groundwater_content_m3.mean():.1f} m3; recharge mean "
+                f"{self.recharge_m.mean():.6f} m; abstraction mean "
+                f"{self.actual_well_rate.mean():.1f} m3"
             )
 
         self.heads_update_callback(self.heads)

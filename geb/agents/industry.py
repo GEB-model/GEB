@@ -59,11 +59,6 @@ class Industry(AgentBaseClass):
             self.grid = model.hydrology.grid
 
         self.agents = agents
-        self.config = (
-            self.model.config["agent_settings"]["industry"]
-            if "industry" in self.model.config["agent_settings"]
-            else {}
-        )
 
         self.industry_water_consumption_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_consumption"]

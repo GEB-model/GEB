@@ -84,9 +84,9 @@ def test_parse_custom_station_filename_invalid_numbers() -> None:
 
 def test_process_station_data_timezone_aware() -> None:
     """Test that timezone-aware indices are converted to UTC and made timezone-naive."""
-    # Create timezone-aware hourly dataframe in US/Eastern (UTC-5)
+    # Create timezone-aware hourly dataframe in America/New_York (UTC-5)
     dates: pd.DatetimeIndex = pd.date_range(
-        "2020-01-01 12:00:00", periods=5, freq="h", tz="US/Eastern"
+        "2020-01-01 12:00:00", periods=5, freq="h", tz="America/New_York"
     )
     raw_df: pd.DataFrame = pd.DataFrame(
         {"Q": [10.0, 12.0, 14.0, 16.0, 18.0]}, index=dates
@@ -98,7 +98,7 @@ def test_process_station_data_timezone_aware() -> None:
 
     assert isinstance(processed_df.index, pd.DatetimeIndex)
     assert processed_df.index.tz is None
-    # 12:00:00 US/Eastern is 17:00:00 UTC
+    # 12:00:00 America/New_York is 17:00:00 UTC
     assert processed_df.index[0] == pd.Timestamp("2020-01-01 17:00:00")
     assert processed_df.index.name == "time"
     assert len(processed_df) == 5

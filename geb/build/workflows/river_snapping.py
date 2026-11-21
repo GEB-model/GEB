@@ -10,6 +10,7 @@ import geopandas as gpd
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+import pyproj
 import shapely
 import xarray as xr
 from shapely.ops import nearest_points
@@ -188,6 +189,37 @@ def plot_snapping(
     plt.close()
 
 
+def to_local_metres(
+    geometries: np.ndarray | shapely.Geometry,
+    origin: shapely.geometry.Point,
+) -> np.ndarray | shapely.Geometry:
+    """Express longitude/latitude geometries in metres around an origin.
+
+    Uses an azimuthal equidistant projection centred on the origin (via pyproj), so
+    distances from the origin are true geodesic distances on the WGS84 ellipsoid,
+    also near the poles and across the antimeridian. Away from the origin, distances
+    between other points are distorted only slowly, which is negligible over the few
+    kilometres that matter for snapping.
+
+    Args:
+        geometries: Geometries in longitude and latitude (EPSG:4326).
+        origin: The point that becomes (0, 0), in longitude and latitude.
+
+    Returns:
+        The geometries in metres relative to the origin.
+    """
+    local_crs = pyproj.CRS.from_proj4(
+        f"+proj=aeqd +lat_0={origin.y} +lon_0={origin.x} +datum=WGS84 +units=m"
+    )
+    transformer = pyproj.Transformer.from_crs("EPSG:4326", local_crs, always_xy=True)
+    return shapely.transform(
+        geometries,
+        lambda coordinates: np.column_stack(
+            transformer.transform(coordinates[:, 0], coordinates[:, 1])
+        ),
+    )
+
+
 def snap_point_to_river_network(
     point: shapely.geometry.Point,
     rivers: gpd.GeoDataFrame,
@@ -232,7 +264,18 @@ def snap_point_to_river_network(
         warnings.filterwarnings("ignore", category=UserWarning)
         rivers["station_distance"] = rivers.geometry.distance(point)
 
-    rivers_sorted = rivers.sort_values(by="station_distance")
+    # Distances in metres decide which river is nearest and which rivers lie within the
+    # search radius: in degrees, a river to the east or west would seem further away
+    # than one at the same distance to the north or south.
+    assert rivers.crs is None or rivers.crs.equals("EPSG:4326"), (
+        "rivers must be in longitude and latitude (EPSG:4326)"
+    )
+    origin = shapely.geometry.Point(0.0, 0.0)
+    rivers["station_distance_m"] = shapely.distance(
+        to_local_metres(rivers.geometry.values, point), origin
+    )
+
+    rivers_sorted = rivers.sort_values(by="station_distance_m")
 
     # We first need to find the best river segment to snap to, based on distance and (optionally) upstream area.
     best_river_segment = select_river_segment(
@@ -241,16 +284,21 @@ def snap_point_to_river_network(
         upstream_area_m2=upstream_area_m2,
         max_uparea_difference_ratio=max_uparea_difference_ratio,
         dominant_river_buffer_m=dominant_river_buffer_m,
-        point=point,
     )
 
     if best_river_segment is None:
         return None
 
-    # Then along the selected river segment, we find the closest point on the river line to the original point.
-    # The first point returned by nearest_points is the point itself,
-    # the second is the closest point on the linestring.
-    _, closest_point_on_riverline = nearest_points(point, best_river_segment.geometry)
+    # Then along the selected river segment, we find the closest point on the river line to the original point
+    # (closest in metres). The first point returned by nearest_points is the point itself, the second is the
+    # closest point on the linestring; its relative position along the line is practically the same in both coordinate systems.
+    river_line_m = to_local_metres(best_river_segment.geometry, point)
+    assert isinstance(river_line_m, shapely.LineString)
+    _, closest_point_on_riverline_m = nearest_points(origin, river_line_m)
+    closest_point_on_riverline = best_river_segment.geometry.interpolate(
+        river_line_m.project(closest_point_on_riverline_m, normalized=True),
+        normalized=True,
+    )
 
     # Next, we find the corresponding cell in the high-resolution subgrid that is part of the river network.
     river_cell_in_subgrid = upstream_area_subgrid.sel(
@@ -284,7 +332,9 @@ def snap_point_to_river_network(
 
     closest_river_point_and_xy = min(
         river_points_and_xy,
-        key=lambda x: shapely.distance(x[0], closest_point_on_riverline),
+        key=lambda x: shapely.distance(
+            to_local_metres(x[0], point), closest_point_on_riverline_m
+        ),
     )
 
     return SnappingResults(
@@ -318,7 +368,6 @@ def select_river_segment(
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
     dominant_river_buffer_m: float | None = 2000.0,
-    point: shapely.geometry.Point | None = None,
 ) -> RiverSegment | None:
     """Select the closest river segment.
 
@@ -326,12 +375,12 @@ def select_river_segment(
     a spatial search buffer.
 
     Args:
-        rivers_sorted: GeoDataFrame of river segments sorted by spatial distance. Must contain 'station_distance' and 'uparea_m2'.
+        rivers_sorted: GeoDataFrame of river segments sorted by distance. Must contain 'station_distance' (in the
+            units of the coordinates), 'station_distance_m' (m) and 'uparea_m2'.
         max_spatial_difference_degrees: The maximum allowed spatial difference in degrees.
         upstream_area_m2: Optional target upstream area (m2). If provided (and not NaN), matching is performed.
         max_uparea_difference_ratio: The maximum allowed difference ratio for upstream area matching.
         dominant_river_buffer_m: Radius in meters within which to search for the dominant river (highest upstream area).
-        point: Optional location of the point being snapped (used for accurate metric-to-degree distance conversion).
 
     Returns:
         The selected river segment or None if no segment meets the criteria.
@@ -341,28 +390,14 @@ def select_river_segment(
 
     if upstream_area_m2 is None or np.isnan(upstream_area_m2):
         if dominant_river_buffer_m is not None and dominant_river_buffer_m > 0:
-            if (
-                point is not None
-                and hasattr(rivers_sorted, "crs")
-                and rivers_sorted.crs
-                and rivers_sorted.crs.is_geographic
-            ):
-                lat = point.y
-                m_per_deg_lat = 111139.0
-                m_per_deg_lon = 111320.0 * np.cos(np.radians(lat))
-                effective_m_per_deg = np.sqrt(
-                    (m_per_deg_lat**2 + m_per_deg_lon**2) / 2.0
-                )
-                buffer_deg = dominant_river_buffer_m / effective_m_per_deg
-            else:
-                buffer_deg = dominant_river_buffer_m / 111139.0
-
-            candidates = rivers_sorted[rivers_sorted["station_distance"] <= buffer_deg]
+            candidates = rivers_sorted[
+                rivers_sorted["station_distance_m"] <= dominant_river_buffer_m
+            ]
             if candidates.empty:
                 closest_river_segment = rivers_sorted.head(1)
             else:
                 closest_river_segment = candidates.sort_values(
-                    by=["uparea_m2", "shreve_stream_order", "station_distance"],
+                    by=["uparea_m2", "shreve_stream_order", "station_distance_m"],
                     ascending=[False, False, True],
                 ).head(1)
         else:

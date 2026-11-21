@@ -42,12 +42,10 @@ def test_fluxnet_adapter_metadata_reading() -> None:
     reason="Too heavy for GitHub Actions.",
 )
 def test_fluxnet_adapter_timeseries_reading() -> None:
-    """Test that read(variable='LE_F_MDS') returns evaporation timeseries.
+    """Test that read() returns station metadata and daily latent heat flux.
 
-    Calls fetch() with European bounds so that only a small subset of stations
-    is queried, keeping the test fast.  Verifies that the returned DataFrame
-    has a DatetimeIndex named 'time', at least one station column, and the
-    expected number of rows for daily data.
+    Uses a small region in the Eifel with a few towers, keeping the test fast,
+    and checks the long-format columns and one row per station and day.
     """
     catalog = DataCatalog(logger=logging.getLogger("test_fluxnet"))
     adapter = catalog.fetch("fluxnet")
@@ -77,6 +75,17 @@ def test_fluxnet_adapter_timeseries_reading() -> None:
 
     assert not stations.empty, "No stations returned for Benelux bounds"
     assert not timeseries.empty, "No evaporation data returned for Benelux bounds"
+    assert {"site_name", "igbp"} <= set(stations.columns)
+    assert list(timeseries.columns) == [
+        "station_id",
+        "date",
+        "latent_heat_flux_W_per_m2",
+        "latent_heat_flux_corrected_W_per_m2",
+        "latent_heat_flux_quality_fraction",
+    ]
+    assert set(timeseries["station_id"]) <= set(stations.index)
+    # one row per station and day
+    assert not timeseries.duplicated(["station_id", "date"]).any()
 
     ocean_bounds = gpd.GeoDataFrame.from_features(
         [

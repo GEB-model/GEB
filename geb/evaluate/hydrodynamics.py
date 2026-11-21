@@ -21,6 +21,7 @@ from pyproj import Transformer
 from rasterio.features import geometry_mask
 from rioxarray.exceptions import NoDataInBounds
 
+from geb import TILE_REQUEST_HEADERS
 from geb.hazards.floods.workflows.utils import FLOOD_DEPTH_COLORS
 from geb.workflows.io import read_geom, read_zarr
 
@@ -390,7 +391,8 @@ def calculate_performance_metrics(
             ctx.add_basemap(
                 ax,
                 crs=target_crs,
-                source="OpenStreetMap.Mapnik",
+                source=ctx.providers.OpenStreetMap.Mapnik,  # ty:ignore[unresolved-attribute]
+                headers=TILE_REQUEST_HEADERS,
                 zoom=12,
                 zorder=0,
                 alpha=0.9,
@@ -425,8 +427,7 @@ def calculate_performance_metrics(
                 invalid_patch,
                 catchment_patch,
             ]
-            # Assuming you have a list of corresponding labels, e.g.:
-            labels = ["Green", "Orange", "Red", "Cloud", "Invalid", "Catchment"]
+            labels: list[str] = [str(handle.get_label()) for handle in handles]
 
             import matplotlib.text as mtext
 
@@ -458,7 +459,10 @@ def calculate_performance_metrics(
                     fontsize: float,
                     trans: Transform,
                 ) -> list[Artist]:
-                    return []
+                    # an invisible artist: matplotlib needs at least one per entry
+                    return [
+                        mpatches.Rectangle((xdescent, ydescent), 0, 0, visible=False)
+                    ]
 
             # Create a single legend
             ax.legend(
@@ -988,6 +992,7 @@ def create_flood_animation(
             y_2d.max(),
             zoom=zoom,
             source=tile_source,
+            headers=TILE_REQUEST_HEADERS,
         )
         ax.imshow(tiles, extent=tiles_extent, zorder=0)
         ax.set_xlim(x_2d.min(), x_2d.max())
@@ -1124,9 +1129,7 @@ class Hydrodynamics:
             "minimum_flood_depth"
         ]
 
-        sfincs_root = (
-            Path(self.model.config["general"]["simulation_root"]) / run_name / "SFINCS"
-        )
+        sfincs_root = Path(self.model.config["simulation_root"]) / run_name / "SFINCS"
         if not sfincs_root.exists():
             raise FileNotFoundError(
                 f"SFINCS simulation folder {sfincs_root} does not exist. "
@@ -1322,7 +1325,7 @@ class Hydrodynamics:
             self.model.logger.info(f"event: {event_name}")
 
             # Create event-specific folder
-            if self.model.config["general"]["forecasts"]["use"]:
+            if self.model.config["forecasts"]["use"]:
                 event_folder = eval_hydrodynamics_folders / "forecasts" / event_name
                 event_folder.mkdir(parents=True, exist_ok=True)
                 flood_maps_folder = (
@@ -1470,9 +1473,7 @@ class Hydrodynamics:
                     for flood_map_path in matching_flood_maps:
                         print(f"   Evaluating: {flood_map_path.name}")
 
-                        elevation_path = self.config["floods"].get(
-                            "elevation_data", self.model.files["other"]["DEM/fathomdem"]
-                        )
+                        elevation_path = self.model.files["other"]["DEM/fathomdem"]
                         metrics = calculate_performance_metrics(
                             observation=read_zarr(obs_file),
                             simulated=read_zarr(flood_map_path),

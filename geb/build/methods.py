@@ -16,10 +16,12 @@ import numpy as np
 import pandas as pd
 from numba import njit
 
+from geb.numba_config import NUMBA_CACHE
+
 __all__: list[str] = ["build_method"]
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _set_numba_seed(seed: int) -> None:
     """Set the seed for numba's random number generator."""
     np.random.seed(seed)

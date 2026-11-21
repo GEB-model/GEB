@@ -27,10 +27,12 @@ from .geometry import (
     GEOM_IN_INVERSE_INTERFACE_LENGTH,
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
+    GEOM_IN_LEVEE_DEPTH,
     GEOM_IN_RIVER_WIDTH,
     GEOM_IN_SHAPE_EXPONENT,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
     InertialGeometry,
+    compute_overbank_area_from_depth,
     compute_overbank_depth_and_top_width,
     compute_top_width_from_depth,
     compute_top_width_from_overbank_depth,
@@ -253,10 +255,18 @@ def _compute_reach_stage_and_cfl_depth(
     """
     bankfull_volume_m3: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME]
     bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
+    levee_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
     inv_shape_exp_plus_one: np.float32 = geom_inbank[
         reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
     ]
     bed_elevation: np.float32 = geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
+    inv_reach_len: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
+    bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
+
+    delta_h_levee: np.float32 = levee_depth_m - bankfull_depth_m
+    levee_volume_m3: np.float32 = bankfull_volume_m3 + (delta_h_levee * bf_width) / max(
+        inv_reach_len, np.float32(1e-12)
+    )
 
     if volume_m3 <= bankfull_volume_m3 or bankfull_depth_m <= np.float32(0.0):
         if volume_m3 <= np.float32(0.0):
@@ -276,22 +286,50 @@ def _compute_reach_stage_and_cfl_depth(
         h_vol: np.float32 = channel_depth_m * inv_shape_exp_plus_one
         return stage, h_vol
 
-    overbank_volume: np.float32 = volume_m3 - bankfull_volume_m3
-    inv_reach_len: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
-    bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
-    fp_slope_m_per_m: np.float32 = geom_inbank[
-        reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
-    ]
-    floodplain_depth, top_width = compute_overbank_depth_and_top_width(
-        overbank_area=overbank_volume * inv_reach_len,
-        bankfull_width_m=bf_width,
-        floodplain_areas=geom_floodplain_areas[reach_idx],
-        floodplain_widths=geom_floodplain_widths[reach_idx],
-        floodplain_side_slope_m_per_m=fp_slope_m_per_m,
-    )
-    stage = bed_elevation + bankfull_depth_m + floodplain_depth
-    h_vol = (volume_m3 * inv_reach_len) / max(top_width, np.float32(1e-3))
-    return stage, h_vol
+    elif volume_m3 <= levee_volume_m3:
+        # Water is above bankfull but confined between levees
+        extra_volume: np.float32 = volume_m3 - bankfull_volume_m3
+        embanked_depth: np.float32 = (extra_volume * inv_reach_len) / max(
+            bf_width, np.float32(1e-3)
+        )
+        stage = bed_elevation + bankfull_depth_m + embanked_depth
+        h_vol = (volume_m3 * inv_reach_len) / max(bf_width, np.float32(1e-3))
+        return stage, h_vol
+
+    else:
+        # Water exceeds levee crest. The protected floodplain behind the levees lies at
+        # natural ground (bankfull level): it first fills up to crest level while the stage
+        # stays at the crest, after which river and floodplain rise together.
+        fp_slope_m_per_m: np.float32 = geom_inbank[
+            reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
+        ]
+        overbank_area: np.float32 = (volume_m3 - bankfull_volume_m3) * inv_reach_len
+        crest_fill_area: np.float32 = compute_overbank_area_from_depth(
+            overbank_depth_m=delta_h_levee,
+            bankfull_width_m=bf_width,
+            floodplain_areas=geom_floodplain_areas[reach_idx],
+            floodplain_widths=geom_floodplain_widths[reach_idx],
+            side_slope_z=fp_slope_m_per_m,
+        )
+        if overbank_area <= crest_fill_area:
+            stage = bed_elevation + levee_depth_m
+            top_width: np.float32 = compute_top_width_from_overbank_depth(
+                overbank_depth_m=delta_h_levee,
+                bankfull_width_m=bf_width,
+                floodplain_widths=geom_floodplain_widths[reach_idx],
+                side_slope_z=fp_slope_m_per_m,
+            )
+        else:
+            floodplain_depth, top_width = compute_overbank_depth_and_top_width(
+                overbank_area=overbank_area,
+                bankfull_width_m=bf_width,
+                floodplain_areas=geom_floodplain_areas[reach_idx],
+                floodplain_widths=geom_floodplain_widths[reach_idx],
+                floodplain_side_slope_m_per_m=fp_slope_m_per_m,
+            )
+            stage = bed_elevation + bankfull_depth_m + floodplain_depth
+        h_vol = (volume_m3 * inv_reach_len) / max(top_width, np.float32(1e-3))
+        return stage, h_vol
 
 
 @njit(inline="always")
@@ -398,22 +436,22 @@ def _compute_reach_cfl_depths(
             reach_idx, GEOM_CFL_MANNING_COEFFICIENT
         ] * (total_flow_rate ** np.float32(0.6))
         bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
-        if raw_depth_from_flow > bankfull_depth_m and bankfull_depth_m > np.float32(
-            0.0
-        ):
-            extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
+        levee_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
+        if raw_depth_from_flow > levee_depth_m and levee_depth_m > np.float32(0.0):
+            extra_depth: np.float32 = raw_depth_from_flow - levee_depth_m
             bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
             fp_slope_m_per_m: np.float32 = geom_inbank[
                 reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
             ]
+            # Floodplain behind the levees lies at natural ground (bankfull level)
             top_width_flow: np.float32 = compute_top_width_from_overbank_depth(
-                overbank_depth_m=extra_depth,
+                overbank_depth_m=raw_depth_from_flow - bankfull_depth_m,
                 bankfull_width_m=bf_width,
                 floodplain_widths=geom_floodplain_widths[reach_idx],
                 side_slope_z=fp_slope_m_per_m,
             )
             width_ratio: np.float32 = bf_width / max(top_width_flow, bf_width)
-            h_flow = bankfull_depth_m + (extra_depth * width_ratio)
+            h_flow = levee_depth_m + (extra_depth * width_ratio)
         else:
             h_flow = raw_depth_from_flow
 
@@ -455,22 +493,22 @@ def _evaluate_reach_cfl_dt_from_depth(
             reach_idx, GEOM_CFL_MANNING_COEFFICIENT
         ] * evaluate_discharge_pow_0_6(total_flow_rate)
         bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
-        if raw_depth_from_flow > bankfull_depth_m and bankfull_depth_m > np.float32(
-            0.0
-        ):
-            extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
+        levee_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
+        if raw_depth_from_flow > levee_depth_m and levee_depth_m > np.float32(0.0):
+            extra_depth: np.float32 = raw_depth_from_flow - levee_depth_m
             bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
             fp_slope_m_per_m: np.float32 = geom_inbank[
                 reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
             ]
+            # Floodplain behind the levees lies at natural ground (bankfull level)
             top_width_flow: np.float32 = compute_top_width_from_overbank_depth(
-                overbank_depth_m=extra_depth,
+                overbank_depth_m=raw_depth_from_flow - bankfull_depth_m,
                 bankfull_width_m=bf_width,
                 floodplain_widths=geom_floodplain_widths[reach_idx],
                 side_slope_z=fp_slope_m_per_m,
             )
             width_ratio: np.float32 = bf_width / max(top_width_flow, bf_width)
-            h_flow = bankfull_depth_m + (extra_depth * width_ratio)
+            h_flow = levee_depth_m + (extra_depth * width_ratio)
         else:
             h_flow = raw_depth_from_flow
 
@@ -773,7 +811,11 @@ def _update_waterbodies_substep(
     wb: WaterbodyCoupling,
     buffers: SubstepBuffers,
 ) -> None:
-    """Updates waterbody water levels, rating curves, and transfers boundary releases.
+    """Updates waterbody water levels and releases waterbodies into inertial reaches.
+
+    Waterbodies draining elsewhere (other waterbodies, kinematic reaches, out of the
+    domain) are released once per routing timestep in _transfer_waterbody_outflows,
+    which sets their prescribed outflow to 0.
 
     Args:
         n_inertial: Number of reaches in local inertial domain.
@@ -837,30 +879,7 @@ def _update_waterbodies_substep(
                     buffers.wb_extra_lateral_accum_m3[target_reach] += release
                     buffers.wb_outflow_avail_buf[wb_id_node] = 0.0
                     wb.storage_m3[wb_id_node] -= release
-
-        # Transfer waterbody releases to connected downstream cascading waterbodies
-        n_wb_to_wb: int = len(wb.wb_to_wb_src_wb)
-        if n_wb_to_wb > 0:
-            for link_idx in range(n_wb_to_wb):
-                src_wb: int = wb.wb_to_wb_src_wb[link_idx]
-                release = buffers.wb_outflow_avail_buf[src_wb]
-                if release > 0.0:
-                    tgt_wb: int = wb.wb_to_wb_tgt_wb[link_idx]
-                    wb.storage_m3[src_wb] -= release
-                    wb.storage_m3[tgt_wb] += release
-                    wb.inflow_m3[tgt_wb] += np.float32(release)
-                    buffers.wb_outflow_avail_buf[src_wb] = 0.0
-
-        # Transfer releases of terminal waterbodies discharging outside the model domain
-        n_wb_term: int = len(wb.wb_terminal_wb_ids)
-        if n_wb_term > 0:
-            for link_idx in range(n_wb_term):
-                term_wb: int = wb.wb_terminal_wb_ids[link_idx]
-                release = buffers.wb_outflow_avail_buf[term_wb]
-                if release > 0.0:
-                    wb.storage_m3[term_wb] -= release
-                    buffers.terminal_wb_outflow_accum_m3[0] += np.float32(release)
-                    buffers.wb_outflow_avail_buf[term_wb] = 0.0
+                    wb.outflow_m3[wb_id_node] += np.float32(release)
 
 
 @njit(inline="always")
@@ -977,16 +996,14 @@ def _solve_momentum_loop(
                         if s_wb > max_upstream_slope:
                             max_upstream_slope = s_wb
 
-            # (b) Free drawdown slope
-            drawdown_slope: np.float32 = effective_depth * inv_interface_len
-
-            # (c) Pit outlet bed slope as minimum baseline slope
+            # (b) Normal-depth boundary: the friction slope at the outlet equals the
+            # outlet bed slope, or the incoming water-surface slope when that is
+            # steeper. A free drawdown (h / dx) is not used, as it forces
+            # near-critical flow and drains the outlet reach too fast.
             base_slope: np.float32 = pit_slope_inertial[reach_idx]
-            outflow_slope: np.float32 = max(
-                max_upstream_slope, drawdown_slope, base_slope
-            )
+            outflow_slope: np.float32 = max(max_upstream_slope, base_slope)
             if boundary_type == BOUNDARY_OCEAN:
-                # (d) Ocean outlet: drop to sea level
+                # (c) Ocean outlet: drop to sea level
                 sea_stage: np.float32 = np.float32(0.0)
                 if water_stage_node > sea_stage:
                     sea_drop_slope: np.float32 = (
@@ -1002,6 +1019,8 @@ def _solve_momentum_loop(
             curr_discharge=substep_discharge_m3_s[reach_idx],
             min_wet_depth_m=min_wet_depth_m,
             geom_inbank=geom_inbank,
+            geom_floodplain_areas=geom_floodplain_areas,
+            geom_floodplain_widths=geom_floodplain_widths,
             g_dt_substep=g_dt_substep,
             sqrt_gravity=sqrt_gravity,
             can_reverse=reach_can_reverse,
@@ -1162,6 +1181,7 @@ def _apply_confluence_inflow_limits(
         ]
 
         shape_exp_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_SHAPE_EXPONENT]
+        levee_depth_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_LEVEE_DEPTH]
         top_width_c: np.float32 = max(
             compute_top_width_from_depth(
                 water_depth_m=depth_c,
@@ -1170,6 +1190,7 @@ def _apply_confluence_inflow_limits(
                 shape_exponent=shape_exp_c,
                 floodplain_widths=geom_floodplain_widths[reach_idx],
                 side_slope_z=fp_slope_c,
+                levee_depth_m=levee_depth_c,
             ),
             bf_width_c * np.float32(0.1),
         )
@@ -1249,7 +1270,12 @@ def _route_inertial_retention(
             max_outflow_limit: float = buffers.retention_max_outflow_limit_sub_buf[
                 retention_id
             ]
-            river_volume_substep: np.float32 = avail_flow_rate * dt_substep
+            # The intake can at most take the water in the reach: the flow passing
+            # in this substep, limited by the stored volume it is drawn from.
+            river_volume_substep: np.float32 = min(
+                avail_flow_rate * dt_substep,
+                np.float32(max(river_storage_m3_inertial[reach_idx], 0.0)),
+            )
             previous_discharge: np.float32 = max(
                 previous_discharge_m3_s_inertial[reach_idx], np.float32(0.0)
             )
@@ -1276,10 +1302,19 @@ def _route_inertial_retention(
 
             ret.inflow_m3[retention_id] += diverted_vol
             ret.outflow_m3[retention_id] += released_vol
-            net_retention_vol: float = float(diverted_vol - released_vol)
-            river_storage_m3_inertial[reach_idx] = max(
-                river_storage_m3_inertial[reach_idx] - net_retention_vol, 0.0
-            )
+
+            # The diverted water is taken from the reach: it intercepts the flow
+            # leaving the reach, so the outflow is reduced by the diverted volume
+            # (as far as the outflow allows) and the diverted volume leaves the
+            # reach storage. The diversion is bounded by the stored volume and the
+            # outflow by what remains, so no water is created.
+            outflow_vol: np.float32 = discharge_positive * dt_substep
+            diverted_from_outflow: np.float32 = min(diverted_vol, outflow_vol)
+            if diverted_from_outflow > np.float32(0.0):
+                substep_discharge_m3_s[reach_idx] = (
+                    discharge_positive - diverted_from_outflow * inv_dt_substep
+                )
+            river_storage_m3_inertial[reach_idx] += float(released_vol - diverted_vol)
 
 
 @njit(inline="always")
@@ -1549,7 +1584,7 @@ def _run_inertial_substeps(
     Operates using a modular architecture per substep:
     - Stage 1: Waterbody Levels & Outflow Releases
     - Stage 2: Momentum Equation (evaluates instantaneous flux Q across all reaches)
-    - Stage 3: Reverse Flow Multi-Outflow Limiter at Confluences
+    - Stage 3: Reverse Flow Limiter (off unless ALLOW_REVERSE_FLOW) and Forward Inflow Limiter at Confluences
     - Stage 4: Retention Basin Inflow Diversion and Controlled Release
     - Stage 5: Continuity, Storage & Stage Update
     - Stage 6: Dynamic CFL Stability Evaluation across Reaches
@@ -1586,7 +1621,6 @@ def _run_inertial_substeps(
 
     buffers.discharge_vol_sum_inertial.fill(0.0)
     buffers.wb_extra_lateral_accum_m3.fill(0.0)
-    buffers.terminal_wb_outflow_accum_m3.fill(0.0)
     buffers.wb_release_volume_substep.fill(0.0)
 
     # Initialize reach water stages from current storage to ensure physical consistency
@@ -1734,12 +1768,9 @@ def _run_inertial_substeps(
     updated_discharge_m3_s_inertial[:] = (
         buffers.discharge_vol_sum_inertial * inv_macro_dt
     )
-    actual_evaporation_m3_inertial[:] = np.minimum(
-        actual_evaporation_m3_inertial, evaporation_m3_inertial
-    )
-    actual_transmission_loss_m3_inertial[:] = np.minimum(
-        actual_transmission_loss_m3_inertial, transmission_loss_m3_inertial
-    )
+    # The actual losses are reported as accumulated: they are exactly what was
+    # removed from storage (their sum over the substeps cannot exceed the
+    # potential losses apart from rounding).
 
     return substep_count
 

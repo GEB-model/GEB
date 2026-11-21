@@ -30,10 +30,11 @@ from geb.geb_types import (
     ArrayInt64,
     TwoDArrayInt32,
 )
+from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.hydrology.routing import get_river_representative_xys
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.workflows.io import fast_rmtree, read_geom, write_geom, write_table
+from geb.workflows.io import fast_rmtree, read_geom, read_table, write_geom, write_table
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
@@ -80,6 +81,11 @@ WATER_CIRCLE_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
         },
         "_interception_evaporation_m": {
             "varname": ".interception_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_dew_m": {
+            "varname": ".dew_m",
             "type": "HRU",
             "function": "weightedsum",
         },
@@ -158,6 +164,11 @@ WATER_BALANCE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
         },
         "_interception_evaporation_m": {
             "varname": ".interception_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_dew_m": {
+            "varname": ".dew_m",
             "type": "HRU",
             "function": "weightedsum",
         },
@@ -272,6 +283,11 @@ WATER_STORAGE_REPORT_CONFIG: dict[str, dict[str, dict[str, str]]] = {
         },
         "_soil_water_content_layer_5_m": {
             "varname": "HRU.var.water_content_m[:,5]",
+            "type": "HRU",
+            "function": "weightedmean",
+        },
+        "_soil_water_content_layer_6_m": {
+            "varname": "HRU.var.water_content_m[:,6]",
             "type": "HRU",
             "function": "weightedmean",
         },
@@ -631,6 +647,27 @@ def get_filters_and_compressors(
     return filters, compressors
 
 
+# Daily land-surface variables (m per day) reported at meteorological (eddy covariance)
+# stations with ``_meteorological_stations``. Actual evaporation is transpiration +
+# bare soil evaporation + interception evaporation (net of dew, also reported as dew_m)
+# - sublimation_or_deposition_m
+# (sublimation_or_deposition_m is negative for sublimation).
+METEOROLOGICAL_STATION_VARIABLES: tuple[str, ...] = (
+    "transpiration_m",
+    "bare_soil_evaporation_m",
+    "interception_evaporation_m",
+    "dew_m",
+    "sublimation_or_deposition_m",
+    "potential_evapotranspiration_m",
+    "reference_evapotranspiration_grass_m",
+)
+
+
+# Observation wells need at least this many monthly observations within the simulation
+# period to be reported (_groundwater_wells).
+MIN_GROUNDWATER_WELL_MONTHS: int = 10
+
+
 def prepare_gridded_group(
     name: str,
     config: dict,
@@ -874,7 +911,8 @@ class Reporter:
         - _discharge_stations: if set to True, discharge at all discharge stations is reported.
         - _bankfull_depths: if set to True, bankfull depths across rivers and at discharge stations are reported.
         - _retention_basins: if set to True, discharge and storage for all retention basins are reported as single parquet files.
-        - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported as a single parquet file.
+        - _meteorological_stations: if set to True, daily evaporation components and potential evapotranspiration at the land unit under each meteorological (eddy covariance) station are reported, one parquet file per variable.
+        - _groundwater_wells: if set to True, the daily groundwater head of the top layer (m above sea level) is reported at each observation well with at least MIN_GROUNDWATER_WELL_MONTHS monthly observations in the simulation period, in a single parquet file.
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
         - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
         - _water_storage: if set to True, a standard set of variables to monitor water storage is reported.
@@ -939,11 +977,7 @@ class Reporter:
             fast_rmtree(self.report_folder)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
-        if (
-            self.model.mode == "w"
-            and "report" in self.model.config
-            and self.variables_to_report
-        ):
+        if self.model.mode == "w" and self.variables_to_report:
             self.is_activated = True
 
             to_delete: list[str] = []
@@ -1039,24 +1073,38 @@ class Reporter:
                                     ]
                                 )
                             )
+                            # Daily evaporation components and potential rates at the
+                            # land unit (HRU) under each tower, one parquet file per
+                            # variable with a column per station.
+                            station_reporters: dict[str, dict[str, Any]] = {}
                             for (
                                 station_ID,
                                 station_info,
                             ) in meteorological_station_locations.iterrows():
-                                station_reporters: dict[str, dict[str, Any]] = {
-                                    f"evapotranspiration_m_per_hour{station_ID}": {
-                                        "varname": ".evapotranspiration_m",
+                                for variable in METEOROLOGICAL_STATION_VARIABLES:
+                                    station_reporters[
+                                        f"meteorological_station_{variable}_{station_ID}"
+                                    ] = {
+                                        "varname": f".{variable}",
                                         "type": "HRU",
-                                        "function": f"sample_lonlat,{station_info['geometry'].x},{station_info['geometry'].y}",
-                                        "substeps": 24,
-                                        "_group": "evapotranspiration_m_per_hour",
+                                        # the land unit with the tower's land cover in the
+                                        # tower's cell (the point itself can be a road)
+                                        "function": f"sample_lonlat_landcover,{station_info['geometry'].x},{station_info['geometry'].y},{station_info['igbp']}",
+                                        "_group": f"meteorological_station_{variable}",
                                         "_group_key": str(station_ID),
-                                    },
-                                }
-                                self.variables_to_report = multi_level_merge(
-                                    self.variables_to_report,
-                                    {"hydrology.landsurface": station_reporters},
-                                )
+                                    }
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
+                                {"hydrology.landsurface": station_reporters},
+                            )
+                    elif module_name == "_groundwater_wells":
+                        if module_values is True:
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
+                                {
+                                    "hydrology.groundwater": self.get_groundwater_well_reporters()
+                                },
+                            )
                     elif module_name == "_water_circle":
                         if module_values is True:
                             self.variables_to_report = multi_level_merge(
@@ -1202,6 +1250,22 @@ class Reporter:
                                         "day": 1,
                                     },
                                     "_group": "bankfull_width_rivers_yearly_m",
+                                    "_group_key": str(river_ID_int),
+                                }
+                                bankfull_reporters[
+                                    f"levee_depth_river_yearly_m_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": (
+                                        f"sample_loc,{river_ID_int},levee_depth"
+                                    ),
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "levee_depth_rivers_yearly_m",
                                     "_group_key": str(river_ID_int),
                                 }
                                 for k in range(10):
@@ -1437,6 +1501,101 @@ class Reporter:
 
         config["_index"] += substeps
 
+    def get_groundwater_well_reporters(self) -> dict[str, dict[str, Any]]:
+        """Reporters for the groundwater head at observation wells.
+
+        Wells are reported when they lie in an active grid cell and have at least
+        MIN_GROUNDWATER_WELL_MONTHS monthly observations (outliers and change points
+        excluded) within the simulation period. The head of the top layer of the
+        cell is reported daily, in m above sea level, one column per well.
+
+        Returns:
+            Reporter configurations for the hydrology.groundwater module.
+        """
+        wells: gpd.GeoDataFrame = read_geom(
+            self.model.files["geom"]["observations/groundwater_well_locations"]
+        )
+        timeseries: pd.DataFrame = read_table(
+            self.model.files["table"]["observations/groundwater_well_timeseries"]
+        )
+        dates = pd.to_datetime(timeseries["date"])
+        in_period = (
+            (dates >= pd.Timestamp(self.model.simulation_start))
+            & (dates <= pd.Timestamp(self.model.simulation_end))
+            & ~timeseries["outliers_change_points"].astype(bool)
+            & timeseries["groundwater_depth_from_ground_elevation_m"].notna()
+        )
+        n_months: pd.Series = timeseries[in_period].groupby("GROW_ID").size()
+        selected = n_months.index[n_months >= MIN_GROUNDWATER_WELL_MONTHS]
+
+        grid = self.model.hydrology.grid
+        reporters: dict[str, dict[str, Any]] = {}
+        for well_ID in selected:
+            if well_ID not in wells.index:
+                continue
+            geometry = wells.geometry[well_ID]
+            px, py = coord_to_pixel((geometry.x, geometry.y), grid.gt)
+            if not (
+                0 <= py < grid.linear_mapping.shape[0]
+                and 0 <= px < grid.linear_mapping.shape[1]
+            ):
+                continue
+            if grid.linear_mapping[py, px] == -1:
+                continue
+            reporters[f"groundwater_well_head_m_{well_ID}"] = {
+                "varname": ".groundwater_head_top_layer_m",
+                "type": "grid",
+                "function": f"sample_lonlat,{geometry.x},{geometry.y}",
+                "_group": "groundwater_well_head_m",
+                "_group_key": str(well_ID),
+            }
+        self.model.logger.info(
+            f"Reporting groundwater head at {len(reporters)} observation wells."
+        )
+        return reporters
+
+    def _hru_index_by_landcover(self, lon: float, lat: float, igbp: str) -> int:
+        """Land unit (HRU) with a given IGBP land cover in the grid cell of a point.
+
+        An eddy covariance tower measures the vegetation around it, while the subgrid
+        pixel under the tower can be a road, building or water. Forest classes match
+        forest HRUs, croplands match farm fields (whether or not a crop stands on
+        them when the run starts), all other classes match grassland-like HRUs that
+        are not farm fields. The largest matching HRU in the cell is used; when the
+        cell has none, the HRU under the point.
+
+        Args:
+            lon: Longitude of the point.
+            lat: Latitude of the point.
+            igbp: IGBP land cover class of the tower (e.g. ``GRA``, ``CRO``, ``DBF``).
+
+        Returns:
+            Index of the HRU.
+
+        Raises:
+            IndexError: If the point lies outside the model domain.
+        """
+        grid = self.model.hydrology.grid
+        HRU = self.hydrology.HRU
+        px, py = coord_to_pixel((lon, lat), grid.gt)
+        cell: int = int(grid.linear_mapping[py, px])
+        if cell == -1:
+            raise IndexError(f"Point ({lon}, {lat}) is outside the model domain.")
+        hrus = np.where(HRU.var.HRU_to_grid == cell)[0]
+        land_use = HRU.var.land_use_type[hrus]
+        is_farm_field = HRU.var.land_owners[hrus] != -1
+        if igbp in ("ENF", "EBF", "DNF", "DBF", "MF"):
+            match = land_use == FOREST
+        elif igbp == "CRO":
+            match = is_farm_field
+        else:
+            match = (land_use == GRASSLAND_LIKE) & ~is_farm_field
+        if match.any():
+            candidates = hrus[match]
+            return int(candidates[np.argmax(HRU.var.cell_area[candidates])])
+        hru_px, hru_py = coord_to_pixel((lon, lat), HRU.gt)
+        return int(HRU.linear_mapping[hru_py, hru_px])
+
     def _apply_grid_hru_function(
         self,
         module_name: str,
@@ -1517,6 +1676,12 @@ class Reporter:
 
             # extract the value at that index
             return value[..., idx]
+        elif function == "sample_lonlat_landcover":
+            if "_hru_index" not in config:
+                config["_hru_index"] = self._hru_index_by_landcover(
+                    float(args[0]), float(args[1]), args[2]
+                )
+            return value[..., config["_hru_index"]]
         elif function in (
             "weightedmean",
             "weightednanmean",

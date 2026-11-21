@@ -26,14 +26,14 @@ You can override the defaults in your build configuration. Each DEM entry accept
 | `path` | for custom DEMs | Filesystem path to your DEM (required if `name` is not built-in). |
 | `zmin` | no | Minimum elevation to keep (values below become `NaN`). |
 | `zmax` | no | Maximum elevation to keep (values above become `NaN`). |
-| `zmin_coastal` | no | Minimum elevation to keep for coastal cells (values below become `NaN`). |
-| `zmax_coastal` | no | Maximum elevation to keep for coastal cells (values above become `NaN`). |
+| `zmin_coastal` | no | Used as `zmin` in models with coastal subbasins, where the coastal DEMs fill the sea below it. Not used in other models. |
+| `zmax_coastal` | no | Used as `zmax` in models with coastal subbasins. Not used in other models. |
 | `fill_depressions` | no | Whether to fill depressions before storing the DEM. |
 | `nodata` | no | Nodata value if the file does not define one. |
 | `crs` | no | CRS to set for custom DEMs when the file does not define one (EPSG code or CRS string). |
 | `coastal_only` | no | Skip this DEM when there are no coastal subbasins. |
 
-Use `zmin_coastal` and `zmax_coastal` when you want different cutoffs for coastal cells than for inland cells. If you do not set them, `zmin`/`zmax` are used everywhere.
+Use `zmin_coastal` and `zmax_coastal` for cutoffs that only make sense when coastal DEMs fill the sea, such as removing the sea surface from FathomDEM. In a model without coastal subbasins they are not used, so land below sea level (polders, open-pit mines) keeps its elevation. `zmin`/`zmax` are used in every model.
 
 ### Custom DEM requirements
 

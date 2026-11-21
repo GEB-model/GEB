@@ -6,11 +6,12 @@ import numba as nb
 import numpy as np
 
 from geb.geb_types import TwoDArrayUint32, TwoDArrayUint64
+from geb.numba_config import NUMBA_CACHE
 
 from . import geohash
 
 
-@nb.njit(cache=True)
+@nb.njit(cache=NUMBA_CACHE)
 def find_neighbor_search_count_index(
     search_counts: np.ndarray, search_count_index: int, r: int
 ) -> int:
@@ -34,7 +35,7 @@ def find_neighbor_search_count_index(
     return neighbor_search_counts_index
 
 
-@nb.njit(parallel=True, locals={"r": nb.uint32}, cache=True)
+@nb.njit(parallel=True, locals={"r": nb.uint32}, cache=NUMBA_CACHE)
 def find_neighbors_numba(
     search_target_unique_hashcodes: np.ndarray,
     search_source_unique_hashcodes: np.ndarray,

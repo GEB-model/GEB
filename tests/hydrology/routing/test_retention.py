@@ -127,11 +127,13 @@ def _make_local_inertial(
         retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
         bankfull_river_elevation_m=bankfull_river_elevation_m,
         manning_n=manning_n,
+        floodplain_manning_n=manning_n,
         use_kinematic=use_kinematic,
         rivers_gdf=rivers_gdf,
         min_slope=min_slope,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
+        levee_depth_m=bankfull_depth_m,
         floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
         floodplain_profile_widths_m=np.zeros((n_cells, 10), dtype=np.float32),
         waterbody_lake_area=waterbody_lake_area,
@@ -140,6 +142,10 @@ def _make_local_inertial(
         waterbody_outflow_bed_elev=waterbody_outflow_bed_elev,
         river_storage_alpha=river_storage_alpha,
         river_storage_beta=river_storage_beta,
+        stream_width_m=np.zeros_like(river_storage_beta),
+        stream_bankfull_depth_m=np.full_like(river_storage_beta, np.inf),
+        stream_floodplain_width_m=np.zeros_like(river_storage_beta),
+        stream_floodplain_conveyance=np.zeros_like(river_storage_beta),
         in_spinup=True,
     )
     router.initialize_stage(
@@ -249,6 +255,8 @@ def _run_retention_step(
         retention_storage_out,
         retention_inflow,
         retention_outflow,
+        _,
+        _,
     ) = router.step(
         Q_prev_m3_s=Q_prev,
         river_storage_m3=river_storage,
@@ -438,7 +446,7 @@ def test_retention_basin_evaporation_logic() -> None:
     """Test the calculation logic for retention basin evaporation."""
     retention_max_storage_m3 = np.array([300.0, 600.0], dtype=np.float32)
     retention_basin_ids = np.array([0, 0, 1, -1], dtype=np.int32)
-    reference_evapotranspiration_water_m_hour = np.array(
+    potential_open_water_evaporation_m_hour = np.array(
         [0.01, 0.02, 0.03, 0.04], dtype=np.float32
     )
     retention_basin_storage_m3 = np.array([100.0, 50.0], dtype=np.float32)
@@ -451,7 +459,7 @@ def test_retention_basin_evaporation_logic() -> None:
 
     et_sum = np.bincount(
         retention_basin_ids[retention_mask],
-        weights=reference_evapotranspiration_water_m_hour[retention_mask],
+        weights=potential_open_water_evaporation_m_hour[retention_mask],
         minlength=len(retention_basin_area),
     )
 
@@ -605,3 +613,92 @@ def test_inertial_retention_release_falling_vs_rising_limb() -> None:
     assert outflow_rising[0] == pytest.approx(0.0)
     assert storage_rising[0] == pytest.approx(initial_storage)
     assert inflow_rising[0] == pytest.approx(0.0)
+
+
+def test_retention_basin_evaporation_uses_mean_reference_et() -> None:
+    """Basin evaporation is the mean cell reference ET times the basin area, not summed per cell."""
+    from geb.hydrology.routing import _compute_retention_basin_evaporation
+
+    potential_evaporation_m = np.array([0.001, 0.003, 0.002, 0.0], dtype=np.float32)
+    cell_indices = np.array([0, 1, 2], dtype=np.int32)
+    cell_basin_ids = np.array([0, 0, 1], dtype=np.int32)
+    cell_counts = np.array([2, 1], dtype=np.int32)
+    area = np.array([1000.0, 500.0], dtype=np.float32)
+    storage = np.array([100.0, 0.5], dtype=np.float32)
+    pot_buf = np.zeros(2, dtype=np.float32)
+    act_buf = np.zeros(2, dtype=np.float32)
+
+    _compute_retention_basin_evaporation(
+        retention_cell_indices=cell_indices,
+        retention_cell_basin_ids=cell_basin_ids,
+        retention_basin_cell_counts=cell_counts,
+        retention_basin_area=area,
+        potential_evaporation_m=potential_evaporation_m,
+        retention_storage=storage,
+        pot_evap_buf=pot_buf,
+        act_evap_buf=act_buf,
+    )
+
+    # Basin 0: mean ET 0.002 m over 1000 m² -> 2 m³.
+    np.testing.assert_allclose(act_buf[0], 2.0, rtol=1e-6)
+    np.testing.assert_allclose(storage[0], 98.0, rtol=1e-6)
+    # Basin 1: potential 1 m³ limited by 0.5 m³ storage.
+    np.testing.assert_allclose(act_buf[1], 0.5, rtol=1e-6)
+    np.testing.assert_allclose(storage[1], 0.0, atol=1e-7)
+
+
+def test_inertial_retention_diversion_conserves_mass() -> None:
+    """Diverting into a retention basin in an inertial reach does not create water."""
+    dt: int = 3600
+    n_cells: int = 2
+
+    ldd: np.ndarray = np.array([[2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((2, 1), dtype=bool)
+    river_network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+
+    router: LocalInertial = _make_local_inertial(
+        dt=dt,
+        river_network=river_network,
+        river_length=np.full(n_cells, 500.0, dtype=np.float32),
+        river_width=np.full(n_cells, 20.0, dtype=np.float32),
+        bankfull_river_elevation_m=np.array([10.0, 9.0], dtype=np.float32),
+        waterbody_ids=np.full(n_cells, -1, dtype=np.int32),
+        is_waterbody_outflow=np.zeros(n_cells, dtype=bool),
+        retention_max_storage_m3=np.array([1e7], dtype=np.float32),
+        retention_node_id=np.array([-1, 0], dtype=np.int32),
+        controlled_retention=np.array([False], dtype=bool),
+        retention_basin_release_threshold_factor=0.5,
+        use_kinematic=np.zeros(n_cells, dtype=bool),
+    )
+
+    # Large lateral inflow into empty reaches on a rising limb: the intake diverts.
+    sideflow: np.ndarray = np.array([20.0 * dt, 20.0 * dt], dtype=np.float32)
+    initial_storage: np.ndarray = np.array([100.0, 100.0], dtype=np.float64)
+    res = router.step(
+        Q_prev_m3_s=np.zeros(2, dtype=np.float32),
+        river_storage_m3=initial_storage.copy(),
+        sideflow_m3=sideflow,
+        evaporation_m3=np.zeros(2, dtype=np.float32),
+        transmission_loss_m3=np.zeros(2, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(1, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.array([1.0], dtype=np.float32),
+    )
+    river_storage: np.ndarray = res[1]
+    outflow_at_pits: float = float(res[7])
+    retention_inflow: np.ndarray = res[9]
+    retention_outflow: np.ndarray = res[10]
+
+    assert retention_inflow[0] > 0.0
+    assert (river_storage >= 0.0).all()
+    water_in = float(initial_storage.sum() + sideflow.sum())
+    water_out = (
+        float(river_storage.sum())
+        + outflow_at_pits
+        + float(retention_inflow[0])
+        - float(retention_outflow[0])
+    )
+    assert water_out == pytest.approx(water_in, rel=1e-4)

@@ -13,6 +13,25 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b39": [
+        "[manual] Fully replace your model config with the new format as shown in the examples (geb/reasonable_default_config.yml lists every key). Define the study region in a separate 'region.yml' instead of 'model.yml'. The flood protection rule is now set in model.yml (hydrology.routing.flood_protection) instead of in setup_flood_protection_standards.",
+        "[manual] New build methods: add them to custom build.yml files unless inherited from reasonable_default_build.yml: setup_grid_elevation (directly after setup_elevation), setup_elevation_zones (after setup_regions_and_land_use) and setup_river_surface_profiles (after setup_waterbodies).",
+        "[update-method;setup_elevation]",
+        "[update-method;setup_grid_elevation]",
+        "[update-method;setup_floodplains]",
+        "[update-method;setup_elevation_zones]",
+        "[update-method;setup_geomorphology]",
+        "[update-method;setup_soil]",
+        "[update-method;setup_vegetation]",
+        "[update-method;setup_waterbodies]",
+        "[update-method;setup_river_surface_profiles]",
+        "[update-method;setup_retention_basins]",
+        "[update-method;setup_groundwater]",
+        "[update-method;setup_crops]",
+        "[update-method;setup_meteorological_stations_observations]",
+        "[update-method;setup_flood_protection_standards]",
+        "[manual] Rerun spinup and simulation.",
+    ],
     "1.0.0b38": [
         "[update-method;setup_hydrography]",
         "[update-method;setup_floodplains]",
