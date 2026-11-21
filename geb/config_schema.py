@@ -764,6 +764,11 @@ class HouseholdsConfig(BaseModel):
         ge=0.0,
         description="Dimensionless scaling factor for riverine and coastal amenity values.",
     )
+    loan_rate: float = Field(
+        0.03,
+        ge=0.0,
+        description="Household loan rate [1/100].",
+    )
     adapt_to_actual_floods: bool = Field(
         ...,
         description="Whether households adapt their houses based on actual floods experienced.",

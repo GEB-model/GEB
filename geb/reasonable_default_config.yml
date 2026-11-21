@@ -146,6 +146,7 @@ agents:
     adaptation_cost_scaler: 1
     income_currency_conversion: 1.11
     ammenity_value_scaling_factor: 0.254820579
+    loan_rate: 0.03
     climrisk_socioeconomic_scenarios:
       project_values: false
       country_wide: false

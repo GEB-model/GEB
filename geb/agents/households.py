@@ -1154,7 +1154,7 @@ class Households(AgentBaseClass):
                 loan_duration=20,
                 p_floods=1 / self.return_periods,
                 T=15,
-                r=0.03,
+                r=self.config["loan_rate"],  # loan rate
                 sigma=1,
                 GDP_i_t=GDP_i_t,  # scaled by change in gdp from base to current year
             )
@@ -1173,7 +1173,7 @@ class Households(AgentBaseClass):
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
             T=15,
-            r=0.03,
+            r=self.config["loan_rate"],  # loan rate
             sigma=1,
             GDP_i_t=GDP_i_t,  # scaled by change in gdp from base to current year
         )
@@ -1205,7 +1205,7 @@ class Households(AgentBaseClass):
                 * GDP_i_t  # scaled by change in gdp from base to current year
                 * self.var.adaptation_cost_scaler,  # Scaling to local costs
                 T=15,
-                r=0.03,
+                r=self.config["loan_rate"],  # loan rate
                 sigma=1,
                 GDP_i_t=GDP_i_t,  # scaled by change in gdp from base to current year
             )
