@@ -416,7 +416,9 @@ def run_yearly(
         args: dict[str, Any] = base_method_args.copy()
         args["model_name"] = f"{prefix}run_{run_id}"
         wd = kwargs["working_directory"]
-        output_path_agents = wd / "output" / args["model_name"] / "report" / "agents.households"
+        output_path_agents = (
+            wd / "output" / args["model_name"] / "report" / "agents.households"
+        )
         output_path_government = (
             wd / "output" / args["model_name"] / "report" / "agents.government"
         )

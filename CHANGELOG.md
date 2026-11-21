@@ -1,7 +1,7 @@
 # dev
 
 # v1.0.0b39
-- Configuration (breaking, update custom `model.yml` files): Run settings sit at the top level, `agent_settings` is now `agents`, and the former `parameters` section is split over `hydrology` and `agents`. Unknown keys are rejected. The region moved to a separate `region.yml`. `geb run --with section.key=value` changes a setting for one run.
+- Configuration (breaking, update custom `model.yml` files): Run settings sit at the top level, `agents` is now `agents`, and the former `parameters` section is split over `hydrology` and `agents`. Unknown keys are rejected. The region moved to a separate `region.yml`. `geb run --with section.key=value` changes a setting for one run.
 - Land surface: More physical soil (stones, a weathered-rock layer below 2 m, thinner soil on steep slopes), infiltration (crusting, macropores, frozen soil), saturated area and interflow, FAO-56 dual crop coefficient evapotranspiration, improved snow, and up to three elevation zones per cell. The kernel runs considerably faster.
 - Land surface: Interflow and the saturated area follow from one hillslope store (Sloan and Moore, 1984). Macropore infiltration follows clay content, bulk density and land use (Jarvis et al., 2013), replacing `macropore_infiltration_capacity_mm_per_h` (remove it from custom `model.yml` files). The bulk density of the forest topsoil follows its organic matter (Adams, 1973).
 - Groundwater: Groundwater drains to the river every routing hour, replacing the MODFLOW river drain. Conductivity decreases with depth, and heads are reported at observation wells.
@@ -121,9 +121,9 @@
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
 - Improved the setup for `critical_infrastructure_warning_strategy`, which now depends on asset type instead of strategy id.
 - Added the option to download and process hindcasts using the MARS API. For that, `setup_forecasts` has additional arguments: forecast_product, hindcast_cycle_start, hindcast_cycle_end and n_hindcast_years.
-- Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agent_settings.government.adaptation.mode: cba` in the model config.
+- Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agents.government.adaptation.mode: cba` in the model config.
 - Added `geb evaluate hydrodynamics.animate_flood` to render 2D flood-depth animations from SFINCS outputs. To enable per-timestep maps, set `hazards.floods.flood_map_output_interval_seconds` (e.g., `3600` for hourly) and rerun the model; then run `geb evaluate hydrodynamics.animate_flood --run-name default` (see `--help` for options).
-- Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agent_settings.government.adaptation.mode: cba` in the model config.
+- Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agents.government.adaptation.mode: cba` in the model config.
 - Added `geb evaluate hydrodynamics.animate_flood` to render 2D flood-depth animations from SFINCS outputs. To enable per-timestep maps, set `hazards.floods.flood_map_output_interval_seconds` (e.g., `3600` for hourly) and rerun the model; then run `geb evaluate hydrodynamics.animate_flood --run-name default` (see `--help` for options).
 - Added `setup_flood_protection_standards` build method to process FLOPROS flood protection standards. Subsequently these flood protection standards are used to initialize the flood protection standards for each subbasin in the model domain.
 
@@ -303,7 +303,7 @@ Important notes:
 - Fix bugs in DeltaDTM: 1) tiles were not found as a buffer was not present around the coastal mask 2) for large coastal regions, the tiles were deleted, solving [[#783](https://github.com/GEB-model/GEB/issues/783)]
 - Different updates to Global Exposure model (GEM), most importantly a detailed mapping of name changes between GEM and GADM 
 - Fix bug where `insurance_active` tuple was always truthy; insurance check now uses `any(insurance_active)` in crop farmers (https://github.com/GEB-model/GEB/issues/790).
-- Fix wrong config key in `livestock_farmers.py`: was reading from `agent_settings.town_managers` instead of `agent_settings.livestock_farmers`. Since no config was actually used, this didn't have an effect on the model run.
+- Fix wrong config key in `livestock_farmers.py`: was reading from `agents.town_managers` instead of `agents.livestock_farmers`. Since no config was actually used, this didn't have an effect on the model run.
 - Fix accounting bug in `get_current_storage()` where topwater was counted twice.
 - Replace `efficiency` [0–1] with explicit `return_flow` (m/day) in industry and livestock agents. The `to_grid` conversion for industry and livestock water demand is now performed inside `update_water_demand()`, so both agents return grid-scale arrays directly.
 - Speed up `to_grid` by parallelizing and simplifying because only weightedmean was used.
@@ -331,7 +331,7 @@ The following should be run automatically with `geb update-version`, but if you 
 - Remove old data catalog entirely, and all references to it. Rename NewDataCatalog to DataCatalog.
 - Fix reforestation water balance flux, option 1 route excess to topwater, option 2 source from topwater. This depends on how soil behaves at first time step when forests are planted.
 - Add incremental reforestation: set `plant_forest.increment_fraction` (0–1) to plant a fraction of suitable HRUs per call, ranked by restoration potential. Auto-advances each call by skipping already-forested HRUs.
-- Add government adaptation pathway: set `agent_settings.government.adaptation.enabled: true` to trigger annual flood, equity, and ecosystem adaptation measures on January 1st based on configurable thresholds.
+- Add government adaptation pathway: set `agents.government.adaptation.enabled: true` to trigger annual flood, equity, and ecosystem adaptation measures on January 1st based on configurable thresholds.
 - Optimize GTSM data catalog, now pre-processing to zarr files.
 - Improve CLI help so `geb evaluate --help` list the available evaluation methods.
 - Fix issue in the enthalpy calculations. Previously there would be 0 infiltration even when only part of the soil was frozen. In addition, rainfall that didn't infiltrate never warmed the soil (if soil is colder..) which led to situations with too much frozen soil, too much runoff and too much discharge in winters.

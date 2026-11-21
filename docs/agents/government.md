@@ -2,7 +2,7 @@
 
 The government agent represents public institutions. Rather than making decisions at the individual level, the government acts at the system level: it sets the rules, constraints, and landscape configurations that others must work within.
 
-In GEB, currently the government module is optional. It is activated by including a `government` section under `agent_settings` in the model configuration. When absent, no government-level interventions are applied and the model runs without top-down policy or land-use changes.
+In GEB, currently the government module is optional. It is activated by including a `government` section under `agents` in the model configuration. When absent, no government-level interventions are applied and the model runs without top-down policy or land-use changes.
 
 The government currently acts in two broad areas: **adaptation** — modifying the physical landscape to improve resilience or ecosystem function — and **policy** — regulating how other agents access and use resources.
 
@@ -26,14 +26,14 @@ The threshold defaults to `0.5` and can be adjusted in the configuration. Both o
 
 ```yaml
 # Simple: enable reforestation with the default threshold (0.5)
-agent_settings:
+agents:
   government:
     plant_forest: true
 ```
 
 ```yaml
 # Advanced: enable reforestation with a custom threshold
-agent_settings:
+agents:
   government:
     plant_forest:
       forest_restoration_potential_threshold: 0.8  # range 0–1
@@ -41,7 +41,7 @@ agent_settings:
 
 ```yaml
 # Incremental: plant 10% of suitable area per year, ranked by potential (highest first)
-agent_settings:
+agents:
   government:
     plant_forest:
       forest_restoration_potential_threshold: 0.5
@@ -192,7 +192,7 @@ This mechanism is part of the adaptation pathway and is activated with `adaptati
 In the final year of the simulation the resulting standards are exported to `flood_protection_standards.parquet` in the output folder, with one row per subbasin (`COMID`) and its `flood_protection_standard` (years).
 
 ```yaml
-agent_settings:
+agents:
   government:
     adaptation:
       enabled: true

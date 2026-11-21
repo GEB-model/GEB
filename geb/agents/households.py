@@ -240,9 +240,7 @@ class Households(AgentBaseClass):
         # convert income to USD
         income = (
             income
-            / self.model.config["agent_settings"]["households"][
-                "income_currency_conversion"
-            ]
+            / self.model.config["agents"]["households"]["income_currency_conversion"]
         )
         self.var.income = DynamicArray(income, max_n=self.max_n)
 
@@ -508,9 +506,9 @@ class Households(AgentBaseClass):
         self.assign_income_category(self.var.income)
 
         # Load adaptation and relocation cost scaler
-        self.var.adaptation_cost_scaler = self.model.config["agent_settings"][
-            "households"
-        ]["adaptation_cost_scaler"]
+        self.var.adaptation_cost_scaler = self.model.config["agents"]["households"][
+            "adaptation_cost_scaler"
+        ]
 
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
         adaptation_costs = np.full(
@@ -1117,12 +1115,12 @@ class Households(AgentBaseClass):
         damages_do_not_adapt, damages_adapt = (
             self.flood_risk_module.calculate_building_flood_damages(
                 dynamic=False,
-                export_building_damages=self.model.config["agent_settings"][
-                    "households"
-                ]["export_building_damages"],
-                export_building_damages_years=self.model.config["agent_settings"][
-                    "households"
-                ]["export_building_damages_years"],
+                export_building_damages=self.model.config["agents"]["households"][
+                    "export_building_damages"
+                ],
+                export_building_damages_years=self.model.config["agents"]["households"][
+                    "export_building_damages_years"
+                ],
             )
         )
 
@@ -1577,12 +1575,12 @@ class Households(AgentBaseClass):
             TypeError: If ``country_wide`` is not a boolean.
         """
         try:
-            country_wide = self.model.config["agent_settings"]["households"][
+            country_wide = self.model.config["agents"]["households"][
                 "climrisk_socioeconomic_scenarios"
             ]["country_wide"]
         except (KeyError, TypeError) as exc:
             raise ValueError(
-                "Missing required configuration section: 'agent_settings.households.climrisk_socioeconomic_scenarios.country_wide'."
+                "Missing required configuration section: 'agents.households.climrisk_socioeconomic_scenarios.country_wide'."
             ) from exc
         if not isinstance(country_wide, bool):
             raise TypeError(

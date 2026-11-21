@@ -42,7 +42,7 @@ class Government(AgentBaseClass):
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
         self._dike_investment_costs_USD = 0.0
         # Year in which to start modeling adaptation behaviour
-        self.start_adaptation_year = self.model.config["agent_settings"][
+        self.start_adaptation_year = self.model.config["agents"][
             "start_adaptation_year"
         ]
 

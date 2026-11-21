@@ -39,7 +39,7 @@ def test_reasonable_default_config_validates() -> None:
     assert validated.loglevel == "DEBUG"
     assert "parameters" not in data
     assert "general" not in data
-    assert "agent_settings" not in data
+    assert "agents" not in data
     assert "logging" not in data
 
 

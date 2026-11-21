@@ -22,8 +22,8 @@ class DecisionModule:
         """
         self.model = model
         self.config = (
-            self.model.config["agent_settings"]["households"]
-            if "households" in self.model.config["agent_settings"]
+            self.model.config["agents"]["households"]
+            if "households" in self.model.config["agents"]
             else {}
         )
 

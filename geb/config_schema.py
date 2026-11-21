@@ -1004,6 +1004,7 @@ class ReservoirOperatorsConfig(BaseModel):
         ..., ge=0.0, description="Reservoir release factor."
     )
 
+
 class SensitivityAnalysisConfig(BaseModel):
     """Configuration for sensitivity analysis."""
 
@@ -1014,6 +1015,7 @@ class SensitivityAnalysisConfig(BaseModel):
     drought_threshold_factor: float = Field(
         1.0, description="Drought threshold factor."
     )
+
 
 class ClimRiskConfig(BaseModel):
     """Configuration for ClimRisk socioeconomic projections."""

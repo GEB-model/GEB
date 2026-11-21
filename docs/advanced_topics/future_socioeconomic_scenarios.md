@@ -62,7 +62,7 @@ GEB will look for the Climrisk data within the local cache of your model, so mak
 
 ## Run Configuration
 
-Configuration for running the model data with socioeconomic scenarios is specified in the `config.yml` file under the `climrisk_socioeconomic_scenarios` field, which is itself under the `agent_settings.households` field. Only a single combination of parameters can be used per run. For further guidance, look at the `reasonable_default_config.yml` file.
+Configuration for running the model data with socioeconomic scenarios is specified in the `config.yml` file under the `climrisk_socioeconomic_scenarios` field, which is itself under the `agents.households` field. Only a single combination of parameters can be used per run. For further guidance, look at the `reasonable_default_config.yml` file.
 
 ### Configuration Parameters
 

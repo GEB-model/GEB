@@ -115,7 +115,7 @@ def decision_module() -> DecisionModule:
     """
     model = SimpleNamespace(
         config={
-            "agent_settings": {
+            "agents": {
                 "households": {
                     "ammenity_value_scaling_factor": 0.254820579,
                 }
@@ -444,7 +444,7 @@ def test_update_monetary_variables_projects_values_from_household_config(
         current_time=datetime(2021, 1, 1),
         logger=logging.getLogger("test"),
         config={
-            "agent_settings": {
+            "agents": {
                 "households": {
                     "climrisk_socioeconomic_scenarios": {
                         "project_values": True,
@@ -476,10 +476,10 @@ def test_update_monetary_variables_projects_values_from_household_config(
 def test_update_monetary_variables_requires_climrisk_config() -> None:
     """Raise a clear error when the household CLIMRISK configuration is absent."""
     households = Households.__new__(Households)
-    households.model = SimpleNamespace(config={"agent_settings": {"households": {}}})
+    households.model = SimpleNamespace(config={"agents": {"households": {}}})
 
     with pytest.raises(
         ValueError,
-        match="agent_settings.households.climrisk_socioeconomic_scenarios.country_wide",
+        match="agents.households.climrisk_socioeconomic_scenarios.country_wide",
     ):
         households.update_monetary_variables_to_ssp()
