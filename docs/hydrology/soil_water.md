@@ -1,6 +1,6 @@
 # Soil Water
 
-The soil module has 6 soil layers, following the convention of the SoilGrids database[@poggio2021soilgrids].
+The soil module has 6 soil layers, following the convention of the SoilGrids database [@poggio2021soilgrids].
 
 | Layer | Depth  |
 |-------|--------|
@@ -29,25 +29,25 @@ Based on the basic soil properties (sand, clay, silt, organic carbon, bulk densi
 
 | Parameter | Symbol | Source / Method |
 |-----------|--------|-----------------|
-| Saturated water content | $\theta_s$ | Toth et al. (2015)[@toth2015new] |
-| Residual water content | $\theta_r$ | Brakensiek et al. (1984)[@rawls1989estimation] |
-| Saturated hydraulic conductivity | $K_{sat}$ | Wösten et al. (1999)[@wosten1999development] |
-| Bubbling pressure | $h_b$ | Rawls and Brakensiek (1989)[@rawls1989estimation] |
-| Pore size distribution index | $\lambda$ | Rawls and Brakensiek (1989)[@rawls1989estimation] |
+| Saturated water content | $\theta_s$ | @toth2015new |
+| Residual water content | $\theta_r$ | Brakensiek et al. (1984) in @rawls1989estimation |
+| Saturated hydraulic conductivity | $K_{sat}$ | @wosten1999development |
+| Bubbling pressure | $h_b$ | @rawls1989estimation |
+| Pore size distribution index | $\lambda$ | @rawls1989estimation |
 
 Field capacity ($\theta_{fc}$ at pF 2.0) and wilting point ($\theta_{wp}$ at pF 4.2) are subsequently calculated from the soil water retention curve defined by these parameters. The top 30cm of the soil is considered topsoil, following the FAO Harmonic World Soil Database conventions.
 
 ## Infiltration and surface runoff
 
-We implement an infiltration scheme based on the Green-Ampt equation[@green1911studies], solving for infiltration capacity physically based on soil properties and moisture deficit.
+We implement an infiltration scheme based on the Green-Ampt equation [@green1911studies], solving for infiltration capacity physically based on soil properties and moisture deficit.
 
-The Green-Ampt method[@green1911studies] conceptualizes infiltration as a sharp wetting front moving downwards through the soil column. As rain falls, a saturated zone develops at the surface and extends to a depth $L$, known as the *wetting front*. Above this front, the soil is assumed to be fully saturated, while below it, the soil remains at its initial moisture content ($\theta_i$). The difference between saturation and the initial moisture is the moisture deficit $\Delta \theta$.
+The Green-Ampt method [@green1911studies] conceptualizes infiltration as a sharp wetting front moving downwards through the soil column. As rain falls, a saturated zone develops at the surface and extends to a depth $L$, known as the *wetting front*. Above this front, the soil is assumed to be fully saturated, while below it, the soil remains at its initial moisture content ($\theta_i$). The difference between saturation and the initial moisture is the moisture deficit $\Delta \theta$.
 
 ![Green Ampt infiltration scheme](../images/green-ampt.png)
 
 The driving force for water movement is a combination of gravity and the matric suction (capillary forces) at the wetting front. Initially, when the wetting front is shallow, the suction gradient is high, leading to rapid infiltration. As the front moves deeper (increasing $L$), the suction gradient decreases, and the infiltration rate asymptotically approaches the saturated hydraulic conductivity ($K_{sat}$). If rainfall intensity exceeds this capacity, the excess water generates surface runoff.
 
-The model determines the maximum infiltration capacity ($f_{cap}$) for the current timestep using the explicit Green-Ampt approximation[@sadeghi2024simple]. This avoids the need for iterative solutions or sub-stepping typically required for the implicit Green-Ampt formulation.
+The model determines the maximum infiltration capacity ($f_{cap}$) for the current timestep using the explicit Green-Ampt approximation [@sadeghi2024simple]. This avoids the need for iterative solutions or sub-stepping typically required for the implicit Green-Ampt formulation.
 
 The cumulative infiltration $I(t)$ is calculated as:
 
@@ -56,7 +56,7 @@ $$ I(t) = K_{sat} t \left( 0.70635 + 0.32415 \sqrt{1 + 9.43456 \frac{S^2}{K_{sat
 Where:
 * $I(t)$ is the cumulative infiltration [$L$].
 * $K_{sat}$ is the saturated hydraulic conductivity [$L/T$].
-* $S^2 = 2 K_{sat} \psi_f \Delta \theta$ is the square of sorptivity [$L^2/T$][@philip1969theory].
+* $S^2 = 2 K_{sat} \psi_f \Delta \theta$ is the square of sorptivity [$L^2/T$] [@philip1969theory].
 * $\psi_f$ is the wetting front suction head [$L$].
 * $\Delta \theta$ is the moisture deficit [$ - $].
 * $t$ is the time since the start of the infiltration event [$T$].
@@ -69,7 +69,7 @@ $$f_{cap} = I(t_{eff} + \Delta t) - I(t_{eff})$$
 
 In hydrological modeling, assuming a uniform infiltration capacity and uniform rainfall across a grid cell often leads to an underestimation of surface runoff. Even when the average rainfall intensity is lower than the average infiltration capacity, localized areas within the cell may still generate runoff, for example due to spatial heterogeneity in soil properties (e.g., compaction, crusting), variations in vegetation cover, or sub-grid rainfall variability.
 
-To address this, we use the **Probability Distributed Model (PDM)** principle described by Moore (1985)[@moore1985probability]. Instead of a single value, the infiltration capacity within a cell is assumed to follow a spatial probability distribution, specifically a Reflected Power (or Power-Law) distribution, controlled by a shape parameter beta ($\beta$).
+To address this, we use the **Probability Distributed Model (PDM)** principle described by @moore1985probability. Instead of a single value, the infiltration capacity within a cell is assumed to follow a spatial probability distribution, specifically a Reflected Power (or Power-Law) distribution, controlled by a shape parameter beta ($\beta$).
 
 ![Spatial Variability of Infiltration](../images/spatial_infiltration_curve.svg)
 
@@ -97,7 +97,7 @@ Any water that does not infiltrate contributes to surface runoff.
 
 ## Vertical flow
 
-Redistribution of water between soil layers uses a finite volume solution to the Richards equation[@richards1931capillary]. The flux $q$ between two layers is calculated using Darcy's Law[@darcy1856fontaines]:
+Redistribution of water between soil layers uses a finite volume solution to the Richards equation [@richards1931capillary]. The flux $q$ between two layers is calculated using Darcy's Law [@darcy1856fontaines]:
 
 $$
 q = -K(\theta) \left( \frac{\partial \psi}{\partial z} - 1 \right)
@@ -137,7 +137,7 @@ Interflow, or lateral subsurface flow, is the movement of water within the soil 
 
 ### Kinematic Wave Approximation
 
-The interflow calculation conceptualizes the hillslope as a draining reservoir. The rate of drainage is determined by the **kinematic wave approximation** for saturated subsurface flow[@sloan1984modeling]. This approach assumes that the hydraulic gradient is approximately equal to the land surface slope and that flow lines are parallel to the soil-bedrock interface.
+The interflow calculation conceptualizes the hillslope as a draining reservoir. The rate of drainage is determined by the **kinematic wave approximation** for saturated subsurface flow [@sloan1984modeling]. This approach assumes that the hydraulic gradient is approximately equal to the land surface slope and that flow lines are parallel to the soil-bedrock interface.
 
 The physical derivation follows these steps:
 

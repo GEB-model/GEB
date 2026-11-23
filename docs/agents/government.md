@@ -20,7 +20,7 @@ When enabled, reforestation is applied at **timestep 0**, before the first simul
 
 **1. Identifying suitable areas**
 
-A pre-computed `forest_restoration_potential_ratio` grid (values 0–1) is loaded. This dataset represents the ecological suitability of each grid cell for forest restoration, derived from Bastin et al. (2019)[@bastin2019global] and made available as a supplementary dataset[@bastin2019dataset]. Grid cells with a ratio at or above a configurable threshold are marked as suitable for conversion. These grid-level suitability values are then mapped down to the HRU (Hydrological Response Unit) scale.
+A pre-computed `forest_restoration_potential_ratio` grid (values 0–1) is loaded. This dataset represents the ecological suitability of each grid cell for forest restoration, derived from @bastin2019global and made available as a supplementary dataset [@bastin2019dataset]. Grid cells with a ratio at or above a configurable threshold are marked as suitable for conversion. These grid-level suitability values are then mapped down to the HRU (Hydrological Response Unit) scale.
 
 The threshold defaults to `0.5` and can be adjusted in the configuration. Both of the following are valid:
 
@@ -180,7 +180,7 @@ This method for generating adaptation pathways can be tailored to the studied ca
 
 ## Flood protection standards
 
-The government can raise the flood protection standard of individual subbasins. The initial standard of each subbasin (a return period in years, e.g. 100 for protection against the 1-in-100-year flood) is derived from the FLOPROS database[@scussolini2016flopros] during the model build, or set manually through `hazards.floods.flood_protection_standard` (`mode: manual`). Households in a protected subbasin are assumed to suffer no damage from floods with a return period lower than the standard.
+The government can raise the flood protection standard of individual subbasins. The initial standard of each subbasin (a return period in years, e.g. 100 for protection against the 1-in-100-year flood) is derived from the FLOPROS database [@scussolini2016flopros] during the model build, or set manually through `hazards.floods.flood_protection_standard` (`mode: manual`). Households in a protected subbasin are assumed to suffer no damage from floods with a return period lower than the standard.
 
 This mechanism is part of the adaptation pathway and is activated with `adaptation.mode: cba` (cost-benefit analysis) together with `adaptation.enabled: true`. In this mode the threshold-based indicators described above are not used. On each January 1st, for every subbasin with a defined standard, the government evaluates raising the standard by one step to the next return period in the list of simulated return periods:
 

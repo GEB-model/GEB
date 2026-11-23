@@ -4,7 +4,7 @@ Extreme value analysis (EVA) is used in GEB to estimate the magnitude of extreme
 
 ## Overview
 
-GEB uses the Generalized Pareto Distribution Peaks-Over-Threshold (GPD-POT), fitted using L-moments, to estimate return periods for river discharge[@pan2022peaks]. This method is particularly good at modeling the tail behavior of extreme value events.
+GEB uses the Generalized Pareto Distribution Peaks-Over-Threshold (GPD-POT), fitted using L-moments, to estimate return periods for river discharge [@pan2022peaks]. This method is particularly good at modeling the tail behavior of extreme value events.
 
 ## How it works
 
@@ -24,7 +24,7 @@ The GPD-POT method only looks at values that exceed a certain threshold. To pick
 Currently, there is an automatic scan method that evaluates multiple threshold candidates, typically from the 80th to 99th percentile of the observational data. GEB supports two selection strategies to determine the optimal threshold $u$ based on Anderson-Darling (AD) p-values:
 
 - **`first_significant`** (default): This strategy scans thresholds starting from the most extreme (e.g., 99th percentile) and moving downwards. It selects the first threshold where the AD p-value exceeds a predefined significance level (default 0.10). This approach prioritizes higher thresholds, which are theoretically more likely to follow a GPD, while ensuring a statistically acceptable fit.
-- **`best_fit`**: This strategy evaluates all candidate thresholds within the scanning range and selects the one that achieved the highest absolute p-value[@solari2017peaks]. This ensures the best possible statistical fit to the observed data, although it may occasionally result in lower thresholds if that leads to a more robust distribution.
+- **`best_fit`**: This strategy evaluates all candidate thresholds within the scanning range and selects the one that achieved the highest absolute p-value [@solari2017peaks]. This ensures the best possible statistical fit to the observed data, although it may occasionally result in lower thresholds if that leads to a more robust distribution.
 
 In both cases, a minimum of 30 exceedances is required for a threshold to be considered valid for fitting.
 
@@ -40,7 +40,7 @@ For values exceeding the threshold (called "exceedances"), the GPD distribution 
 
 #### Parameter estimation using L-moments
 
-GEB uses the method of L-moments[@hosking2018lmoments] to estimate the GPD parameters. L-moments are expectations of linear combinations of order statistics. They are often preferred over the method of moments (ordinary moments) or maximum likelihood estimation (MLE) because L-moments are much less sensitive to outliers in the data, and generally provide less biased parameter estimates than MLE.
+GEB uses the method of L-moments [@hosking2018lmoments] to estimate the GPD parameters. L-moments are expectations of linear combinations of order statistics. They are often preferred over the method of moments (ordinary moments) or maximum likelihood estimation (MLE) because L-moments are much less sensitive to outliers in the data, and generally provide less biased parameter estimates than MLE.
 
 The relationship between the first two L-moments ($l_1, l_2$) and the GPD parameters ($\sigma, \xi$) is defined as:
 

@@ -1,0 +1,9 @@
+/* Teal title bar, as in the earlier Material for MkDocs site. The modern
+   Zensical theme keeps the header neutral; the colour comes from
+   `primary = "teal"` in zensical.toml (--md-primary-fg-color: #009485). */
+.md-header {
+  color: var(--md-primary-bg-color);
+  background-color: var(--md-primary-fg-color);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}

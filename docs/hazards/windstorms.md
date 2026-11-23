@@ -8,10 +8,10 @@ The windstorm hazard is integrated into the model in the form of return period m
 
 
 ## (Dynamic) Data
-Wind speed is a commonly used variable to asses windstorm risk[@fonseca2025empirical].
+Wind speed is a commonly used variable to asses windstorm risk [@fonseca2025empirical].
 
 **Copernicus ERA5 Data**
-This dataset provides different climate indicators of windsorm derived form the fifth generation of the European Centre for Medium-Range Weather Forecasts (ECMWF) atmosprheric reanalyses (ERA5)[@C3S_Windstorm_2025]. This data has a temporal coverage of 60 years, from 1940 to present.
+This dataset provides different climate indicators of windsorm derived form the fifth generation of the European Centre for Medium-Range Weather Forecasts (ECMWF) atmosprheric reanalyses (ERA5) [@C3S_Windstorm_2025]. This data has a temporal coverage of 60 years, from 1940 to present.
 
 - **Windstorm footprint**  
   The maximum 10m wind gust over a 72-hour time window. The windstorm footprints are identified on the original ERA5 grid (0.25° x 0.25°) at roughly 31km resolution.

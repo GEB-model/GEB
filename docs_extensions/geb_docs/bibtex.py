@@ -1,7 +1,11 @@
 """Pandoc-style BibTeX citations for Python-Markdown, without pandoc.
 
-Citations are written as ``[@key]``, ``[@key1; @key2]`` or with a prefix and
-suffix, e.g. ``[see @key, p. 12]``. Each citation is rendered in the
+Citations use the pandoc syntax. ``[@key]``, ``[@key1; @key2]`` and
+``[see @key, p. 12]`` give parenthetical citations: "(Author, 2021)". A bare
+``@key`` gives a narrative citation for use in a sentence: "Author (2021)".
+Write ``\@key`` for a literal "@key". Text is never added or removed around a
+citation, so write the spacing and punctuation in the Markdown as it should
+appear. Each citation is rendered in the
 configured CSL style and links to its entry in a reference list. The list is
 placed where a paragraph contains only ``/// bibliography``, or appended to
 the end of the page otherwise. Unknown keys fail the build unless ``strict``
@@ -51,6 +55,9 @@ PLAIN_TEXT: PlainTextBackend = PlainTextBackend()
 # @key (keys may contain letters, digits and _:.#$%&+?<>~/-).
 CITATION_PATTERN: str = r"\[((?:[^\[\]@;]*@[\w:.#$%&+?<>~/-]+[^\[\];]*;?\s*)+)\]"
 KEY_PATTERN: re.Pattern[str] = re.compile(r"@([\w:.#$%&+?<>~/-]+)")
+# A bare @key not preceded by a word character (so e-mail addresses and
+# similar text are not matched). Trailing punctuation is not part of the key.
+NARRATIVE_PATTERN: str = r"(?<![\w@\\])@([\w:#$%&+?<>~/-]+(?:[.][\w:#$%&+?<>~/-]+)*)"
 BIBLIOGRAPHY_MARKERS: frozenset[str] = frozenset({"/// bibliography", "\\bibliography"})
 
 BIBTEX_TO_CSL_TYPE: dict[str, str] = {
@@ -313,6 +320,39 @@ class CitationInlineProcessor(InlineProcessor):
         return self.markdown.htmlStash.store(html), m.start(0), m.end(0)
 
 
+class NarrativeCitationInlineProcessor(InlineProcessor):
+    """Render a bare ``@key`` as a narrative citation: "Author (2021)"."""
+
+    def __init__(self, pattern: str, extension: BibtexExtension) -> None:
+        """Initialize the processor.
+
+        Args:
+            pattern: The regular expression matching a narrative citation.
+            extension: The extension holding the page's bibliography state.
+        """
+        super().__init__(pattern, extension.md)
+        self.extension = extension
+        self.markdown: Markdown = extension.md
+
+    def handleMatch(  # noqa: N802
+        self, m: re.Match[str], data: str
+    ) -> tuple[etree.Element | str | None, int | None, int | None]:
+        """Render one narrative citation.
+
+        Args:
+            m: The regular expression match.
+            data: The text being processed.
+
+        Returns:
+            The rendered citation and the span it replaces. Keys that are not
+            in the BibTeX file are left as plain text (e.g. "@username").
+        """
+        html: str | None = self.extension.cite_narrative(m.group(1))
+        if html is None:
+            return None, None, None
+        return self.markdown.htmlStash.store(html), m.start(0), m.end(0)
+
+
 class BibliographyTreeprocessor(Treeprocessor):
     """Insert the reference list for all citations on the page."""
 
@@ -407,8 +447,16 @@ class BibtexExtension(Extension):
         """
         self.md = md
         md.registerExtension(self)
+        # Allow "\@key" for a literal @key, as in pandoc.
+        if "@" not in md.ESCAPED_CHARS:
+            md.ESCAPED_CHARS.append("@")
         md.inlinePatterns.register(
             CitationInlineProcessor(CITATION_PATTERN, self), "geb_citation", 175
+        )
+        md.inlinePatterns.register(
+            NarrativeCitationInlineProcessor(NARRATIVE_PATTERN, self),
+            "geb_narrative_citation",
+            174,
         )
         md.treeprocessors.register(
             BibliographyTreeprocessor(self), "geb_bibliography", 5
@@ -431,16 +479,10 @@ class BibtexExtension(Extension):
             KeyError: If a key is missing from the BibTeX file and ``strict``
                 is enabled.
         """
-        if self.bibliography is None:
-            bib_file: str = self.getConfig("bib_file")
-            source = load_bibliography(bib_file, Path(bib_file).stat().st_mtime)
-            self.bibliography = CitationStylesBibliography(
-                load_style(self.getConfig("csl_file")), source, formatter.html
-            )
-
+        bibliography: CitationStylesBibliography = self.get_bibliography()
         known: list[CitationItem] = []
         for item in items:
-            if item.key in self.bibliography.source:
+            if item.key in bibliography.source:
                 known.append(item)
             elif self.getConfig("strict"):
                 raise KeyError(
@@ -457,8 +499,8 @@ class BibtexExtension(Extension):
         parts: list[tuple[str, str]] = []
         for item in known:
             citation = Citation([item])
-            self.bibliography.register(citation)
-            parts.append((item.key, self.bibliography.cite(citation, lambda _: None)))
+            bibliography.register(citation)
+            parts.append((item.key, bibliography.cite(citation, lambda _: None)))
 
         # Author-date styles wrap a citation in parentheses: merge the
         # single-work citations into one, e.g. "(A, 2020; B, 2021)".
@@ -472,6 +514,42 @@ class BibtexExtension(Extension):
             + " ".join(f'<a href="#{anchor(key)}">{text}</a>' for key, text in parts)
             + "</span>"
         )
+
+    def get_bibliography(self) -> CitationStylesBibliography:
+        """Return the page's bibliography, creating it on first use.
+
+        Returns:
+            The citeproc bibliography that collects the page's citations.
+        """
+        if self.bibliography is None:
+            bib_file: str = self.getConfig("bib_file")
+            source = load_bibliography(bib_file, Path(bib_file).stat().st_mtime)
+            self.bibliography = CitationStylesBibliography(
+                load_style(self.getConfig("csl_file")), source, formatter.html
+            )
+        return self.bibliography
+
+    def cite_narrative(self, key: str) -> str | None:
+        """Register and render a narrative citation, e.g. "Author (2021)".
+
+        Args:
+            key: The citation key.
+
+        Returns:
+            The citation as HTML linked to its reference entry, or None if the
+            key is not in the BibTeX file.
+        """
+        bibliography: CitationStylesBibliography = self.get_bibliography()
+        if key.lower() not in bibliography.source:
+            return None
+        citation = Citation([CitationItem(key)])
+        bibliography.register(citation)
+        text: str = bibliography.cite(citation, lambda _: None)
+        # Author-date styles give "(Author, 2021)": rewrite to "Author (2021)".
+        if text.startswith("(") and text.endswith(")") and ", " in text:
+            author, year = text[1:-1].rsplit(", ", 1)
+            text = f"{author} ({year})"
+        return f'<span class="citation"><a href="#{anchor(key)}">{text}</a></span>'
 
     def references(self) -> list[tuple[str, str]]:
         """Return the formatted reference list of the current page.

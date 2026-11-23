@@ -40,6 +40,23 @@ def test_citations_and_reference_list() -> None:
     assert html.count("<li ") == 3
 
 
+def test_narrative_citations() -> None:
+    """A bare @key renders as "Author (year)"; other @-text stays as is."""
+    html: str = render(
+        "As shown by @tol2008climate, mail me@example.com or @nobody. "
+        "Glued text[@tol2008climate] is not changed."
+    )
+    assert (
+        'As shown by <span class="citation"><a href="#ref-tol2008climate">Tol (2008)</a></span>,'
+        in html
+    )
+    assert "me@example.com" in html
+    assert "@nobody" in html
+    # No space is added: the Markdown is rendered as written.
+    assert 'Glued text<span class="citation">' in html
+    assert html.count('<li id="ref-tol2008climate">') == 1
+
+
 def test_bibliography_marker() -> None:
     """The reference list replaces a `/// bibliography` paragraph."""
     html: str = render(
@@ -57,7 +74,7 @@ def test_bibliography_marker() -> None:
 def test_text_that_is_not_a_citation() -> None:
     """Escaped brackets, e-mail addresses and code are left alone."""
     html: str = render(
-        r"Escaped \[@tol2008climate\], e-mail [x@example.com], code `[@tol2008climate]`."
+        r"Escaped \[\@tol2008climate\], e-mail [x@example.com], code `[@tol2008climate]`."
     )
     assert "[@tol2008climate]" in html
     assert "[x@example.com]" in html
