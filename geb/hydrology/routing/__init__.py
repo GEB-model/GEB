@@ -38,6 +38,7 @@ from .geometry import (
     compute_top_width_from_depth,
     estimate_outflow_height,
     get_lake_factor,
+    get_lake_outlet_width,
 )
 from .kinematic import update_node_kinematic as update_node_kinematic
 from .local_inertial import LocalInertial as LocalInertial
@@ -1657,16 +1658,25 @@ class Routing(Module):
             lake_a_factor: np.float32 = np.float32(
                 self.model.config["parameters"]["lake_outflow_multiplier"]
             )
-            outflow_river_width: ArrayFloat32 = bankfull_top_width_m[
-                waterbody_outflow_linear
-            ]
-            waterbody_lake_factor: ArrayFloat32 = get_lake_factor(
-                river_width=outflow_river_width,
-                lake_a_factor=lake_a_factor,
-            )
             average_discharge: ArrayFloat32 = np.maximum(
                 self.hydrology.waterbodies.var.average_discharge_m3_per_s,
                 np.float32(0.1),
+            )
+            # Waterbody cells have no channel and otherwise receive the missing
+            # river-width fallback, making their outlet weirs far too narrow.
+            outflow_river_width: ArrayFloat32 = get_lake_outlet_width(
+                outflow_cell=waterbody_outflow_linear,
+                downstream_cell=self._compressed_ds,
+                is_river_cell=(self.var.river_ids != -1)
+                & (self.grid.var.waterbody_ids == -1),
+                river_top_width_m=bankfull_top_width_m,
+                average_discharge_m3_s=average_discharge,
+                width_alpha=self.config["river_width"]["parameters"]["default_alpha"],
+                width_beta=self.config["river_width"]["parameters"]["beta"],
+            )
+            waterbody_lake_factor: ArrayFloat32 = get_lake_factor(
+                river_width=outflow_river_width,
+                lake_a_factor=lake_a_factor,
             )
             waterbody_outflow_height: ArrayFloat32 = estimate_outflow_height(
                 lake_capacity=self.hydrology.waterbodies.var.capacity,

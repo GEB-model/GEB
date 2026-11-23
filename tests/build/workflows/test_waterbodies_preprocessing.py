@@ -278,3 +278,39 @@ def test_ambiguous_dam_match() -> None:
     assert result.waterbody_type.tolist() == [LAKE, LAKE]
     assert checks.match_method.tolist() == ["multiple_lakes"]
     assert checks.waterbody_id.isna().all()
+
+
+@pytest.mark.parametrize("lake_ids", [[], [99], [1, 1]])
+def test_nullable_dam_geometry_lookup(lake_ids: list[int]) -> None:
+    """Preserve geometry typing for empty, unmatched, and repeated dam matches.
+
+    Args:
+        lake_ids: HydroLAKES identifiers assigned to the test dams (unitless).
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If matching or outside-polygon detection is incorrect.
+    """
+    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"waterbody_id": [1], "waterbody_type": [LAKE], "volume_total": [1000.0]},
+        geometry=[box(0, 0, 1, 1)],
+        crs=4326,
+    )
+    barriers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "hydrolakes_id": pd.Series(lake_ids, dtype="Int64"),
+            "dam_type": ["Dam"] * len(lake_ids),
+        },
+        geometry=[Point(2 + index, 2) for index in range(len(lake_ids))],
+        crs=4326,
+    )
+    result: gpd.GeoDataFrame
+    checks: gpd.GeoDataFrame
+    result, checks = enrich_waterbodies(waterbodies, barriers)
+    assert result.waterbody_type.tolist() == [LAKE]
+    assert checks.point_outside_lake.tolist() == [lake_id == 1 for lake_id in lake_ids]
+    assert checks.waterbody_id.notna().tolist() == [
+        lake_id == 1 for lake_id in lake_ids
+    ]

@@ -153,9 +153,11 @@ def enrich_waterbodies(
 
     matched_dams: gpd.GeoDataFrame = dam_checks.loc[dam_checks["waterbody_id"].notna()]
     lake_geometry: gpd.GeoSeries = waterbodies.set_index("waterbody_id").geometry
-    matched_lakes: gpd.GeoSeries = gpd.GeoSeries(
-        matched_dams["waterbody_id"].map(lake_geometry), crs=waterbodies.crs
-    )
+    # Reindex the geometry series directly: mapping an empty nullable-integer
+    # ID series can preserve its integer dtype instead of producing geometries.
+    matched_lakes: gpd.GeoSeries = lake_geometry.reindex(
+        matched_dams["waterbody_id"]
+    ).set_axis(matched_dams.index)
     dam_checks.loc[
         matched_dams.index, "point_outside_lake"
     ] = ~matched_dams.geometry.intersects(matched_lakes, align=False)

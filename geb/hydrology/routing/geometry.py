@@ -6,8 +6,10 @@ import numpy as np
 from numba import njit
 
 from geb.geb_types import (
+    ArrayBool,
     ArrayFloat32,
     ArrayFloat64,
+    ArrayInt32,
     TwoDArrayFloat32,
 )
 
@@ -47,6 +49,7 @@ __all__: list[str] = [
     "estimate_lake_outflow",
     "estimate_outflow_height",
     "get_lake_factor",
+    "get_lake_outlet_width",
 ]
 
 # Column indices for in-bank channel geometry (geom_inbank)
@@ -696,6 +699,92 @@ def compute_cfl_area_and_top_width(
     )
     area: np.float32 = bankfull_area_m2 + overbank_area
     return area, top_width
+
+
+def get_lake_outlet_width(
+    outflow_cell: ArrayInt32,
+    downstream_cell: ArrayInt32,
+    is_river_cell: ArrayBool,
+    river_top_width_m: ArrayFloat32,
+    average_discharge_m3_s: ArrayFloat32,
+    width_alpha: float,
+    width_beta: float,
+) -> ArrayFloat32:
+    """Select the receiving channel width that controls each lake outlet.
+
+    A lake's outflow cell belongs to the waterbody and has no river channel of
+    its own. Use the river immediately downstream, outside all waterbodies.
+    For a pit, boundary, land cell or another waterbody, estimate width using
+    the existing river hydraulic-geometry relation, W = alpha * Q**beta.
+
+    Args:
+        outflow_cell: Compressed grid index of each waterbody's outlet.
+        downstream_cell: Downstream index per grid cell; -1 denotes a boundary.
+            A cell draining to itself is a pit.
+        is_river_cell: Whether each grid cell is a river outside waterbodies.
+        river_top_width_m: Bankfull river top width per grid cell (meters).
+        average_discharge_m3_s: Positive mean discharge per waterbody (m³/s).
+        width_alpha: Positive width coefficient (meters / (m³/s)**width_beta).
+        width_beta: Nonnegative, dimensionless width exponent.
+
+    Returns:
+        Positive outlet width per waterbody (meters), as float32.
+
+    Raises:
+        ValueError: If dimensions, indices, discharges, coefficients or selected
+            river widths are invalid.
+    """
+    grid_size: int = downstream_cell.size
+    if (
+        downstream_cell.ndim != 1
+        or is_river_cell.shape != (grid_size,)
+        or river_top_width_m.shape != (grid_size,)
+        or outflow_cell.ndim != 1
+        or average_discharge_m3_s.shape != outflow_cell.shape
+    ):
+        raise ValueError(
+            "Outlet and grid arrays must have matching one-dimensional shapes."
+        )
+    if not np.issubdtype(outflow_cell.dtype, np.integer) or not np.issubdtype(
+        downstream_cell.dtype, np.integer
+    ):
+        raise ValueError("Outlet and downstream indices must be integers.")
+    if (
+        np.any(outflow_cell < 0)
+        or np.any(outflow_cell >= grid_size)
+        or np.any(downstream_cell < -1)
+        or np.any(downstream_cell >= grid_size)
+    ):
+        raise ValueError("Outlet or downstream index is outside the compressed grid.")
+    if (
+        not np.isfinite(width_alpha)
+        or width_alpha <= 0
+        or not np.isfinite(width_beta)
+        or width_beta < 0
+        or not np.isfinite(average_discharge_m3_s).all()
+        or np.any(average_discharge_m3_s <= 0)
+    ):
+        raise ValueError(
+            "Discharges and alpha must be positive and finite; beta must be nonnegative and finite."
+        )
+    downstream: ArrayInt32 = downstream_cell[outflow_cell]
+    # Clamp only for safe indexing; the explicit boundary test prevents -1 from
+    # accidentally selecting the last river in the grid.
+    safe_downstream: ArrayInt32 = np.maximum(downstream, 0)
+    has_downstream_river: ArrayBool = (
+        (downstream >= 0)
+        & (downstream != outflow_cell)
+        & is_river_cell[safe_downstream]
+    )
+    outlet_width_m: ArrayFloat32 = np.where(
+        has_downstream_river,
+        river_top_width_m[safe_downstream],
+        np.float32(width_alpha)
+        * average_discharge_m3_s.astype(np.float32) ** np.float32(width_beta),
+    ).astype(np.float32)
+    if not np.isfinite(outlet_width_m).all() or np.any(outlet_width_m <= 0):
+        raise ValueError("Selected outlet widths must be positive and finite.")
+    return outlet_width_m
 
 
 def get_lake_factor(
