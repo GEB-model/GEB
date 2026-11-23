@@ -89,6 +89,7 @@ from .constants import (
     DEEP_SOIL_ALPHA,
     DEEP_SOIL_ONE_MINUS_ALPHA,
     KELVIN_OFFSET,
+    MIN_DRAINABLE_SATURATION,
     N_SNOW_LAYERS,
     N_SOIL_LAYERS,
     N_SOILGRIDS_LAYERS,
@@ -118,6 +119,7 @@ from .constants import (
     SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
     THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN,
     THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN,
+    WILTING_POINT_PRESSURE_HEAD_M,
 )
 from .energy import (
     apply_evaporative_cooling,
@@ -176,6 +178,7 @@ from .water import (
     get_bubbling_pressure_m_positive,
     get_bulk_density_with_organic_matter,
     get_coarse_fragment_factors,
+    get_field_capacity_saturation,
     get_hillslope_store_filling,
     get_macropore_conductivity_jarvis,
     get_pore_size_index_brakensiek,
@@ -187,6 +190,7 @@ from .water import (
     get_surface_crust_factor,
     infiltration,
     kv_wosten,
+    set_specific_retention,
     thetar_brakensiek,
     thetas_toth,
 )
@@ -518,6 +522,19 @@ def land_surface_model(
             i,
             SOIL_PROP_HORIZONTAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S,
         ]
+        # Specific retention: the water left when a saturated zone in the soil has
+        # drained; the hillslope store (interflow and saturated area) holds the water
+        # above it (the specific yield).
+        specific_retention_m = stack_empty(N_SOIL_LAYERS, np.float32)
+        set_specific_retention(
+            water_content_residual_m=wres,
+            water_content_saturated_m=saturated_water_content_m,
+            water_content_field_capacity_m=field_capacity_m,
+            soil_layer_height_m=soil_layer_height_cell,
+            bubbling_pressure_m_positive=bubbling_pressure_cell,
+            lambda_=lambda_pore_size_cell,
+            water_content_specific_retention_m=specific_retention_m,
+        )
         vertical_conductivity_cell = packed_soil_properties[
             i, SOIL_PROP_VERTICAL_SATURATED_HYDRAULIC_CONDUCTIVITY_M_PER_S
         ]
@@ -886,7 +903,7 @@ def land_surface_model(
             # area: the same store that gives the interflow.
             dunne_effective_saturation: np.float32 = get_hillslope_store_filling(
                 water_content_m=water_content_m[i, :],
-                water_content_field_capacity_m=field_capacity_m,
+                water_content_specific_retention_m=specific_retention_m,
                 water_content_saturated_m=saturated_water_content_m,
                 soil_layer_height_m=soil_layer_height_cell,
                 groundwater_depth_m=groundwater_depth_hour_m,
@@ -987,7 +1004,7 @@ def land_surface_model(
                 water_content_m=water_content_m[i, :],
                 water_content_residual_m=wres,
                 water_content_saturated_m=saturated_water_content_m,
-                water_content_field_capacity_m=field_capacity_m,
+                water_content_specific_retention_m=specific_retention_m,
                 soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, :],
                 solid_heat_capacity_J_per_m2_K=solid_heat_capacity,
                 vertical_saturated_hydraulic_conductivity_m_per_s=vertical_conductivity_cell,
@@ -2213,19 +2230,9 @@ class LandSurface(Module):
             clay=self.HRU.var.clay_percentage,
         )
 
-        # θ saturation, field capacity, wilting point and residual moisture content
-        thetafc: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
-            np.float32(-1.0),  # assuming field capacity is at -100 cm (pF 2) -> 1m
-            self.HRU.var.bubbling_pressure_m_positive,
-            thetas,
-            thetar,
-            self.HRU.var.lambda_pore_size_distribution,
-        )
-
+        # wilting point on the retention curve of the flow solver
         thetawp: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
-            np.float32(
-                -(10**2.2)
-            ),  # assuming wilting point is at -10^4.2 cm (pF 4.2) -> -10^2.2 m
+            WILTING_POINT_PRESSURE_HEAD_M,
             self.HRU.var.bubbling_pressure_m_positive,
             thetas,
             thetar,
@@ -2246,6 +2253,44 @@ class LandSurface(Module):
         fine_earth_fraction, coarse_fragment_conductivity_factor = (
             get_coarse_fragment_factors(coarse_fragments_percentage)
         )
+        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s = kv_wosten(
+            silt=self.HRU.var.silt_percentage,
+            clay=self.HRU.var.clay_percentage,
+            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+            # the soil data give organic carbon, the equation takes organic matter
+            organic_matter_percentage=organic_carbon_pedotransfer
+            * ORGANIC_MATTER_PER_ORGANIC_CARBON,
+            is_topsoil=is_top_soil,
+        )
+        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s *= (
+            coarse_fragment_conductivity_factor
+        )
+
+        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s *= (
+            self.model.config["hydrology"]["landsurface"][
+                "saturated_hydraulic_conductivity_multiplier"
+            ]
+        )  # calibration parameter
+
+        self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s = (
+            self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s
+            * np.float32(
+                self.model.config["hydrology"]["landsurface"][
+                    "vertical_saturated_hydraulic_conductivity_multiplier"
+                ]
+            )
+        )
+
+        # Field capacity: the water content at which the drainage flux has become
+        # negligible (Twarakavi et al., 2009)
+        thetafc: TwoDArrayFloat32 = thetar + get_field_capacity_saturation(
+            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s,
+            lambda_=self.HRU.var.lambda_pore_size_distribution,
+        ) * (thetas - thetar)
+        thetafc = np.maximum(
+            thetafc, thetawp + MIN_DRAINABLE_SATURATION * (thetas - thetawp)
+        ).astype(np.float32)
+
         thetas = thetas * fine_earth_fraction
         thetar = thetar * fine_earth_fraction
         thetafc = thetafc * fine_earth_fraction
@@ -2297,33 +2342,6 @@ class LandSurface(Module):
             self.HRU.full_compressed(0.003, dtype=np.float32)
         )
 
-        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s = kv_wosten(
-            silt=self.HRU.var.silt_percentage,
-            clay=self.HRU.var.clay_percentage,
-            bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
-            # the soil data give organic carbon, the equation takes organic matter
-            organic_matter_percentage=organic_carbon_pedotransfer
-            * ORGANIC_MATTER_PER_ORGANIC_CARBON,
-            is_topsoil=is_top_soil,
-        )
-        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s *= (
-            coarse_fragment_conductivity_factor
-        )
-
-        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s *= (
-            self.model.config["hydrology"]["landsurface"][
-                "saturated_hydraulic_conductivity_multiplier"
-            ]
-        )  # calibration parameter
-
-        self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s = (
-            self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s
-            * np.float32(
-                self.model.config["hydrology"]["landsurface"][
-                    "vertical_saturated_hydraulic_conductivity_multiplier"
-                ]
-            )
-        )
         # Karst is a property of the bedrock, so it only changes the weathered-rock
         # layer below the soil: the epikarst drains faster, other weathered rock slower
         # (water perches on it and leaves as interflow). Karst and non-karst parts of a

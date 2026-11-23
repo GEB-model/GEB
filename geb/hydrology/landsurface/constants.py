@@ -65,6 +65,17 @@ RHO_MINERAL_KG_PER_M3: np.float32 = np.float32(2650.0)
 # because databases of that period derived organic matter from carbon with it.
 ORGANIC_MATTER_PER_ORGANIC_CARBON: np.float32 = np.float32(1.724)
 
+# Field capacity is the water content at which the drainage flux of an initially
+# saturated soil has become negligible. See: doi:10.1029/2009WR007944
+FIELD_CAPACITY_DRAINAGE_FLUX_M_PER_S: np.float32 = np.float32(1.0e-4 / 86400.0)
+# Pressure head (m) of the wilting point (pF 4.2), on the Brooks-Corey curve that the
+# flow solver uses.
+WILTING_POINT_PRESSURE_HEAD_M: np.float32 = np.float32(-(10.0**2.2))
+# At least this share of the pore space above the residual water content drains.
+# It only acts in soils that hardly conduct or whose bubbling pressure is close to or
+# above the suction considered (heavy clay, thin soil).
+MIN_DRAINABLE_SATURATION: np.float32 = np.float32(0.05)
+
 # Bulk density of soil organic matter (kg/dm3): Adams (1973), Table 1, fitted on soils
 # in field condition with 0-75 % organic matter (see get_bulk_density_with_organic_matter).
 ORGANIC_MATTER_BULK_DENSITY_KG_PER_DM3: np.float32 = np.float32(0.223)

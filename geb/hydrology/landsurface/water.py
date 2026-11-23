@@ -16,6 +16,8 @@ from ..landcovers import (
     SEALED_PAVED_FRACTION,
 )
 from .constants import (
+    FIELD_CAPACITY_DRAINAGE_FLUX_M_PER_S,
+    MIN_DRAINABLE_SATURATION,
     N_SOIL_LAYERS,
     ORGANIC_MATTER_BULK_DENSITY_KG_PER_DM3,
     REGOLITH_LAYER_MAX_THICKNESS_M,
@@ -128,7 +130,7 @@ def calculate_spatial_infiltration_excess(
 @njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
 def set_hillslope_store(
     water_content_m: ArrayFloat32,
-    water_content_field_capacity_m: ArrayFloat32,
+    water_content_specific_retention_m: ArrayFloat32,
     water_content_saturated_m: ArrayFloat32,
     soil_layer_height_m: ArrayFloat32,
     groundwater_depth_m: np.float32,
@@ -142,21 +144,23 @@ def set_hillslope_store(
     (interflow, see set_hillslope_interflow) and the part of the hillslope that is
     saturated to the surface (see calculate_hillslope_saturated_area_fraction).
 
-    The saturated zone of a hillslope builds up from below: free water (above field
-    capacity) over a layer that still takes up water drains down, it is on its way
-    and not part of a saturated zone. The free water of a layer counts as perched in
+    The saturated zone of a hillslope builds up from below: free water (above the
+    specific retention, see set_specific_retention) over a layer that still takes
+    up water drains down, it is on its way and not part of a saturated zone. The free water of a layer counts as perched in
     proportion to the filling of the drainable pores of the layer below; the lowest
     layer rests on the rock. The part of a layer below the water table is groundwater
     and not part of the store.
 
     Args:
         water_content_m: Water content per layer (m).
-        water_content_field_capacity_m: Water content at field capacity per layer (m).
+        water_content_specific_retention_m: Specific retention per layer (m; see
+            set_specific_retention).
         water_content_saturated_m: Water content at saturation per layer (m).
         soil_layer_height_m: Thickness per layer (m).
         groundwater_depth_m: Depth of the water table below the surface (m).
         perched_m: Output: perched water per layer (m).
-        free_m: Output: water above field capacity and above the water table per layer (m).
+        free_m: Output: water above the specific retention and above the water
+            table per layer (m).
         capacity_m: Output: drainable pore space above the water table per layer (m).
 
     Returns:
@@ -168,7 +172,8 @@ def set_hillslope_store(
     layer_top_depth_m: np.float32 = np.float32(0.0)
     for layer in range(n_layers):
         drainable_capacity_m: np.float32 = max(
-            water_content_saturated_m[layer] - water_content_field_capacity_m[layer],
+            water_content_saturated_m[layer]
+            - water_content_specific_retention_m[layer],
             np.float32(0.0),
         )
         submerged_fraction: np.float32 = min(
@@ -185,7 +190,7 @@ def set_hillslope_store(
         free_m[layer] = min(
             max(
                 water_content_m[layer]
-                - water_content_field_capacity_m[layer]
+                - water_content_specific_retention_m[layer]
                 - submerged_fraction * drainable_capacity_m,
                 np.float32(0.0),
             ),
@@ -197,11 +202,11 @@ def set_hillslope_store(
                 max(
                     (
                         water_content_m[layer + 1]
-                        - water_content_field_capacity_m[layer + 1]
+                        - water_content_specific_retention_m[layer + 1]
                     )
                     / max(
                         water_content_saturated_m[layer + 1]
-                        - water_content_field_capacity_m[layer + 1],
+                        - water_content_specific_retention_m[layer + 1],
                         np.float32(1e-6),
                     ),
                     np.float32(0.0),
@@ -218,7 +223,7 @@ def set_hillslope_store(
 @njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
 def get_hillslope_store_filling(
     water_content_m: ArrayFloat32,
-    water_content_field_capacity_m: ArrayFloat32,
+    water_content_specific_retention_m: ArrayFloat32,
     water_content_saturated_m: ArrayFloat32,
     soil_layer_height_m: ArrayFloat32,
     groundwater_depth_m: np.float32,
@@ -230,7 +235,8 @@ def get_hillslope_store_filling(
 
     Args:
         water_content_m: Water content per layer (m).
-        water_content_field_capacity_m: Water content at field capacity per layer (m).
+        water_content_specific_retention_m: Specific retention per layer (m; see
+            set_specific_retention).
         water_content_saturated_m: Water content at saturation per layer (m).
         soil_layer_height_m: Thickness per layer (m).
         groundwater_depth_m: Depth of the water table below the surface (m).
@@ -243,7 +249,7 @@ def get_hillslope_store_filling(
     capacity_m = stack_empty(N_SOIL_LAYERS, np.float32)
     total_perched_m, total_capacity_m = set_hillslope_store(
         water_content_m,
-        water_content_field_capacity_m,
+        water_content_specific_retention_m,
         water_content_saturated_m,
         soil_layer_height_m,
         groundwater_depth_m,
@@ -1503,26 +1509,122 @@ def get_soil_moisture_at_pressure(
     thetar: np.ndarray[Shape, np.dtype[np.float32]],
     lambda_: np.ndarray[Shape, np.dtype[np.float32]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
-    """Calculates the soil moisture content at a given soil water potential (capillary suction) using the van Genuchten model.
+    """Soil moisture content at a given pressure head on the Brooks-Corey curve.
+
+    The same retention curve as the flow solver uses (Ross, 2003; see
+    distribute_soil_water_ross): the effective saturation is
+
+        S = (psi_b / psi)^lambda    for a suction psi above the bubbling pressure psi_b,
+        S = 1                       below it (the soil stays saturated up to air entry).
+
+    Brooks, R. H., & Corey, A. T. (1964). Hydraulic properties of porous media.
+    Hydrology Papers 3, Colorado State University.
 
     Args:
-        pressure_head_m: The soil pressure_head. Must be negative. (m)
+        pressure_head_m: The soil pressure head. Must be negative. (m)
         bubbling_pressure_m_positive: The bubbling pressure (m)
         thetas: The saturated soil moisture content (m³/m³)
         thetar: The residual soil moisture content (m³/m³)
-        lambda_: Lambda pore size distribution parameter (dimensionless)
+        lambda_: Pore size distribution index (dimensionless)
 
     Returns:
-        The soil moisture content at the given soil water potential (m³/m³)
+        The soil moisture content at the given pressure head (m³/m³)
     """
-    alpha = np.float32(1) / bubbling_pressure_m_positive
-    n = lambda_ + np.float32(1)
-    m = np.float32(1) - np.float32(1) / n
-    phi = -pressure_head_m
+    suction_m = -pressure_head_m
+    effective_saturation = np.minimum(
+        (bubbling_pressure_m_positive / suction_m) ** lambda_, np.float32(1)
+    )
+    return effective_saturation * (thetas - thetar) + thetar
 
-    water_retention_curve = (np.float32(1) / (np.float32(1) + (alpha * phi) ** n)) ** m
 
-    return water_retention_curve * (thetas - thetar) + thetar
+def get_field_capacity_saturation(
+    saturated_hydraulic_conductivity_m_per_s: np.ndarray[Shape, np.dtype[np.float32]],
+    lambda_: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
+    """Effective saturation at field capacity, from the negligible drainage flux.
+
+    Field capacity is the water content at which the drainage flux of an initially
+    saturated soil has fallen to a negligibly small value q_fc (Twarakavi, Sakai and
+    Simunek, 2009, doi:10.1029/2009WR007944; they find 0.01 cm/day to give good
+    estimates across soils). With the Brooks-Corey conductivity of the flow solver,
+    K = Ks S^(3 + 2 / lambda), and drainage under gravity (unit gradient) this is
+    their equation 1:
+
+        S_fc = (q_fc / Ks)^(1 / b),    b = (2 + 3 lambda) / lambda
+
+    Args:
+        saturated_hydraulic_conductivity_m_per_s: Vertical saturated conductivity (m/s).
+        lambda_: Pore size distribution index of the Brooks-Corey curve (-).
+
+    Returns:
+        Effective saturation at field capacity (-), at most 1 minus the minimum
+        drainable share of the pore space.
+    """
+    exponent = lambda_ / (np.float32(2.0) + np.float32(3.0) * lambda_)
+    saturation = (
+        FIELD_CAPACITY_DRAINAGE_FLUX_M_PER_S
+        / np.maximum(saturated_hydraulic_conductivity_m_per_s, np.float32(1e-20))
+    ) ** exponent
+    return np.minimum(saturation, np.float32(1.0) - MIN_DRAINABLE_SATURATION).astype(
+        np.float32
+    )
+
+
+@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
+def set_specific_retention(
+    water_content_residual_m: ArrayFloat32,
+    water_content_saturated_m: ArrayFloat32,
+    water_content_field_capacity_m: ArrayFloat32,
+    soil_layer_height_m: ArrayFloat32,
+    bubbling_pressure_m_positive: ArrayFloat32,
+    lambda_: ArrayFloat32,
+    water_content_specific_retention_m: ArrayFloat32,
+) -> None:
+    """Specific retention of the soil: the water left when a saturated zone drains.
+
+    The hillslope store (see set_hillslope_store) holds the water that a saturated
+    zone in the soil can release: its specific yield, the pore space between
+    saturation and the specific retention. Above a shallow water table the soil
+    cannot drain fully, so the specific retention is the water content in
+    equilibrium with a water table at the base of the soil. It follows from the
+    retention curve of the flow solver (Brooks-Corey) at the suction of the mean
+    height above the base, half the soil thickness:
+
+        S_retention = (psi_b / (D / 2))^lambda
+
+    There is no free parameter. A thin soil keeps more of its water against
+    gravity and has a smaller specific yield, so its saturated zone rises faster.
+    This is not field capacity (the water content at which drainage has become
+    negligible, the upper limit of the water held for plants): water between the two
+    is held under tension and leaves by slow vertical drainage and plant uptake, not
+    through a saturated zone. The specific retention is never below field capacity.
+
+    Args:
+        water_content_residual_m: Residual water content per layer (m).
+        water_content_saturated_m: Water content at saturation per layer (m).
+        water_content_field_capacity_m: Water content at field capacity per layer (m).
+        soil_layer_height_m: Thickness per layer (m).
+        bubbling_pressure_m_positive: Bubbling pressure per layer (m).
+        lambda_: Pore size distribution index per layer (-).
+        water_content_specific_retention_m: Output: specific retention per layer (m).
+    """
+    n_layers: int = soil_layer_height_m.shape[0]
+    soil_thickness_m: np.float32 = np.float32(0.0)
+    for layer in range(n_layers):
+        soil_thickness_m += soil_layer_height_m[layer]
+    drainage_suction_m: np.float32 = np.float32(0.5) * soil_thickness_m
+    for layer in range(n_layers):
+        saturation_retained: np.float32 = min(
+            (bubbling_pressure_m_positive[layer] / drainage_suction_m)
+            ** lambda_[layer],
+            np.float32(1.0) - MIN_DRAINABLE_SATURATION,
+        )
+        water_content_specific_retention_m[layer] = max(
+            water_content_residual_m[layer]
+            + saturation_retained
+            * (water_content_saturated_m[layer] - water_content_residual_m[layer]),
+            water_content_field_capacity_m[layer],
+        )
 
 
 def clip_brakensiek(
