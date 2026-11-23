@@ -22,6 +22,7 @@ from geb.hydrology.landsurface.water import (
     generate_rainfall_lookup_table,
     get_bubbling_pressure_m_positive,
     get_bulk_density_with_organic_matter,
+    get_field_capacity_saturation,
     get_hillslope_store_filling,
     get_macropore_conductivity_jarvis,
     get_pore_size_index_brakensiek,
@@ -31,6 +32,7 @@ from geb.hydrology.landsurface.water import (
     kv_brakensiek,
     kv_cosby,
     kv_wosten,
+    set_specific_retention,
     thetar_brakensiek,
     thetas_toth,
     thetas_wosten,
@@ -1896,6 +1898,86 @@ def test_get_hillslope_store_filling() -> None:
     )
     # a water table at the surface: no drainable pore space left, the store is full
     assert filling([1, 1, 1, 1, 1, 1, 1], groundwater_depth=0.0) == pytest.approx(1.0)
+
+
+def test_get_soil_moisture_at_pressure_is_brooks_corey() -> None:
+    """Value check of the Brooks-Corey curve: S = (psi_b / psi)^lambda, 1 below air entry."""
+    bubbling_pressure = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+    thetas = np.full(3, 0.45, dtype=np.float32)
+    thetar = np.full(3, 0.05, dtype=np.float32)
+    lambda_ = np.full(3, 0.25, dtype=np.float32)
+    theta = get_soil_moisture_at_pressure(
+        np.array([-0.3, -0.5, -8.0], dtype=np.float32),
+        bubbling_pressure,
+        thetas,
+        thetar,
+        lambda_,
+    )
+    # below and at the bubbling pressure the soil is saturated
+    assert theta[0] == pytest.approx(0.45)
+    assert theta[1] == pytest.approx(0.45)
+    # (0.5 / 8)^0.25 = 0.5: half of the pore space above the residual water content
+    assert theta[2] == pytest.approx(0.05 + 0.5 * 0.40, abs=1e-6)
+
+
+def test_get_field_capacity_saturation() -> None:
+    """Field capacity from the negligible drainage flux (Twarakavi et al., 2009, eq. 1)."""
+    flux_m_per_s = 1.0e-4 / 86400.0  # 0.01 cm/day
+    conductivity = np.array([1.0, 0.1, 1.0, 1.0e-4, 1.0e-6], dtype=np.float32) / 86400.0
+    lambda_ = np.array([0.25, 0.25, 0.5, 0.25, 0.25], dtype=np.float32)
+    saturation = get_field_capacity_saturation(conductivity, lambda_)
+    # (q / Ks)^(lambda / (2 + 3 lambda)): Ks = 1 m/day, lambda = 0.25: 1e-4^(1/11)
+    assert saturation[0] == pytest.approx(1.0e-4 ** (1.0 / 11.0), rel=1e-4)
+    # a less conductive soil holds more water at field capacity
+    assert saturation[1] == pytest.approx(1.0e-3 ** (1.0 / 11.0), rel=1e-4)
+    assert saturation[1] > saturation[0]
+    # a wider pore size distribution (sand): lower saturation at field capacity
+    assert saturation[2] == pytest.approx(1.0e-4 ** (0.5 / 3.5), rel=1e-4)
+    assert saturation[2] < saturation[0]
+    # the conductivity curve gives exactly the negligible flux at field capacity
+    exponent = 3.0 + 2.0 / 0.25
+    assert conductivity[0] * saturation[0] ** exponent == pytest.approx(
+        flux_m_per_s, rel=1e-3
+    )
+    # a soil that conducts no more than the negligible flux: 5 % still drains
+    assert saturation[3] == pytest.approx(0.95)
+    assert saturation[4] == pytest.approx(0.95)
+
+
+def test_set_specific_retention() -> None:
+    """The specific retention is the Brooks-Corey water content at half the soil depth."""
+    height = np.array([0.05, 0.10, 0.15, 0.30, 0.40, 1.00, 2.00], dtype=np.float32)
+    residual = (0.05 * height).astype(np.float32)
+    saturated = (0.45 * height).astype(np.float32)
+    field_capacity = (0.20 * height).astype(np.float32)
+    lambda_ = np.full(7, 0.25, dtype=np.float32)
+
+    def retention(
+        bubbling_pressure_m: float, layer_height: np.ndarray = height
+    ) -> np.ndarray:
+        out = np.zeros(7, dtype=np.float32)
+        set_specific_retention(
+            residual * layer_height / height,
+            saturated * layer_height / height,
+            field_capacity * layer_height / height,
+            layer_height,
+            np.full(7, bubbling_pressure_m, dtype=np.float32),
+            lambda_,
+            out,
+        )
+        return out / layer_height
+
+    # soil of 4 m: suction 2 m; (0.5 / 2)^0.25 = 0.7071
+    np.testing.assert_allclose(retention(0.5), 0.05 + 0.7071 * 0.40, atol=1e-4)
+    # a thinner soil (2 m: suction 1 m) keeps more water against gravity
+    np.testing.assert_allclose(
+        retention(0.5, height / 2), 0.05 + 0.5**0.25 * 0.40, atol=1e-4
+    )
+    assert (retention(0.5, height / 2) > retention(0.5)).all()
+    # bubbling pressure above the suction: 5 % of the pore space still drains
+    np.testing.assert_allclose(retention(3.0), 0.05 + 0.95 * 0.40, atol=1e-5)
+    # never below field capacity
+    np.testing.assert_allclose(retention(1e-4), 0.20, atol=1e-6)
 
 
 def test_get_bulk_density_with_organic_matter() -> None:

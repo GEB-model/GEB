@@ -239,7 +239,7 @@ def fill_soil_below_water_table(
 @njit(cache=NUMBA_CACHE, fastmath=True, inline="always")
 def set_hillslope_interflow(
     water_content_m: ArrayFloat32,
-    water_content_field_capacity_m: ArrayFloat32,
+    water_content_specific_retention_m: ArrayFloat32,
     water_content_saturated_m: ArrayFloat32,
     water_content_residual_m: ArrayFloat32,
     soil_layer_height_m: ArrayFloat32,
@@ -291,7 +291,7 @@ def set_hillslope_interflow(
 
     Args:
         water_content_m: Water content per layer (m).
-        water_content_field_capacity_m: Water content at field capacity per layer (m).
+        water_content_specific_retention_m: Specific retention per layer (m).
         water_content_saturated_m: Water content at saturation per layer (m).
         water_content_residual_m: Residual water content per layer (m).
         soil_layer_height_m: Thickness per layer (m).
@@ -315,7 +315,7 @@ def set_hillslope_interflow(
 
     total_perched_m, total_capacity_m = set_hillslope_store(
         water_content_m,
-        water_content_field_capacity_m,
+        water_content_specific_retention_m,
         water_content_saturated_m,
         soil_layer_height_m,
         groundwater_depth_m,
@@ -397,7 +397,7 @@ def distribute_soil_water_ross(
     water_content_m: np.ndarray,
     water_content_residual_m: np.ndarray,
     water_content_saturated_m: np.ndarray,
-    water_content_field_capacity_m: np.ndarray,
+    water_content_specific_retention_m: np.ndarray,
     soil_enthalpy_J_per_m2: np.ndarray,
     solid_heat_capacity_J_per_m2_K: np.ndarray,
     vertical_saturated_hydraulic_conductivity_m_per_s: np.ndarray,
@@ -431,7 +431,8 @@ def distribute_soil_water_ross(
         water_content_m: Soil water content in each layer (m).
         water_content_residual_m: Residual soil water content in each layer (m).
         water_content_saturated_m: Saturated soil water content in each layer (m).
-        water_content_field_capacity_m: Field capacity soil water content in each layer (m).
+        water_content_specific_retention_m: Specific retention in each layer (m);
+            water above it can leave as interflow.
         soil_enthalpy_J_per_m2: Soil enthalpy in each layer (J/m2).
         solid_heat_capacity_J_per_m2_K: Heat capacity of the solid fraction in each layer (J/m2/K).
         vertical_saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for vertical redistribution (m/s).
@@ -566,7 +567,7 @@ def distribute_soil_water_ross(
     # Lateral outflow at the foot of the hillslope (interflow), from the soil as one store
     set_hillslope_interflow(
         water_content_m,
-        water_content_field_capacity_m,
+        water_content_specific_retention_m,
         water_content_saturated_m,
         water_content_residual_m,
         soil_layer_height,
@@ -940,7 +941,7 @@ def distribute_soil_water_ross(
         corrected_q_interflow_m_per_s = q_interflow[i] + (dq_interflow_dS[i] * d[i])
         available_for_interflow_m = max(
             np.float32(0.0),
-            water_content_m[i] - water_content_field_capacity_m[i],
+            water_content_m[i] - water_content_specific_retention_m[i],
         )
 
         actual_interflow_m = max(
