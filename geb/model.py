@@ -1288,10 +1288,10 @@ class GEBModel(Module):
         Returns:
             Name of the current model run. If in spinup mode, the spinup name is returned.
         """
-        if self.in_spinup:
-            return self.config["general"]["spinup_name"]
-        else:
-            return self.config["general"]["name"]
+        # if self.in_spinup:
+        return self.config["general"]["spinup_name"]
+        # else:
+        #     return self.config["general"]["name"]
 
     @property
     def multiverse_name(self) -> str | None:
