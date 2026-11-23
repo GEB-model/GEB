@@ -1,5 +1,5 @@
 name: Check Changed Files
-description: "Checks if changes are limited to docs/ folder or mkdocs.yml"
+description: "Checks if changes are limited to docs/ folder, docs_extensions/ or zensical.toml"
 inputs:
   github_token:
     description: "GitHub Token"
@@ -45,15 +45,15 @@ runs:
         
         while IFS= read -r file; do
           if [[ -z "$file" ]]; then continue; fi
-          if [[ "$file" != docs/* && "$file" != "mkdocs.yml" ]]; then
-            echo "Found file outside docs/ and not mkdocs.yml: $file"
+          if [[ "$file" != docs/* && "$file" != docs_extensions/* && "$file" != "zensical.toml" ]]; then
+            echo "Found file outside docs/, docs_extensions/ and zensical.toml: $file"
             ONLY_DOCS_CHANGED=false
             break
           fi
         done <<< "$CHANGED_FILES"
         
         if [ "$ONLY_DOCS_CHANGED" = true ]; then
-          echo "Only docs/ files or mkdocs.yml changed."
+          echo "Only docs/, docs_extensions/ or zensical.toml changed."
           echo "only_docs_changed=true" >> $GITHUB_OUTPUT
         else
           echo "Non-docs changes detected."

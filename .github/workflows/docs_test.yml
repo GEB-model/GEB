@@ -1,4 +1,4 @@
-name: Test mkdocs (Non-Main Branches)
+name: Test docs (Non-Main Branches)
 
 on:
   push:
@@ -24,6 +24,6 @@ jobs:
       - name: Install the project
         run: |
           uv sync --dev
-      - name: Build MkDocs
+      - name: Build docs (Zensical)
         run: |
-          uv run mkdocs build -f mkdocs.yml
+          uv run zensical build --clean --strict

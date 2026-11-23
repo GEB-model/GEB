@@ -19,25 +19,25 @@ In this guide, we will assume you use VS Code and already set up GEB for [develo
 
 First of all, thank you for (thinking about) contributing to the documentation! When you are a member of the GEB repository, you can edit documentation yourself. Pull requests that only edit the documentation are automatically approved. For outside contributors, please make a pull request and we will merge it for you.
 
-We use [mkdocs](https://www.mkdocs.org) to automatically create a full website based on markdown files and a GitHub action.
+We use [Zensical](https://zensical.org) to automatically create a full website based on markdown files and a GitHub action.
 
 ### Building documentation locally
 
 You can also test your changes locally first. For example, this command will build the documentation and create a local server so that you can view the documentation in your browser.
 
 ```sh
-uv run mkdocs serve
+uv run zensical serve
 ```
 
 It is also possible to just build the documentation locally:
 
 ```sh
-uv run mkdocs build
+uv run zensical build --clean --strict
 ```
 
 Your files will end up in the folder `site`. Open `index.html` in your browser for the main page.
 
-You can also update the site index or other configuration in mkdocs.yml in the root folder of the GEB repository.
+You can also update the site index or other configuration in `zensical.toml` in the root folder of the GEB repository. The Markdown extensions for citations and the configuration reference are in `docs_extensions/geb_docs`.
 
 ### Adding citations
 
@@ -61,7 +61,7 @@ We use bibtex to add references to the documentation. To add a reference you sho
     The first part after "&#64;article\{" is the name of the bibtex entry, then everything after are the details such as title and author list. There are also other types of entries, such as "&#64;techreport\{" and "&#64;misc\{". Depending on the the type of entry, different data may be required. You can learn more about bibtex [here](https://www.bibtex.org).
 
 2. Add the bibtex entry to [references.bib](https://github.com/GEB-model/GEB/blob/main/docs/references.bib). It doesn't matter where in the file as long as the formatting stays correct.
-3. Then, in the documentation you write "some statement that needs a reference\[&#64;debruijn2023geb\]". Here, the `debruijn2023geb` is the name of the bibtex-entry. It should then be automatically formatted correctly and add the citation to the bibliography at the bottom of the page.
+3. Then, in the documentation you write "some statement that needs a reference\[&#64;debruijn2023geb\]". Here, the `debruijn2023geb` is the name of the bibtex-entry. It is then rendered as an author-year citation, e.g. (De Bruijn et al., 2023), that links to the reference list at the bottom of the page. You can cite several works at once with \[&#64;key1; &#64;key2\], and add a prefix or suffix with \[see &#64;key, p. 12\]. To place the reference list elsewhere on the page, put `/// bibliography` on its own line. A citation key that is not in `references.bib` stops the build with an error.
 
 ## Making a release
 

@@ -1,4 +1,5 @@
 # dev
+- Documentation: Migrated from MkDocs to [Zensical](https://zensical.org) (`uv run zensical serve`). BibTeX citations are rendered with pybtex and citeproc-py, so pandoc is no longer needed. Removed the unused MkDocs plugins from the `dev` dependencies, and added IPython as a direct dependency (hydromt-sfincs imports it without declaring it).
 
 # v1.0.0b39
 - Configuration (breaking, update custom `model.yml` files): Run settings sit at the top level, `agent_settings` is now `agents`, and the former `parameters` section is split over `hydrology` and `agents`. Unknown keys are rejected. The region moved to a separate `region.yml`. `geb run --with section.key=value` changes a setting for one run.

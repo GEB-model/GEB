@@ -1,0 +1,165 @@
+# Documentation configuration for Zensical (https://zensical.org).
+# Build with `uv run zensical build`, preview with `uv run zensical serve`.
+
+[project]
+site_name = "GEB"
+site_description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
+site_author = "Jens de Bruijn"
+site_url = "https://docs.geb.sh/"
+repo_url = "https://github.com/GEB-model/GEB"
+repo_name = "GEB-model/GEB"
+edit_uri = "edit/main/docs/"
+docs_dir = "docs"
+site_dir = "site"
+
+extra_javascript = [
+  "javascripts/mathjax.js",
+  "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js",
+]
+
+nav = [
+  { "Home" = "index.md" },
+  { "Getting Started" = [
+    { "Installation" = "getting_started/installation.md" },
+    { "Configuration" = "getting_started/configuration.md" },
+    { "Building a model" = [
+      { "Overview" = "getting_started/build/index.md" },
+      { "Data catalog" = "getting_started/build/data_catalog.md" },
+      { "Elevation" = "getting_started/build/elevation.md" },
+      { "Landsurface" = "getting_started/build/landsurface.md" },
+      { "Waterbodies" = "getting_started/build/waterbodies.md" },
+    ] },
+    { "Running the model" = "getting_started/running.md" },
+    { "Evaluate the model" = [
+      { "Overview" = "getting_started/evaluation/index.md" },
+      { "Hydrology evaluation" = "getting_started/evaluation/hydrology.md" },
+      { "Flood evaluation" = "getting_started/evaluation/flood.md" },
+      { "Energy evaluation" = "getting_started/evaluation/energy.md" },
+    ] },
+    { "Reporting" = "getting_started/reporting.md" },
+  ] },
+  { "Model" = [
+    { "Overview" = "model/index.md" },
+    { "Modules" = "model/modules.md" },
+    { "Variables" = "model/variables.md" },
+  ] },
+  { "Agents" = [
+    { "Overview" = "agents/index.md" },
+    { "Households" = "agents/households.md" },
+    { "Crop farmers" = "agents/crop_farmers.md" },
+    { "Livestock farmers" = "agents/livestock_farmers.md" },
+    { "Reservoir operators" = "agents/reservoir_operators.md" },
+    { "Government" = "agents/government.md" },
+    { "Market" = "agents/market.md" },
+    { "Industry" = "agents/industry.md" },
+    { "Insurers" = "agents/insurers.md" },
+    { "ODD protocol" = "agents/ODD/protocol.md" },
+  ] },
+  { "Hydrology" = [
+    { "Overview" = "hydrology/index.md" },
+    { "Land Surface" = "hydrology/landsurface.md" },
+    { "Evapotranspiration" = "hydrology/evapotranspiration.md" },
+    { "Interception" = "hydrology/interception.md" },
+    { "Snow and Glaciers" = "hydrology/snow_glaciers.md" },
+    { "Soil Water" = "hydrology/soil_water.md" },
+    { "Soil Energy" = "hydrology/soil_energy.md" },
+    { "Water Demand" = "hydrology/water_demand.md" },
+    { "Groundwater" = "hydrology/groundwater.md" },
+    { "Runoff concentration" = "hydrology/runoff_concentration.md" },
+    { "Routing" = "hydrology/routing.md" },
+    { "Waterbodies" = "hydrology/waterbodies.md" },
+    { "Weirs and gates" = "hydrology/weirs.md" },
+    { "HRUs" = "hydrology/HRUs.md" },
+  ] },
+  { "Hazards" = [
+    { "Overview" = "hazards/index.md" },
+    { "Floods" = "hazards/floods.md" },
+    { "Windstorms" = "hazards/windstorms.md" },
+  ] },
+  { "Advanced topics" = [
+    { "Extreme value analysis" = "advanced_topics/extreme_value_analysis.md" },
+    { "Forecasts" = "advanced_topics/forecasts.md" },
+    { "Calibration" = "advanced_topics/calibration.md" },
+    { "PlantFATE" = "advanced_topics/plantFATE.md" },
+    { "Data structures" = "advanced_topics/data_structures.md" },
+  ] },
+  { "About" = [
+    { "Developers" = "about/developers.md" },
+    { "Contribution guide" = "about/contribution_guide.md" },
+    { "Updates" = "about/updates.md" },
+    { "License" = "about/license.md" },
+  ] },
+]
+
+[project.theme]
+features = [
+  "navigation.indexes",
+  "navigation.sections",
+  "content.code.copy",
+  "content.action.edit",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+primary = "teal"
+accent = "purple"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+primary = "teal"
+accent = "purple"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+# API reference pages (::: geb.module)
+[project.plugins.mkdocstrings.handlers.python]
+paths = ["."]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+docstring_style = "google"
+show_source = true
+show_root_heading = true
+extensions = ["griffe_pydantic"]
+
+# llms.txt and llms-full.txt for language models
+[project.plugins.llmstxt]
+full_output = "llms-full.txt"
+
+[project.plugins.llmstxt.sections]
+"Home" = ["index.md"]
+"Getting Started" = ["getting_started/*.md"]
+"Model" = ["model/*.md"]
+"Agents" = ["agents/*.md", "agents/ODD/*.md"]
+"Hydrology" = ["hydrology/*.md"]
+"Hazards" = ["hazards/*.md"]
+"Advanced topics" = ["advanced_topics/*.md"]
+"About" = ["about/*.md"]
+
+# Markdown extensions. Setting this table replaces Zensical's defaults.
+[project.markdown_extensions.footnotes]
+[project.markdown_extensions.admonition]
+[project.markdown_extensions."pymdownx.details"]
+[project.markdown_extensions."pymdownx.superfences"]
+[project.markdown_extensions."pymdownx.highlight"]
+anchor_linenums = true
+[project.markdown_extensions."pymdownx.inlinehilite"]
+[project.markdown_extensions."pymdownx.snippets"]
+base_path = ["."]
+[project.markdown_extensions."pymdownx.tabbed"]
+alternate_style = true
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.md_in_html]
+[project.markdown_extensions."pymdownx.arithmatex"]
+generic = true
+[project.markdown_extensions.toc]
+permalink = true
+
+# Citations: [@key] in Markdown, entries in docs/references.bib.
+# Implemented in docs_extensions/geb_docs (pybtex + citeproc-py, no pandoc).
+[project.markdown_extensions."geb_docs.bibtex"]
+bib_file = "docs/references.bib"
+
+# Expands <!-- autogenerated:config-reference --> into the config tables.
+[project.markdown_extensions."geb_docs.config_reference"]
