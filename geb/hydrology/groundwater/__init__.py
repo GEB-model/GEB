@@ -49,6 +49,10 @@ from geb.workflows.io import read_zarr
 
 from .model import ModFlowSimulation
 
+# Wetted perimeter of the streams that drain the aquifer (m), for the radial flow
+# resistance near the stream. The resistance depends on it only logarithmically.
+STREAM_WETTED_PERIMETER_M: float = 3.0
+
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
@@ -128,6 +132,78 @@ def get_response_time_conductance(
     return (specific_yield * cell_area_m2 / np.float32(response_time_days)).astype(
         np.float32
     )
+
+
+def get_aquifer_drain_conductance(
+    hydraulic_conductivity_m_per_day: ArrayFloat32,
+    thickness_below_stream_m: ArrayFloat32,
+    height_above_stream_m: ArrayFloat32,
+    hillslope_length_m: ArrayFloat32,
+    cell_area_m2: ArrayFloat32,
+    stream_wetted_perimeter_m: float = STREAM_WETTED_PERIMETER_M,
+) -> ArrayFloat32:
+    """Drain conductance of an aquifer that drains to parallel streams.
+
+    Horizontal flow and radial flow into the stream, as resistances in series:
+
+        c_horizontal = 4 L^2 / (pi^2 K (D + 2 h / pi))
+        c_radial     = 2 L / (pi K) ln(min(D, 2 L) / u),  >= 0
+        C            = A / (c_horizontal + c_radial)
+
+    with L the hillslope length, K the conductivity, D the aquifer thickness below the
+    stream, h the mean height of the water table above the stream (the cell head), u
+    the wetted perimeter of the stream and A the cell area. The drainage time is
+    Sy * (c_horizontal + c_radial).
+
+    Sources: Kraijenhoff van de Leur (1958, De Ingenieur 70(19), B87-B94, eq. 3) for
+    c_horizontal; Van der Molen and Wesseling (1991, Agric. Water Manage. 19, 1-16) for
+    the flow above the stream (Hooghoudt's term in their eq. 1: half the midway head
+    m0, with m0 = 4 h / pi for the elliptical water table) and for c_radial (eqs. 2, 8
+    and 16; within 10 % of their exact solution).
+
+    Args:
+        hydraulic_conductivity_m_per_day: Hydraulic conductivity of the aquifer (m/day).
+        thickness_below_stream_m: Thickness of the aquifer below the stream level (m).
+        height_above_stream_m: Height of the water table above the stream level (m), >= 0.
+        hillslope_length_m: Distance from the divide to the stream (m), > 0.
+        cell_area_m2: Cell area (m2).
+        stream_wetted_perimeter_m: Wetted perimeter of the streams (m).
+
+    Returns:
+        Drain conductance per cell (m2/day).
+
+    Raises:
+        ValueError: If the conductivity, thickness or hillslope length is not positive,
+            or the height above the stream is negative.
+    """
+    if not (hydraulic_conductivity_m_per_day > 0).all():
+        raise ValueError("Hydraulic conductivity must be positive.")
+    if not (thickness_below_stream_m > 0).all():
+        raise ValueError("Aquifer thickness below the stream must be positive.")
+    if not (height_above_stream_m >= 0).all():
+        raise ValueError("Height of the water table above the stream must be >= 0.")
+    if not (hillslope_length_m > 0).all():
+        raise ValueError("Hillslope length must be positive.")
+
+    horizontal_days = (
+        4.0
+        * hillslope_length_m**2
+        / (
+            np.pi**2
+            * hydraulic_conductivity_m_per_day
+            * (thickness_below_stream_m + (2.0 / np.pi) * height_above_stream_m)
+        )
+    )
+    # flow converges from at most the stream spacing deep; no radial resistance where
+    # the aquifer is thinner than the wetted perimeter
+    convergence_depth_m = np.minimum(thickness_below_stream_m, 2.0 * hillslope_length_m)
+    radial_days = (
+        2.0
+        * hillslope_length_m
+        / (np.pi * hydraulic_conductivity_m_per_day)
+        * np.maximum(np.log(convergence_depth_m / stream_wetted_perimeter_m), 0.0)
+    )
+    return (cell_area_m2 / (horizontal_days + radial_days)).astype(np.float32)
 
 
 def get_karst_drain_conductance(
@@ -329,37 +405,84 @@ class GroundWater(Module):
         bottom_m = self.grid.var.layer_boundary_elevation[1].astype(np.float64)
         return np.clip(water_stage_m.astype(np.float64), bottom_m + 0.1, top_m)
 
-    def get_drainage_conductance(self) -> ArrayFloat32:
+    def set_drain_geometry(self) -> None:
+        """Set the parts of the drain conductance that do not change in time.
+
+        The streams of a cell are parallel drains at the stream level (the bankfull river
+        elevation, kept inside the top layer), two hillslope lengths apart. The karst part
+        of a cell drains through conduits in the karst drainage time.
+        """
+        # get_drain_elevation returns float64 for the hourly routing
+        self._drain_stream_level_m: ArrayFloat32 = self.get_drain_elevation(
+            self._stream_elevation_m
+        ).astype(np.float32)
+        self._drain_thickness_below_stream_m: ArrayFloat32 = (
+            self._drain_stream_level_m - self.grid.var.layer_boundary_elevation[1]
+        )
+        # the build caps the hillslope length at 1000 m, also where a cell has no stream
+        self._drain_hillslope_length_m: ArrayFloat32 = self.hydrology.grid.load2d(
+            self.model.files["grid"]["drainage/hillslope_length_m"]
+        )
+        self._drain_karst_conductance_m2_per_day: ArrayFloat32 = (
+            get_response_time_conductance(
+                specific_yield=self.grid.var.specific_yield[0],
+                cell_area_m2=self.grid.var.cell_area,
+                response_time_days=self.model.config["hydrology"]["karst"][
+                    "drainage_response_time_days"
+                ],
+            )
+        )
+
+    def get_drainage_conductance(self, head_m: ArrayFloat64) -> ArrayFloat32:
         """Get the conductance of the groundwater drain to the river network.
 
-        Groundwater above the drain level leaves every cell in the same drainage time
-        (``drainage_response_time_days``, see ``get_response_time_conductance``): the
-        observed recessions of the rivers do not follow the mapped aquifer conductivity.
-        Karst conduits carry groundwater to the springs much faster than the rock
-        matrix, so the karst part of a cell drains in the karst drainage time.
+        The rock matrix drains to the streams as an aquifer between parallel streams,
+        through horizontal flow and a radial resistance near the stream
+        (``get_aquifer_drain_conductance``). The horizontal flow passes below and above
+        the stream level, so the conductance grows with the height of the water table
+        above the stream and is updated every day. The conductivity is that of the
+        aquifer data, without the decay with depth that the lateral flow uses. Karst
+        conduits carry groundwater to the springs much faster than the rock matrix, so
+        the karst part of a cell drains in the karst drainage time.
+
+        Args:
+            head_m: Groundwater head of the top layer (m).
 
         Returns:
             Drain conductance per grid cell (m2/day).
         """
-        matrix_conductance_m2_per_day: ArrayFloat32 = get_response_time_conductance(
-            specific_yield=self.grid.var.specific_yield[0],
-            cell_area_m2=self.grid.var.cell_area,
-            response_time_days=self.model.config["hydrology"]["groundwater"][
-                "drainage_response_time_days"
-            ],
+        # the saturated rock above the stream: none when the head is below the stream,
+        # at most up to the top of the layer
+        height_above_stream_m: ArrayFloat32 = (
+            np.clip(
+                head_m.astype(np.float32),
+                self._drain_stream_level_m,
+                self.grid.var.layer_boundary_elevation[0],
+            )
+            - self._drain_stream_level_m
         )
-        karst_conductance_m2_per_day: ArrayFloat32 = get_response_time_conductance(
-            specific_yield=self.grid.var.specific_yield[0],
+        matrix_conductance_m2_per_day: ArrayFloat32 = get_aquifer_drain_conductance(
+            hydraulic_conductivity_m_per_day=self.hydraulic_conductivity_m_per_day[0],
+            thickness_below_stream_m=self._drain_thickness_below_stream_m,
+            height_above_stream_m=height_above_stream_m,
+            hillslope_length_m=self._drain_hillslope_length_m,
             cell_area_m2=self.grid.var.cell_area,
-            response_time_days=self.model.config["hydrology"]["karst"][
-                "drainage_response_time_days"
-            ],
         )
         return get_karst_drain_conductance(
             matrix_conductance_m2_per_day=matrix_conductance_m2_per_day,
-            karst_conductance_m2_per_day=karst_conductance_m2_per_day,
+            karst_conductance_m2_per_day=self._drain_karst_conductance_m2_per_day,
             karst_fraction=self.hydrology.karst.karst_fraction,
         ).astype(np.float32)
+
+    def update_drain_conductance(self, head_m: ArrayFloat64) -> None:
+        """Update the hourly drain conductance used in routing from the current head.
+
+        Args:
+            head_m: Groundwater head of the top layer (m).
+        """
+        self.drain_conductance_m2_per_hour: ArrayFloat64 = (
+            self.get_drainage_conductance(head_m).astype(np.float64) / 24.0
+        )
 
     def initalize_modflow_model(self) -> None:
         """Initialize the ModFlow groundwater simulation model."""
@@ -412,9 +535,8 @@ class GroundWater(Module):
         self._stream_elevation_m: ArrayFloat32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["routing/bankfull_river_elevation_m"]
         ).astype(np.float32)
-        self.drain_conductance_m2_per_hour: ArrayFloat64 = (
-            self.get_drainage_conductance().astype(np.float64) / 24.0
-        )
+        self.set_drain_geometry()
+        self.update_drain_conductance(self.grid.var.heads[0])
         self.modflow = ModFlowSimulation(
             # One MODFLOW directory per spinup/run, so parallel runs in one model folder do
             # not overwrite each other's MODFLOW input files.
@@ -539,6 +661,10 @@ class GroundWater(Module):
 
         self.modflow.step()
         timer.finish_split("MODFLOW solve")
+
+        # the water table above the stream level conducts water to the stream as well, so
+        # the drain conductance for the next day follows the new head
+        self.update_drain_conductance(self.modflow.heads[0])
 
         if __debug__:
             influxes: list[npt.NDArray[np.float64] | np.float64] = [

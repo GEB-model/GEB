@@ -977,6 +977,7 @@ def test_groundwater_step_epsilon_safeguard() -> None:
     gw.grid = MagicMock()
     gw.grid.var.cell_area = np.array([1000.0, 1000.0], dtype=np.float32)
     gw.modflow = MagicMock()
+    gw.update_drain_conductance = MagicMock()
     gw.modflow.available_groundwater_m3 = np.array([100.0, 200.0], dtype=np.float64)
     gw.modflow.groundwater_content_m3 = np.array([500.0, 500.0], dtype=np.float64)
     gw.modflow.boundary_inflow_m3 = np.array([0.0, 0.0], dtype=np.float64)
@@ -1118,6 +1119,48 @@ def test_response_time_conductance_drains_in_the_response_time() -> None:
     np.testing.assert_allclose((head - drain) / excess_start, np.exp(-1.0), rtol=1e-5)
 
 
+def test_aquifer_drain_conductance_drains_in_the_aquifer_drainage_time() -> None:
+    """The aquifer drain empties a cell in 4 Sy L^2 / (pi^2 T) (Kraijenhoff van de Leur)."""
+    from geb.hydrology.groundwater import (
+        drain_groundwater_to_rivers,
+        get_aquifer_drain_conductance,
+    )
+
+    specific_yield = np.float32(0.1)
+    # 1 m of aquifer below the stream, thinner than its wetted perimeter: no radial
+    # resistance, only horizontal flow
+    conductivity = np.array([50.0, 5.0], dtype=np.float32)  # m/day
+    thickness = np.ones(2, dtype=np.float32)
+    transmissivity = conductivity * thickness
+    hillslope_length = np.array([300.0, 300.0], dtype=np.float32)  # m
+    cell_area = np.array([1e6, 1e6], dtype=np.float32)
+    conductance = get_aquifer_drain_conductance(
+        hydraulic_conductivity_m_per_day=conductivity,
+        thickness_below_stream_m=thickness,
+        height_above_stream_m=np.zeros(2, dtype=np.float32),
+        hillslope_length_m=hillslope_length,
+        cell_area_m2=cell_area,
+    )
+    drainage_time_days = (
+        4.0 * specific_yield * hillslope_length**2 / (np.pi**2 * transmissivity)
+    )
+    # ten times less transmissive rock drains ten times more slowly
+    np.testing.assert_allclose(drainage_time_days[1] / drainage_time_days[0], 10.0)
+
+    head = np.array([12.0, 12.0], dtype=np.float64)
+    drain = np.full(2, 10.0, dtype=np.float64)
+    storage = (specific_yield * cell_area).astype(np.float64)
+    drainage = np.zeros(2, dtype=np.float64)
+    remaining = np.full(2, 1e12, dtype=np.float64)
+    conductance_m2_per_hour = conductance.astype(np.float64) / 24.0
+    for _ in range(int(round(drainage_time_days[0] * 24))):
+        drain_groundwater_to_rivers(
+            head, drain, conductance_m2_per_hour, storage, drainage, remaining
+        )
+    # after one drainage time of the first cell its head above the drain is 1 / e
+    np.testing.assert_allclose((head[0] - drain[0]) / 2.0, np.exp(-1.0), rtol=0.01)
+
+
 def test_karst_drain_conductance_follows_the_karst_fraction() -> None:
     """The karst part of a cell drains with the karst conductance, the rest with the matrix."""
     from geb.hydrology.groundwater import get_karst_drain_conductance
@@ -1184,3 +1227,130 @@ def test_get_conductivity_depth_decay_factor() -> None:
     )
     np.testing.assert_allclose(two[0] * 40.0 + two[1] * 60.0, one[0] * 100.0)
     assert two[1, 0] < two[0, 0]
+
+
+def test_radial_resistance_matches_van_der_molen_wesseling() -> None:
+    """Horizontal plus radial resistance give the exact steady state of parallel drains.
+
+    Van der Molen and Wesseling (1991), Table 2 (exact solution, drain radius 0.05 m):
+    thickness of Hooghoudt's equivalent layer d for aquifer thickness D and drain
+    spacing S. In steady state the head midway is s S^2 / (8 K d), the horizontal part
+    s S^2 / (8 K D) plus the radial part s c_radial.
+    """
+    from geb.hydrology.groundwater import get_aquifer_drain_conductance
+
+    # (D, S, d) in m
+    table = [
+        (0.5, 10.0, 0.44),
+        (1.0, 20.0, 0.81),
+        (2.0, 20.0, 1.21),
+        (2.0, 100.0, 1.77),
+        (5.0, 40.0, 2.38),
+        (5.0, 200.0, 4.10),
+        (10.0, 25.0, 1.93),
+        (10.0, 200.0, 6.54),
+    ]
+    for thickness, spacing, equivalent_depth in table:
+        length = spacing / 2.0
+        conductance = get_aquifer_drain_conductance(
+            hydraulic_conductivity_m_per_day=np.array([1.0], dtype=np.float32),
+            thickness_below_stream_m=np.array([thickness], dtype=np.float32),
+            height_above_stream_m=np.array([0.0], dtype=np.float32),
+            hillslope_length_m=np.array([length], dtype=np.float32),
+            cell_area_m2=np.array([1.0], dtype=np.float32),
+            stream_wetted_perimeter_m=np.pi * 0.05,
+        )[0]
+        radial_days = 1.0 / conductance - 4.0 * length**2 / (np.pi**2 * thickness)
+        computed = spacing**2 / 8.0 / (spacing**2 / (8.0 * thickness) + radial_days)
+        np.testing.assert_allclose(computed, equivalent_depth, rtol=0.02)
+
+
+def test_radial_resistance_slows_thick_aquifers() -> None:
+    """No radial resistance when the stream reaches the base; it grows with the thickness."""
+    from geb.hydrology.groundwater import get_aquifer_drain_conductance
+
+    thickness = np.array([0.1, 2.0, 50.0, 200.0, 2000.0], dtype=np.float32)
+    length = np.full(5, 300.0, dtype=np.float32)
+    conductance = get_aquifer_drain_conductance(
+        hydraulic_conductivity_m_per_day=np.ones(5, dtype=np.float32),
+        thickness_below_stream_m=thickness,
+        height_above_stream_m=np.zeros(5, dtype=np.float32),
+        hillslope_length_m=length,
+        cell_area_m2=np.ones(5, dtype=np.float32),
+    )
+    horizontal_only = np.pi**2 * thickness / (4.0 * length**2)
+    np.testing.assert_allclose(conductance[:2], horizontal_only[:2], rtol=1e-5)
+    factor = conductance / horizontal_only
+    assert np.all(np.diff(factor[1:]) < 0) and np.all(factor > 0)
+
+
+def test_drainage_conductance_includes_flow_above_stream_level() -> None:
+    """T = K (D + 2 h / pi) with h the mean head; with the stream at the layer base only h counts."""
+    from types import SimpleNamespace
+
+    from geb.hydrology.groundwater import GroundWater, get_aquifer_drain_conductance
+
+    gw = GroundWater.__new__(GroundWater)
+    gw.grid = SimpleNamespace(
+        var=SimpleNamespace(
+            cell_area=np.full(2, 1e6, dtype=np.float32),
+            # top layer from 0 to 50 m in both cells
+            layer_boundary_elevation=np.array(
+                [[50.0, 50.0], [0.0, 0.0], [-50.0, -50.0]], dtype=np.float32
+            ),
+            groundwater_hydraulic_conductivity_m_per_day=np.full(
+                (2, 2), 1.0, dtype=np.float32
+            ),
+        )
+    )
+    gw.hydrology = SimpleNamespace(
+        karst=SimpleNamespace(karst_fraction=np.zeros(2, dtype=np.float32))
+    )
+    gw.model = SimpleNamespace(
+        config={
+            "hydrology": {"groundwater": {"hydraulic_conductivity_multiplier": 1.0}}
+        }
+    )
+    # cell 0: stream at the layer base (D ~ 0); cell 1: 30 m of aquifer below the stream
+    gw._drain_stream_level_m = np.array([0.1, 30.0], dtype=np.float32)
+    gw._drain_hillslope_length_m = np.full(2, 300.0, dtype=np.float32)
+    gw._drain_thickness_below_stream_m = np.array([0.1, 30.0], dtype=np.float32)
+    gw._drain_karst_conductance_m2_per_day = np.zeros(2, dtype=np.float32)
+
+    head = np.array([10.1, 40.0])  # 10 m above the stream in both cells
+    conductance = gw.get_drainage_conductance(head)
+    expected = get_aquifer_drain_conductance(
+        hydraulic_conductivity_m_per_day=np.ones(2, dtype=np.float32),
+        thickness_below_stream_m=gw._drain_thickness_below_stream_m,
+        height_above_stream_m=np.full(2, 10.0, dtype=np.float32),
+        hillslope_length_m=gw._drain_hillslope_length_m,
+        cell_area_m2=gw.grid.var.cell_area,
+    )
+    np.testing.assert_allclose(conductance, expected, rtol=1e-6)
+    # below the stream level only the aquifer below the stream conducts
+    low = gw.get_drainage_conductance(np.array([0.0, 20.0]))
+    assert low[0] < conductance[0] / 10 and low[1] < conductance[1]
+
+
+def test_aquifer_drain_conductance_rejects_invalid_input() -> None:
+    """Non-positive conductivity, thickness or hillslope length, or negative height, raise."""
+    from geb.hydrology.groundwater import get_aquifer_drain_conductance
+
+    valid = {
+        "hydraulic_conductivity_m_per_day": np.ones(1, dtype=np.float32),
+        "thickness_below_stream_m": np.ones(1, dtype=np.float32),
+        "height_above_stream_m": np.zeros(1, dtype=np.float32),
+        "hillslope_length_m": np.ones(1, dtype=np.float32),
+        "cell_area_m2": np.ones(1, dtype=np.float32),
+    }
+    get_aquifer_drain_conductance(**valid)
+    for name, value in [
+        ("hydraulic_conductivity_m_per_day", 0.0),
+        ("thickness_below_stream_m", 0.0),
+        ("height_above_stream_m", -1.0),
+        ("hillslope_length_m", np.nan),
+    ]:
+        with pytest.raises(ValueError):
+            get_aquifer_drain_conductance(
+                **{**valid, name: np.array([value], dtype=np.float32)}
+            )

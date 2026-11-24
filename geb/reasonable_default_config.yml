@@ -83,7 +83,6 @@ hydrology:
     variable_runoff_shape_beta_multiplier: 1.0
   groundwater:
     hydraulic_conductivity_multiplier: 1.0
-    drainage_response_time_days: 10.0
   runoff_concentrator:
     runoff_concentration_factor: 1.0
   karst:

@@ -117,7 +117,7 @@ def test_calculate_wetted_channel_area_local_inertial_overbank() -> None:
     bankfull_width: np.ndarray = np.array([20.0], dtype=np.float32)
     bankfull_depth: np.ndarray = np.array([2.0], dtype=np.float32)
     shape_exponent: np.ndarray = np.array([0.5], dtype=np.float32)
-    # Profile depths: 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0
+    # Profile depths: FLOODPLAIN_PROFILE_DEPTHS (0.1, 0.25, 0.5, 1.0, ... 10.0 m)
     # Overbank depth = 0.5 matches profile level index 2 (FLOODPLAIN_PROFILE_DEPTHS[2] == 0.5)
     floodplain_widths: np.ndarray = np.zeros(
         (1, NUM_FLOODPLAIN_LEVELS), dtype=np.float32

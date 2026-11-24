@@ -427,14 +427,6 @@ class GroundWaterConfig(BaseModel):
     hydraulic_conductivity_multiplier: float = Field(
         ..., ge=0.0, description="Groundwater hydraulic conductivity multiplier."
     )
-    drainage_response_time_days: float = Field(
-        ...,
-        gt=0.0,
-        description=(
-            "Time in which groundwater above the drain level leaves a cell (days): "
-            "the drain conductance is specific yield * cell area / time."
-        ),
-    )
 
 
 class RunoffConcentratorConfig(BaseModel):
