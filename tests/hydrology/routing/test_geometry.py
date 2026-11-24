@@ -504,7 +504,7 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
     """Test Routing.calculate_bankfull_depth with simulated Q2 and cold-start fallback.
 
     Verifies that:
-    1. When self.var.rivers has 'return_period_2_years_daily_m3_per_s', simulated Q2 is mapped to grid.
+    1. When self.var.rivers has 'return_period_2_years_daily_m3_per_s', the bankfull discharge is mapped to grid.
     2. When the column is absent (cold-start spinup), empirical width inversion is used as fallback.
     3. Backwater integration and Manning normal depth inversion operate as expected.
     """
@@ -1021,9 +1021,7 @@ def test_unrepresented_river_geometry_confluence() -> None:
     )
 
     # Reach 30 must have combined bankfull discharge Q = 50 + 100 = 150 m3/s
-    q30: float = float(
-        routing.var.rivers.loc[30, "return_period_2_years_daily_m3_per_s"]
-    )
+    q30: float = float(routing.var.rivers.loc[30, "return_period_2_years_daily_m3_per_s"])
     assert np.isclose(q30, 150.0)
 
     # Discharge-weighted alpha: (50 * 7.0 + 100 * 7.4) / 150 = 7.2667
@@ -1256,9 +1254,7 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
     assert not np.isnan(float(routing.var.rivers.loc[10, "width"]))
     assert np.isnan(float(routing.var.rivers.loc[99, "width"]))
     assert np.isnan(float(routing.var.rivers.loc[99, "depth"]))
-    assert np.isnan(
-        float(routing.var.rivers.loc[99, "return_period_2_years_daily_m3_per_s"])
-    )
+    assert np.isnan(float(routing.var.rivers.loc[99, "return_period_2_years_daily_m3_per_s"]))
 
 
 def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
@@ -3216,7 +3212,7 @@ def test_compute_overbank_area_from_depth_inverts_profile_lookup() -> None:
     """Verifies compute_overbank_area_from_depth is the inverse of compute_overbank_depth_and_top_width.
 
     Checks depths within the shallowest slice, between profile levels, exactly at a level
-    and beyond the 5 m profile where side-slope extrapolation applies.
+    and beyond the deepest profile level where side-slope extrapolation applies.
     """
     geom = _make_profile_geometry()
     areas: ArrayFloat32 = geom.geom_floodplain_areas[0]
@@ -3225,17 +3221,17 @@ def test_compute_overbank_area_from_depth_inverts_profile_lookup() -> None:
     assert compute_overbank_area_from_depth(
         np.float32(0.0), np.float32(50.0), areas, widths, np.float32(2.0)
     ) == np.float32(0.0)
-    # Exactly at profile level 4 (1.0 m) the area equals the precomputed cumulative area
+    # Exactly at the 1.0 m profile level the area equals the precomputed cumulative area
     assert np.isclose(
         float(
             compute_overbank_area_from_depth(
                 np.float32(1.0), np.float32(50.0), areas, widths, np.float32(2.0)
             )
         ),
-        float(areas[4]),
+        float(areas[FLOODPLAIN_PROFILE_DEPTHS.index(1.0)]),
         rtol=1e-5,
     )
-    for depth in [0.05, 0.3, 1.7, 3.0, 4.5, 6.0, 9.0]:
+    for depth in [0.05, 0.3, 1.7, 3.0, 4.5, 6.0, 9.0, 12.0]:
         area: np.float32 = compute_overbank_area_from_depth(
             np.float32(depth), np.float32(50.0), areas, widths, np.float32(2.0)
         )

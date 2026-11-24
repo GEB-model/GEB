@@ -83,13 +83,13 @@ FLOODPLAIN_PROFILE_DEPTHS: tuple[float, ...] = (
     0.1,
     0.25,
     0.5,
-    0.75,
     1.0,
     1.5,
     2.0,
     3.0,
-    4.0,
     5.0,
+    7.5,
+    10.0,
 )
 NUM_FLOODPLAIN_LEVELS: int = len(FLOODPLAIN_PROFILE_DEPTHS)
 FLOODPLAIN_PROFILE_DEPTHS_ARR: ArrayFloat32 = np.array(
@@ -378,9 +378,9 @@ def compute_overbank_depth_and_top_width(
 ) -> tuple[np.float32, np.float32]:
     """Calculates overbank inundation depth and free-surface top width from overbank area.
 
-    Uses a 10-point piecewise linear profile lookup corresponding to fixed depth levels:
-    [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0] meters above bankfull.
-    Beyond 5.0 meters, quadratic extrapolation using valley side slope z is applied.
+    Uses a 10-point piecewise linear profile lookup at the depth levels
+    FLOODPLAIN_PROFILE_DEPTHS above bankfull. Beyond the deepest level, quadratic
+    extrapolation using valley side slope z is applied.
 
     Args:
         overbank_area: Overbank cross-sectional flow area (m²).
@@ -395,7 +395,7 @@ def compute_overbank_depth_and_top_width(
     if overbank_area <= np.float32(0.0):
         return np.float32(0.0), bankfull_width_m
 
-    # Case 1: Shallowest slice below level 0 (h in [0.0, 0.1])
+    # Case 1: Shallowest slice below level 0
     if overbank_area < floodplain_areas[0]:
         h_k: np.float32 = FLOODPLAIN_PROFILE_DEPTHS_ARR[0]
         w_bot: np.float32 = bankfull_width_m
@@ -432,14 +432,14 @@ def compute_overbank_depth_and_top_width(
         top_w = w_bot + np.float32(2.0) * s * delta_h
         return h, top_w
 
-    # Case 3: Extreme flood exceeding level 9 (h > 5.0 meters)
+    # Case 3: Extreme flood exceeding the deepest level
     a_9: np.float32 = floodplain_areas[9]
     da = overbank_area - a_9
     w_9: np.float32 = floodplain_widths[9]
     z: np.float32 = max(floodplain_side_slope_m_per_m, np.float32(0.0))
     disc = w_9 * w_9 + np.float32(4.0) * z * da
     delta_h = np.float32(2.0) * da / (w_9 + np.sqrt(max(disc, np.float32(0.0))))
-    h = np.float32(5.0) + delta_h
+    h = FLOODPLAIN_PROFILE_DEPTHS_ARR[9] + delta_h
     top_w = w_9 + np.float32(2.0) * z * delta_h
     return h, top_w
 
@@ -501,7 +501,8 @@ def compute_overbank_area_from_depth(
 
     Inverse of compute_overbank_depth_and_top_width: integrates the piecewise linear
     10-point floodplain profile (including the water column above the channel) from
-    bankfull level up to overbank_depth_m, with side-slope extrapolation beyond 5.0 m.
+    bankfull level up to overbank_depth_m, with side-slope extrapolation beyond the deepest
+    profile level.
 
     Args:
         overbank_depth_m: Water depth above bankfull level (meters).

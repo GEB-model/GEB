@@ -350,7 +350,7 @@ def calculate_dem_floodplain_geometry(
     Uses Height Above Nearest Drainage (HAND) (Nobre et al. 2016) calculated from a 1 arc-second DEM
     (e.g., FathomDEM) mapped to the 3 arc-second hydrologically conditioned flow paths from MERIT Hydro.
     The exact 3:1 integer subgrid alignment samples flooded width across 10 fixed depth levels above bankfull
-    ([0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0] meters). Flooded subpixels are mapped to river reaches
+    (FLOODPLAIN_PROFILE_DEPTHS, 0.1 to 10 meters). Flooded subpixels are mapped to river reaches
     via subbasins and aggregated by river segment to produce uniform cross-sectional width profiles.
 
     Two kinds of cells get a profile, each measured above its own drainage line:
