@@ -2,12 +2,13 @@
 
 import datetime
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 from dateutil.relativedelta import relativedelta
 
-from geb.reporter import create_time_array
+from geb.reporter import Reporter, create_time_array
 
 
 def _to_datetimes(time_array: np.ndarray) -> list[datetime.datetime]:
@@ -944,3 +945,162 @@ class TestSpecialExportersSingleFile:
         )
         assert list(df_q_rivers.columns) == ["10", "20"]
         assert float(df_q_rivers.iloc[0]["10"]) == 50.0
+
+
+class TestReportingHistory:
+    """Tests for saving the reporting history in a checkpoint and restoring it when continuing."""
+
+    @staticmethod
+    def _make_model(current_time: datetime.datetime, n_days: int) -> MagicMock:
+        """Create a mock model with an hourly grouped variable, a daily variable, a variable reported only initially and a dataframe.
+
+        Args:
+            current_time: Start of the (continued) simulation.
+            n_days: Number of daily timesteps of the (continued) simulation.
+
+        Returns:
+            The mock model.
+        """
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "hydrology.routing": {
+                    **{
+                        f"outflow_{key}": {
+                            "varname": "var.outflow",
+                            "type": "scalar",
+                            "substeps": 24,
+                            "_group": "outflow",
+                            "_group_key": key,
+                        }
+                        for key in ("1", "2")
+                    },
+                    "storage": {"varname": "var.storage", "type": "scalar"},
+                    "initial_storage": {
+                        "varname": ".storage",
+                        "type": "scalar",
+                        "frequency": "initial",
+                    },
+                    "table": {
+                        "varname": "var.table",
+                        "type": "dataframe",
+                        "function": None,
+                    },
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+        model.timestep_length = datetime.timedelta(days=1)
+        model.current_time = current_time
+        model.current_timestep = 0
+        model.n_timesteps = n_days
+        model.simulation_end = current_time + (n_days - 1) * model.timestep_length
+        return model
+
+    @staticmethod
+    def _report_day(reporter: Reporter, day: int) -> None:
+        """Report the values of one day, with values derived from the day number."""
+        import pandas as pd
+
+        configs: dict = reporter.variables_to_report["hydrology.routing"]
+        for key, offset in (("1", 0.0), ("2", 1000.0)):
+            reporter.process_value(
+                "hydrology.routing",
+                f"outflow_{key}",
+                np.full(24, day + offset, dtype=np.float32),
+                configs[f"outflow_{key}"],
+            )
+        reporter.process_value(
+            "hydrology.routing", "storage", float(day), configs["storage"]
+        )
+        reporter.maybe_report_value(
+            "hydrology.routing",
+            "initial_storage",
+            None,
+            {"storage": np.float64(day)},
+            configs["initial_storage"],
+        )
+        reporter.process_value(
+            "hydrology.routing",
+            "table",
+            pd.DataFrame({"value": [float(day)]}),
+            configs["table"],
+        )
+
+    def test_continue_from_checkpoint_restores_history(self, tmp_path: Path) -> None:
+        """Verify that history saved in a checkpoint is restored and included in the final reports."""
+        import pandas as pd
+
+        report_dir: Path = tmp_path / "report"
+        history_dir: Path = tmp_path / "checkpoint" / "reporter_history"
+        start = datetime.datetime(2000, 1, 1)
+
+        # first run: 4 days planned, killed after a checkpoint at the start of day 2
+        model = self._make_model(start, n_days=4)
+        reporter = Reporter(model, report_dir, clean=True)
+        for day in range(2):
+            model.current_time = start + datetime.timedelta(days=day)
+            model.current_timestep = day
+            self._report_day(reporter, day)
+        model.current_time = start + datetime.timedelta(days=2)
+        reporter.save_history(history_dir)
+
+        # the history contains only the reported timesteps
+        history = pd.read_parquet(history_dir / "hydrology.routing" / "outflow.parquet")
+        assert len(history) == 2 * 24
+
+        # continue from the checkpoint at day 2
+        checkpoint_time = start + datetime.timedelta(days=2)
+        model = self._make_model(checkpoint_time, n_days=2)
+        reporter = Reporter(model, report_dir, clean=False, history_folder=history_dir)
+        # the history is prepended when a variable is first reported after continuing
+        configs: dict = reporter.variables_to_report["hydrology.routing"]
+        assert "_time_array" not in configs["outflow_1"]
+        assert len(
+            reporter._pending_history[("hydrology.routing", "outflow_1")][1]
+        ) == (2 * 24)
+        for day in range(2, 4):
+            if day == 2:
+                # history of a variable that is not reported again is saved as well
+                reporter.save_history(tmp_path / "checkpoint2")
+                saved = pd.read_parquet(
+                    tmp_path / "checkpoint2" / "hydrology.routing" / "outflow.parquet"
+                )
+                assert len(saved) == 2 * 24
+            model.current_time = start + datetime.timedelta(days=day)
+            model.current_timestep = day - 2
+            self._report_day(reporter, day)
+        reporter.finalize()
+
+        outflow = pd.read_parquet(report_dir / "hydrology.routing" / "outflow.parquet")
+        assert list(outflow.columns) == ["1", "2"]
+        assert len(outflow) == 4 * 24
+        # substep times are in the middle of each hour
+        assert outflow.index[0] == pd.Timestamp(start) + pd.Timedelta(minutes=30)
+        assert outflow.index.is_monotonic_increasing
+        assert outflow.index.is_unique
+        np.testing.assert_array_equal(
+            outflow["1"].to_numpy(), np.repeat(np.arange(4, dtype=np.float32), 24)
+        )
+        np.testing.assert_array_equal(
+            outflow["2"].to_numpy(),
+            np.repeat(np.arange(4, dtype=np.float32) + 1000, 24),
+        )
+
+        storage = pd.read_parquet(report_dir / "hydrology.routing" / "storage.parquet")
+        np.testing.assert_array_equal(storage["storage"].to_numpy(), [0, 1, 2, 3])
+        assert storage.index[0] == pd.Timestamp(start)
+
+        # the initial value is the one of the start of the first run, and is not
+        # reported again at the checkpoint
+        initial = pd.read_parquet(
+            report_dir / "hydrology.routing" / "initial_storage.parquet"
+        )
+        assert len(initial) == 1
+        assert initial.index[0] == pd.Timestamp(start)
+
+        table = pd.read_parquet(report_dir / "hydrology.routing" / "table.parquet")
+        np.testing.assert_array_equal(table["value"].to_numpy(), [0, 1, 2, 3])

@@ -738,3 +738,74 @@ def test_model_checkpoint_helpers(tmp_path: Path) -> None:
     res_path_dt, res_path_path = m._resolve_checkpoint_to_load(p2)
     assert res_path_dt == dt2
     assert res_path_path == p2
+
+    # A checkpoint without checkpoint.json (killed while saving) and a temporary
+    # checkpoint folder are not listed, so "latest" resolves to the last complete one
+    (m.get_checkpoint_path(datetime.datetime(1986, 1, 1))).mkdir(parents=True)
+    p2.with_name("1987-01-01.incomplete").mkdir(parents=True)
+    assert [dt for dt, _ in m.list_checkpoints()] == [dt1, dt2]
+    assert m._resolve_checkpoint_to_load("latest") == (dt2, p2)
+
+
+def test_get_checkpoint_dates() -> None:
+    """Test parsing of the checkpoint dates to save during a simulation."""
+    import datetime
+
+    from geb.model import GEBModel
+
+    start = datetime.datetime(2000, 1, 1)
+    end_exclusive = datetime.datetime(2003, 1, 1)
+
+    assert GEBModel._get_checkpoint_dates(None, start, end_exclusive) == set()
+    assert GEBModel._get_checkpoint_dates(("end",), start, end_exclusive) == set()
+    # no checkpoint at the start itself, and none at the (exclusive) end
+    assert GEBModel._get_checkpoint_dates(("yearly",), start, end_exclusive) == {
+        datetime.datetime(2001, 1, 1),
+        datetime.datetime(2002, 1, 1),
+    }
+    # continued from a checkpoint in the middle of a year
+    assert GEBModel._get_checkpoint_dates(
+        ("monthly", "2002-12-15"),
+        datetime.datetime(2002, 10, 15),
+        end_exclusive,
+    ) == {
+        datetime.datetime(2002, 11, 1),
+        datetime.datetime(2002, 12, 1),
+        datetime.datetime(2002, 12, 15),
+    }
+
+
+def test_store_load_skips_reporter_history(tmp_path: Path) -> None:
+    """Test that the reporter history folder in a checkpoint is not loaded as a bucket."""
+    import datetime
+    from typing import Any, cast
+
+    from geb.model import GEBModel
+    from geb.store import REPORTER_HISTORY_FOLDER, Store
+
+    class DummyModel:
+        def __init__(self) -> None:
+            self.current_time = datetime.datetime(2000, 1, 1)
+            self.simulate_hydrology = True
+            self.config: dict[str, Any] = {"hazards": {"floods": {"simulate": False}}}
+            self.logger: Any = type(
+                "DummyLogger",
+                (),
+                {"debug": lambda *args: None, "info": lambda *args: None},
+            )()
+
+    store = Store(cast(GEBModel, DummyModel()))
+    store.create_bucket("var").my_val = np.array([1, 2, 3])
+    checkpoint_dir: Path = tmp_path / "2000-01-01"
+    store.save(checkpoint_dir)
+    history_folder: Path = (
+        checkpoint_dir / REPORTER_HISTORY_FOLDER / "hydrology.routing"
+    )
+    history_folder.mkdir(parents=True)
+    (history_folder / "outflow.parquet").touch()
+
+    new_model = DummyModel()
+    new_store = Store(cast(GEBModel, new_model))
+    new_store.load(checkpoint_dir)
+    assert set(new_store.buckets) == {"var"}
+    assert not hasattr(new_model, REPORTER_HISTORY_FOLDER)

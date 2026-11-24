@@ -1496,6 +1496,9 @@ class Routing(Module):
             setting up the local inertial routing solver.
         """
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
+        # When continuing from a checkpoint, the river and lake storage and the water stage are
+        # restored from the checkpoint, and must not be reset to their initial values.
+        continued_from_checkpoint: bool = self.model.continued_from_checkpoint
         retention_basin_release_threshold_factor: float = self.config[
             "retention_basins"
         ]["release_threshold_factor"]
@@ -1592,22 +1595,29 @@ class Routing(Module):
                 river_width=outflow_river_width,
                 lake_a_factor=lake_a_factor,
             )
-            average_discharge: ArrayFloat32 = np.maximum(
-                self.hydrology.waterbodies.var.average_discharge_m3_per_s,
-                np.float32(0.1),
-            )
-            waterbody_outflow_height: ArrayFloat32 = estimate_outflow_height(
-                lake_capacity=self.hydrology.waterbodies.var.capacity,
-                lake_factor=waterbody_lake_factor,
-                lake_area=self.hydrology.waterbodies.var.lake_area,
-                avg_outflow=average_discharge,
-            )
-            self.hydrology.waterbodies.var.outflow_height = waterbody_outflow_height
-            self.hydrology.waterbodies.lake_storage = waterbody_outflow_height[
-                self.hydrology.waterbodies.is_lake
-            ].astype(np.float64) * self.hydrology.waterbodies.var.lake_area[
-                self.hydrology.waterbodies.is_lake
-            ].astype(np.float64)
+            waterbody_outflow_height: ArrayFloat32
+            if continued_from_checkpoint:
+                # use the outflow height estimated at the start of the simulation (stored in
+                # the checkpoint), rather than re-estimating it from the average discharge at
+                # the checkpoint, and keep the lake storage of the checkpoint
+                waterbody_outflow_height = self.hydrology.waterbodies.var.outflow_height
+            else:
+                average_discharge: ArrayFloat32 = np.maximum(
+                    self.hydrology.waterbodies.var.average_discharge_m3_per_s,
+                    np.float32(0.1),
+                )
+                waterbody_outflow_height = estimate_outflow_height(
+                    lake_capacity=self.hydrology.waterbodies.var.capacity,
+                    lake_factor=waterbody_lake_factor,
+                    lake_area=self.hydrology.waterbodies.var.lake_area,
+                    avg_outflow=average_discharge,
+                )
+                self.hydrology.waterbodies.var.outflow_height = waterbody_outflow_height
+                self.hydrology.waterbodies.lake_storage = waterbody_outflow_height[
+                    self.hydrology.waterbodies.is_lake
+                ].astype(np.float64) * self.hydrology.waterbodies.var.lake_area[
+                    self.hydrology.waterbodies.is_lake
+                ].astype(np.float64)
         else:
             self._wb_cell_mask = np.zeros_like(self.var.river_ids, dtype=bool)
             self._wb_cell_indices = np.zeros(0, dtype=np.int32)
@@ -1662,7 +1672,7 @@ class Routing(Module):
             max_threads=self.config["max_threads"],
         )
 
-        if self.model.in_spinup:
+        if self.model.in_spinup and not continued_from_checkpoint:
             # Power-law bankfull storage V_bf = length * (W_bf * h_bf / (r + 1)) (m³)
             bankfull_volume: ArrayFloat64 = self.grid.var.river_length.astype(
                 np.float64
@@ -1704,7 +1714,8 @@ class Routing(Module):
             water_stage_m=self.var.water_stage_m,
             river_storage_m3=self.var.river_storage_m3,
             waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
-            in_spinup=self.model.in_spinup,
+            # checks the initial stage, which is only set at the start of the spinup
+            in_spinup=self.model.in_spinup and not continued_from_checkpoint,
         )
 
         riverbed_conductivity_multiplier: np.float32 = np.float32(
@@ -2329,9 +2340,11 @@ class Routing(Module):
 
         # Update return periods on January 1st of each year, with the exception when the first
         # day of the year is the start of the spinup period. In that case, we don't have any
-        # data to fit with yet.
+        # data to fit with yet. When the spinup is continued from a checkpoint, the reporting
+        # history before the checkpoint is restored, so the update is done.
         if self.model.current_day_of_year == 1 and (
-            self.model.current_timestep > 0 or not self.model.in_spinup
+            self.model.current_time != self.model.spinup_start
+            or not self.model.in_spinup
         ):
             self.update_return_periods()
 
@@ -2507,25 +2520,24 @@ class Routing(Module):
                 folder=folder,
             )
 
-            if self.model.current_timestep > 0:
-                sample_key: str = (
-                    f"river_outflow_hourly_m3_per_s_{active_rivers.index[0]}"
+            # add the discharge of the current run reported so far (including the history
+            # restored from a checkpoint when the run was continued from one)
+            sample_key: str = f"river_outflow_hourly_m3_per_s_{active_rivers.index[0]}"
+            if (
+                self.variables_to_report is not None
+                and sample_key in self.variables_to_report
+                and self.variables_to_report[sample_key].get("_var_index", 0) > 0
+            ):
+                discharge_by_river_run: pd.DataFrame = get_discharge_per_river(
+                    rivers=active_rivers,
+                    all_rivers=self.var.rivers,
+                    source="memory",
+                    variables_to_report=self.variables_to_report,
                 )
-                if (
-                    self.variables_to_report is not None
-                    and sample_key in self.variables_to_report
-                    and self.variables_to_report[sample_key]["_var_index"] > 0
-                ):
-                    discharge_by_river_run: pd.DataFrame = get_discharge_per_river(
-                        rivers=active_rivers,
-                        all_rivers=self.var.rivers,
-                        source="memory",
-                        variables_to_report=self.variables_to_report,
-                    )
 
-                    discharge_by_river = pd.concat(
-                        [discharge_by_river, discharge_by_river_run], axis=0
-                    )
+                discharge_by_river = pd.concat(
+                    [discharge_by_river, discharge_by_river_run], axis=0
+                )
 
         discharge_by_river_daily: pd.DataFrame = discharge_by_river.resample(
             "D", label="left"

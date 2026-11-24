@@ -33,6 +33,10 @@ from geb.workflows.io import (
 if TYPE_CHECKING:
     from geb.model import GEBModel
 
+# Subfolder of a checkpoint in which the reporter saves the reporting history up to the
+# checkpoint (see `Reporter.save_history`). It is not a bucket, so it is skipped when loading.
+REPORTER_HISTORY_FOLDER: str = "reporter_history"
+
 
 class DynamicArray:
     """A resizable array container that behaves like a NumPy array but can grow and shrink.
@@ -1432,7 +1436,11 @@ class Store:
 
         for bucket_folder in path.iterdir():
             # Mac OS X creates a .DS_Store file in directories, and checkpoint.json is metadata
-            if not bucket_folder.is_dir() or bucket_folder.name == ".DS_Store":
+            if (
+                not bucket_folder.is_dir()
+                or bucket_folder.name == ".DS_Store"
+                or bucket_folder.name == REPORTER_HISTORY_FOLDER
+            ):
                 continue
             elif omit is not None and omit in bucket_folder.name:
                 self.model.logger.info(f"Skipping loading of bucket {bucket_folder}")

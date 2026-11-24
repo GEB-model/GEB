@@ -502,6 +502,7 @@ class DummyModel:
             mult: Bankfull discharge multiplier (dimensionless).
         """
         self.in_spinup: bool = False
+        self.continued_from_checkpoint: bool = False
         self.config: dict[str, Any] = {
             "parameters": {
                 "bankfull_discharge_multiplier": mult,

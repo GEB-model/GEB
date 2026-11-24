@@ -267,7 +267,7 @@ def click_run_options() -> Any:
             multiple=True,
             is_flag=False,
             flag_value="end",
-            help="Save a checkpoint at the end of the simulation, or at a specific date (YYYY-MM-DD) if provided. Can be repeated.",
+            help="Save a checkpoint at the end of the simulation, or at a specific date (YYYY-MM-DD), every 1 January ('yearly') or every first day of the month ('monthly') if provided. Can be repeated. Checkpoints contain the reporting history (e.g., discharge), so that a run continued from a checkpoint reports the full period.",
         )
         @click.option(
             "--continue-from-checkpoint",

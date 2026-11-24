@@ -5,7 +5,7 @@ import datetime
 import json
 import re
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from operator import attrgetter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -33,7 +33,13 @@ from geb.geb_types import (
 from geb.hydrology.routing import get_river_representative_xys
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.workflows.io import fast_rmtree, read_geom, write_geom, write_table
+from geb.workflows.io import (
+    fast_rmtree,
+    read_geom,
+    read_table,
+    write_geom,
+    write_table,
+)
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
@@ -858,7 +864,13 @@ RE_SQUARE_BRACKETS = re.compile(r"\[.*?\]")
 class Reporter:
     """This class is used to report data to disk."""
 
-    def __init__(self, model: GEBModel, report_folder: Path, clean: bool) -> None:
+    def __init__(
+        self,
+        model: GEBModel,
+        report_folder: Path,
+        clean: bool,
+        history_folder: Path | None = None,
+    ) -> None:
         """The constructor for the Reporter class.
 
         Loops over the reporter configuration and creates the necessary files and data structures,
@@ -884,11 +896,21 @@ class Reporter:
             model: The GEB model instance.
             report_folder: The folder where the reports will be saved.
             clean: If True, the report folder is cleaned at the start of the model run.
+            history_folder: Folder with the time series and dataframes reported before a
+                checkpoint, as written by `save_history`. Used when continuing a run from that
+                checkpoint, so that the reports of the continued run also contain the period
+                before the checkpoint. If None, reporting starts empty.
 
         Raises:
             ValueError: If the variable type is not recognized.
         """
         self.model = model
+        # when continuing from a checkpoint, the reporting history is restored, and
+        # values with frequency "initial" are not reported again
+        self.continued_from_checkpoint: bool = history_folder is not None
+        # scalar time series restored from a checkpoint, by (module name, variable name), that
+        # are prepended to the data of the continued run when the variable is first reported
+        self._pending_history: dict[tuple[str, str], tuple[ArrayInt64, np.ndarray]] = {}
         self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
 
         self.variables_to_report = copy.deepcopy(self.model.config["report"])
@@ -1257,6 +1279,9 @@ class Reporter:
                     assert isinstance(config, dict), (
                         f"Configuration for {module_name}.{name} must be a dictionary, but is {type(config)}."
                     )
+
+            if history_folder is not None:
+                self._load_history(history_folder)
         else:
             self.is_activated = False
 
@@ -1288,7 +1313,9 @@ class Reporter:
             current_timestep = self.model.current_timestep
             # here we return None if the value is not to be reported on this timestep
             if config["frequency"] == "initial":
-                if current_timestep != 0:
+                # when continuing from a checkpoint, the initial value is part of the
+                # restored history, and should not be reported again
+                if current_timestep != 0 or self.continued_from_checkpoint:
                     return None
             elif config["frequency"] == "final":
                 if current_timestep != self.model.n_timesteps - 1:
@@ -1790,14 +1817,23 @@ class Reporter:
 
         # Initialize time and data arrays on the first write.
         if "_time_array" not in config:
-            substeps: int | None = config.get("substeps")
-            config["_time_array"] = create_time_array(
-                start=self.model.current_time,
-                end=self.model.simulation_end,
-                timestep=self.model.timestep_length,
-                conf=config,
-                substeps=substeps,
+            config["_time_array"] = self._create_time_array(config)
+            # Prepend the history restored from a checkpoint. This is done here rather than
+            # when loading the history, because the number of substeps is only known once
+            # the first value is reported.
+            history: tuple[ArrayInt64, np.ndarray] | None = self._pending_history.pop(
+                (module_name, name), None
             )
+            if history is not None:
+                history_time, history_data = history
+                config["_time_array"] = np.concatenate(
+                    [history_time, config["_time_array"]]
+                )
+                config["_data_array"] = np.empty(
+                    len(config["_time_array"]), dtype=history_data.dtype
+                )
+                config["_data_array"][: len(history_data)] = history_data
+                config["_var_index"] = len(history_data)
 
         if "_data_array" not in config:
             n: int = len(config["_time_array"])
@@ -1860,10 +1896,7 @@ class Reporter:
         """At the end of the model run, all previously collected data is reported to disk.
 
         Raises:
-            KeyError: If a grouped variable is missing required '_group_key'.
-            ValueError: If the variable type is not recognized, duplicate
-                _group_key is found in a group, or extra_attributes are combined
-                with _group.
+            ValueError: If the variable type is not recognized.
         """
         # If no data has been collected, we return
         if self.variables_to_report is None:
@@ -1916,115 +1949,307 @@ class Reporter:
                             )
                         )
 
-            # Export all scalar and aggregated variables to parquet files
-            # Grouped variables (single consolidated parquet file) vs individual variables
-            grouped_variables: dict[tuple[str, str], dict[str, dict[str, Any]]] = (
-                defaultdict(dict)
-            )
-
-            for module_name, module_configs in self.variables_to_report.items():
-                for name, config in module_configs.items():
-                    if "_time_array" not in config or config["_data_array"] is None:
-                        continue
-                    if "_group" in config:
-                        if config.get("extra_attributes"):
-                            raise ValueError(
-                                f"Exporting grouped variables to a single parquet file does not support extra_attributes (found on variable {module_name}.{name})."
-                            )
-                        if "_group_key" not in config:
-                            raise KeyError(
-                                f"Variable {module_name}.{name} specifies '_group' but is missing required '_group_key'."
-                            )
-                        group_name: str = config["_group"]
-                        group_key: str = str(config["_group_key"])
-                        if group_key in grouped_variables[(module_name, group_name)]:
-                            raise ValueError(
-                                f"Duplicate _group_key '{group_key}' found in group '{group_name}' for module '{module_name}'."
-                            )
-                        grouped_variables[(module_name, group_name)][group_key] = config
-                    else:
-                        # Convert Unix timestamps (seconds) to datetime
-                        time_values: pd.DatetimeIndex = pd.to_datetime(
-                            config["_time_array"], unit="s"
-                        )
-                        df = pd.DataFrame(
-                            {name: config["_data_array"]},
-                            index=pd.Index(time_values, name="time"),
-                        )
-
-                        folder = self.report_folder / module_name
-                        df.attrs.update(config.get("extra_attributes", {}))
-                        folder.mkdir(parents=True, exist_ok=True)
-
-                        futures.append(
-                            executor.submit(
-                                write_table, df, folder / (name + ".parquet")
-                            )
-                        )
-
-            # Export grouped variables to single consolidated parquet files
-            for (module_name, group_name), group_configs in grouped_variables.items():
-                if not group_configs:
-                    continue
-                first_config: dict[str, Any] = next(iter(group_configs.values()))
-                time_values = pd.to_datetime(first_config["_time_array"], unit="s")
-                columns_data: dict[str, Any] = {
-                    key: cfg["_data_array"] for key, cfg in group_configs.items()
-                }
-                df = pd.DataFrame(
-                    columns_data,
-                    index=pd.Index(time_values, name="time"),
-                )
-
-                folder = self.report_folder / module_name
-                folder.mkdir(parents=True, exist_ok=True)
-
-                futures.append(
-                    executor.submit(write_table, df, folder / (group_name + ".parquet"))
-                )
-
-            # Export dataframe and geodataframe variables
-            for module_name, module_configs in self.variables_to_report.items():
-                for name, config in module_configs.items():
-                    if (
-                        config.get("type") in ("dataframe", "geodataframe")
-                        and config.get("function") is None
-                    ):
-                        collected: list[pd.DataFrame] = config.get("_collected_dfs", [])
-                        if not collected:
-                            continue
-                        folder = self.report_folder / module_name
-                        folder.mkdir(parents=True, exist_ok=True)
-                        is_geo: bool = config.get("type") == "geodataframe"
-                        if is_geo:
-                            crs = collected[0].crs
-                            final_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
-                                pd.concat(collected, axis=0, ignore_index=False),
-                                crs=crs,
-                            )
-                            futures.append(
-                                executor.submit(
-                                    write_geom,
-                                    final_gdf,
-                                    folder / (name + ".geoparquet"),
-                                )
-                            )
-                        else:
-                            final_df: pd.DataFrame = pd.concat(
-                                collected, axis=0, ignore_index=False
-                            )
-                            futures.append(
-                                executor.submit(
-                                    write_table,
-                                    final_df,
-                                    folder / (name + ".parquet"),
-                                )
-                            )
+            self._submit_timeseries_tables(executor, futures, self.report_folder)
+            self._submit_dataframe_tables(executor, futures, self.report_folder)
 
             # Wait for all futures to complete before exiting context manager
             for future in as_completed(futures):
                 # re-raise any exception from the worker thread
                 future.result()
+
+    def _create_time_array(self, config: dict[str, Any]) -> ArrayInt64:
+        """Create the time array for a scalar time series from the current time to the end of the simulation.
+
+        Args:
+            config: The report configuration of the variable.
+
+        Returns:
+            The time array as Unix seconds.
+        """
+        return create_time_array(
+            start=self.model.current_time,
+            end=self.model.simulation_end,
+            timestep=self.model.timestep_length,
+            conf=config,
+            substeps=config.get("substeps"),
+        )
+
+    @staticmethod
+    def _is_collected_dataframe(config: dict[str, Any]) -> bool:
+        """Whether a variable is a (geo)dataframe that is collected over time and exported as a whole.
+
+        Args:
+            config: The report configuration of the variable.
+
+        Returns:
+            True if the variable is a collected (geo)dataframe.
+        """
+        return (
+            config.get("type") in ("dataframe", "geodataframe")
+            and config.get("function") is None
+        )
+
+    def _get_timeseries(
+        self, module_name: str, name: str, config: dict[str, Any]
+    ) -> tuple[ArrayInt64, np.ndarray] | None:
+        """Get the time and data of a scalar time series that were reported so far.
+
+        Includes the history restored from a checkpoint, also when the variable was not
+        reported yet in the continued run.
+
+        Args:
+            module_name: Name of the module to which the variable belongs.
+            name: Name of the variable.
+            config: The report configuration of the variable.
+
+        Returns:
+            Tuple of the times (Unix seconds) and values reported so far, or None if
+            the variable is not a scalar time series or nothing was reported yet.
+        """
+        if "_time_array" not in config or config.get("_data_array") is None:
+            return self._pending_history.get((module_name, name))
+        n: int = config.get("_var_index", len(config["_time_array"]))
+        return config["_time_array"][:n], config["_data_array"][:n]
+
+    def _submit_timeseries_tables(
+        self,
+        executor: ThreadPoolExecutor,
+        futures: list[Future],
+        folder: Path,
+    ) -> None:
+        """Submit writing all scalar and aggregated time series to parquet files.
+
+        Grouped variables are written to a single consolidated parquet file per group,
+        other variables to individual files. Only the timesteps reported so far are written.
+
+        Args:
+            executor: Executor to submit the write tasks to.
+            futures: List to which the submitted futures are appended.
+            folder: Folder to write the files to, in a subfolder per module.
+
+        Raises:
+            KeyError: If a grouped variable is missing required '_group_key'.
+            ValueError: If duplicate _group_key is found in a group, or extra_attributes
+                are combined with _group.
+        """
+        assert self.variables_to_report is not None
+        grouped_variables: dict[
+            tuple[str, str], dict[str, tuple[str, dict[str, Any]]]
+        ] = defaultdict(dict)
+
+        for module_name, module_configs in self.variables_to_report.items():
+            for name, config in module_configs.items():
+                timeseries: tuple[ArrayInt64, np.ndarray] | None = self._get_timeseries(
+                    module_name, name, config
+                )
+                if timeseries is None:
+                    continue
+                if "_group" in config:
+                    if config.get("extra_attributes"):
+                        raise ValueError(
+                            f"Exporting grouped variables to a single parquet file does not support extra_attributes (found on variable {module_name}.{name})."
+                        )
+                    if "_group_key" not in config:
+                        raise KeyError(
+                            f"Variable {module_name}.{name} specifies '_group' but is missing required '_group_key'."
+                        )
+                    group_name: str = config["_group"]
+                    group_key: str = str(config["_group_key"])
+                    if group_key in grouped_variables[(module_name, group_name)]:
+                        raise ValueError(
+                            f"Duplicate _group_key '{group_key}' found in group '{group_name}' for module '{module_name}'."
+                        )
+                    grouped_variables[(module_name, group_name)][group_key] = (
+                        name,
+                        config,
+                    )
+                else:
+                    time, data = timeseries
+                    df = pd.DataFrame(
+                        {name: data},
+                        index=pd.Index(pd.to_datetime(time, unit="s"), name="time"),
+                    )
+                    df.attrs.update(config.get("extra_attributes", {}))
+
+                    module_folder: Path = folder / module_name
+                    module_folder.mkdir(parents=True, exist_ok=True)
+                    futures.append(
+                        executor.submit(
+                            write_table, df, module_folder / (name + ".parquet")
+                        )
+                    )
+
+        for (module_name, group_name), group_configs in grouped_variables.items():
+            if not group_configs:
+                continue
+            series: dict[str, tuple[ArrayInt64, np.ndarray]] = {
+                key: timeseries
+                for key, (name, cfg) in group_configs.items()
+                if (timeseries := self._get_timeseries(module_name, name, cfg))
+                is not None
+            }
+            time: ArrayInt64 = next(iter(series.values()))[0]
+            df = pd.DataFrame(
+                {key: data for key, (_, data) in series.items()},
+                index=pd.Index(pd.to_datetime(time, unit="s"), name="time"),
+            )
+
+            module_folder = folder / module_name
+            module_folder.mkdir(parents=True, exist_ok=True)
+            futures.append(
+                executor.submit(
+                    write_table, df, module_folder / (group_name + ".parquet")
+                )
+            )
+
+    def _submit_dataframe_tables(
+        self,
+        executor: ThreadPoolExecutor,
+        futures: list[Future],
+        folder: Path,
+    ) -> None:
+        """Submit writing all collected dataframes and geodataframes to (geo)parquet files.
+
+        Args:
+            executor: Executor to submit the write tasks to.
+            futures: List to which the submitted futures are appended.
+            folder: Folder to write the files to, in a subfolder per module.
+        """
+        assert self.variables_to_report is not None
+        for module_name, module_configs in self.variables_to_report.items():
+            for name, config in module_configs.items():
+                if not self._is_collected_dataframe(config):
+                    continue
+                collected: list[pd.DataFrame] = config.get("_collected_dfs", [])
+                if not collected:
+                    continue
+                module_folder: Path = folder / module_name
+                module_folder.mkdir(parents=True, exist_ok=True)
+                if config.get("type") == "geodataframe":
+                    final_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+                        pd.concat(collected, axis=0, ignore_index=False),
+                        crs=collected[0].crs,
+                    )
+                    futures.append(
+                        executor.submit(
+                            write_geom,
+                            final_gdf,
+                            module_folder / (name + ".geoparquet"),
+                        )
+                    )
+                else:
+                    final_df: pd.DataFrame = pd.concat(
+                        collected, axis=0, ignore_index=False
+                    )
+                    futures.append(
+                        executor.submit(
+                            write_table,
+                            final_df,
+                            module_folder / (name + ".parquet"),
+                        )
+                    )
+
+    def save_history(self, folder: Path) -> None:
+        """Save the time series and dataframes reported so far, e.g., to a checkpoint.
+
+        When the model is continued from that checkpoint, the history is restored by
+        passing the folder as `history_folder` to the Reporter, so that the final reports
+        contain the full period, and model components that use the reported data
+        (such as the return period estimation in routing) see the full history.
+
+        Gridded, HRU and agent data that is written directly to zarr is not included.
+
+        Args:
+            folder: Folder to save the history to.
+        """
+        if not self.is_activated or self.variables_to_report is None:
+            return
+        folder.mkdir(parents=True, exist_ok=True)
+        futures: list[Future] = []
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            self._submit_timeseries_tables(executor, futures, folder)
+            self._submit_dataframe_tables(executor, futures, folder)
+            for future in as_completed(futures):
+                future.result()
+
+    def _load_history(self, folder: Path) -> None:
+        """Restore the reporting history saved with `save_history`.
+
+        Only data before the current model time is restored. Scalar time series are kept
+        aside and prepended to the data of the continued run when the variable is first
+        reported (see `process_value`). Collected (geo)dataframes get the history as first
+        collected dataframe. Variables without saved history start empty.
+
+        Args:
+            folder: Folder the history was saved to.
+
+        Raises:
+            ValueError: If the history of a grouped variable is incomplete, which happens
+                when the report configuration changed since the checkpoint was saved.
+        """
+        assert self.variables_to_report is not None
+        start: np.datetime64 = np.datetime64(self.model.current_time)
+        tables: dict[Path, pd.DataFrame | None] = {}
+
+        def read_history_table(path: Path) -> pd.DataFrame | None:
+            if path not in tables:
+                if path.exists():
+                    table: pd.DataFrame = read_table(path)
+                    tables[path] = table[table.index < start]
+                else:
+                    tables[path] = None
+            return tables[path]
+
+        for module_name, module_configs in self.variables_to_report.items():
+            for name, config in module_configs.items():
+                if self._is_collected_dataframe(config):
+                    is_geo: bool = config.get("type") == "geodataframe"
+                    path: Path = (
+                        folder
+                        / module_name
+                        / (name + (".geoparquet" if is_geo else ".parquet"))
+                    )
+                    if not path.exists():
+                        continue
+                    history_df: pd.DataFrame = (
+                        read_geom(path) if is_geo else read_table(path)
+                    )
+                    history_df = history_df[history_df["time"] < start]
+                    if len(history_df) > 0:
+                        config["_collected_dfs"] = [history_df]
+                    continue
+
+                if "_group" in config:
+                    path = folder / module_name / (config["_group"] + ".parquet")
+                    column: str = str(config["_group_key"])
+                else:
+                    path = folder / module_name / (name + ".parquet")
+                    column = name
+
+                history: pd.DataFrame | None = read_history_table(path)
+                if history is None:
+                    continue
+                if column not in history.columns:
+                    if "_group" in config:
+                        raise ValueError(
+                            f"The reporting history in {path} has no column '{column}' for variable "
+                            f"{module_name}.{name}. The report configuration probably changed since "
+                            "the checkpoint was saved."
+                        )
+                    continue
+
+                history_time: ArrayInt64 = (
+                    history.index.to_numpy().astype("datetime64[s]").astype(np.int64)
+                )
+                self._pending_history[(module_name, name)] = (
+                    history_time,
+                    history[column].to_numpy(),
+                )
+
+        n_restored: int = sum(table is not None for table in tables.values())
+        self.model.logger.info(
+            f"Restored reporting history before {start} from {n_restored} files in {folder}"
+        )
 
     def report(
         self,

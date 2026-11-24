@@ -27,9 +27,9 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 )
 from geb.module import Module
 from geb.reporter import Reporter
-from geb.store import Bucket, Store
+from geb.store import REPORTER_HISTORY_FOLDER, Bucket, Store
 from geb.version import __version__, get_git_commit
-from geb.workflows.io import read_geom, read_params, read_zarr
+from geb.workflows.io import fast_rmtree, read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -55,6 +55,8 @@ class GEBModel(Module):
 
     var: GEBModelVariables
     plantFATE: list[Any]
+    # whether the current spinup or run continues from a checkpoint (set in _initialize)
+    continued_from_checkpoint: bool = False
 
     def __init__(
         self,
@@ -637,6 +639,7 @@ class GEBModel(Module):
         load_data_from_store: bool = False,
         omit: None | str = None,
         checkpoint_path: None | Path = None,
+        continue_from_checkpoint: bool = False,
     ) -> None:
         """Initializes the model.
 
@@ -651,12 +654,18 @@ class GEBModel(Module):
             load_data_from_store: Whether to load data from the store / checkpoint.
             omit: Name of the bucket to omit when loading data from the store.
             checkpoint_path: Optional explicit path to load checkpoint data from.
+            continue_from_checkpoint: Whether this continues an interrupted spinup or run from
+                `checkpoint_path`. The reporting history saved in the checkpoint is then restored.
         """
         self.in_spinup = in_spinup
+        self.continued_from_checkpoint = continue_from_checkpoint
         self.simulate_hydrology = simulate_hydrology
 
         self.timestep_length = timestep_length
         self.n_timesteps = n_timesteps
+        # The simulation starts at current_time, which is the checkpoint time when continuing
+        # from a checkpoint. Must be set before the timestep, from which the current time is derived.
+        self._simulation_start: datetime.datetime = current_time
         self.current_timestep = 0
         self._timing_start_time: float | None = None
 
@@ -681,6 +690,8 @@ class GEBModel(Module):
             self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
+            if load_data_from_store:
+                self.hydrology.restore_pending_storage_from_store()
             self.forcing: Forcing = Forcing(self)
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
@@ -689,8 +700,22 @@ class GEBModel(Module):
         self.report_folder = self.model.output_folder / "report"
 
         if create_reporter:
+            history_folder: Path | None = None
+            if continue_from_checkpoint:
+                assert checkpoint_path is not None
+                history_folder = checkpoint_path / REPORTER_HISTORY_FOLDER
+                if not history_folder.exists():
+                    self.logger.warning(
+                        f"Checkpoint {checkpoint_path} contains no reporting history. Reports "
+                        "(including the discharge used to estimate return periods) will only "
+                        "contain the period after the checkpoint."
+                    )
+                    history_folder = None
             self.reporter = Reporter(
-                self, self.report_folder, clean=clean_report_folder
+                self,
+                self.report_folder,
+                clean=clean_report_folder,
+                history_folder=history_folder,
             )
             # record which GEB version (and, for git checkouts, which commit) produced this
             # output; overwritten at every start, also when the run continues from a checkpoint
@@ -737,6 +762,8 @@ class GEBModel(Module):
         Raises:
             FileNotFoundError: If the initial conditions checkpoint does not exist. Spinup is required before running the model.
         """
+        # set before resolving the checkpoint, as the checkpoint folder depends on the run name
+        self.in_spinup = False
         timestep_length: datetime.timedelta = datetime.timedelta(days=1)
         checkpoint_path: Path | None = None
         clean_report_folder: bool = True
@@ -764,15 +791,17 @@ class GEBModel(Module):
         ) / timestep_length
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
-        assert n_timesteps > 0, "End time is before or identical to start time"
+        assert n_timesteps > 0, (
+            f"Nothing to run: start time ({current_time}) is after the end time ({end_time}). "
+            "If continuing from a checkpoint, the run has probably already finished."
+        )
 
-        save_checkpoints_set: set[str] = set(save_checkpoints or ())
-        save_at_end: bool = "end" in save_checkpoints_set
-        target_checkpoint_dates: set[datetime.datetime] = {
-            datetime.datetime.fromisoformat(item)
-            for item in save_checkpoints_set
-            if item != "end"
-        }
+        save_at_end: bool = "end" in (save_checkpoints or ())
+        target_checkpoint_dates: set[datetime.datetime] = self._get_checkpoint_dates(
+            save_checkpoints,
+            start=current_time,
+            end_exclusive=end_time + timestep_length,
+        )
 
         self.check_time_range()
         self._initialize(
@@ -783,6 +812,7 @@ class GEBModel(Module):
             clean_report_folder=clean_report_folder,
             load_data_from_store=True,
             checkpoint_path=checkpoint_path,
+            continue_from_checkpoint=continue_from_checkpoint is not None,
         )
 
         if initialize_only:
@@ -925,6 +955,8 @@ class GEBModel(Module):
             continue_from_checkpoint: Checkpoint to continue from ('latest', a date string, or Path).
             save_checkpoints: Optional sequence of checkpoint dates to save (or 'end').
         """
+        # set before resolving the checkpoint, as the checkpoint folder depends on the run name
+        self.in_spinup = True
         timestep_length: datetime.timedelta = datetime.timedelta(days=1)
         checkpoint_path: Path | None = None
         load_data_from_store: bool = False
@@ -951,13 +983,16 @@ class GEBModel(Module):
         n_timesteps: float | int = (end_time_exclusive - current_time) / timestep_length
         assert n_timesteps.is_integer()
         n_timesteps = int(n_timesteps)
-        assert n_timesteps > 0, "End time is before or identical to start time"
+        assert n_timesteps > 0, (
+            f"Nothing to run: start time ({current_time}) is not before the end of the spinup "
+            f"({end_time_exclusive}). If continuing from a checkpoint, the spinup has probably already finished."
+        )
 
-        target_checkpoint_dates: set[datetime.datetime] = {
-            datetime.datetime.fromisoformat(item)
-            for item in (save_checkpoints or ())
-            if item != "end"
-        }
+        target_checkpoint_dates: set[datetime.datetime] = self._get_checkpoint_dates(
+            save_checkpoints,
+            start=current_time,
+            end_exclusive=end_time_exclusive,
+        )
 
         self.var: GEBModelVariables = cast(
             GEBModelVariables, self.store.create_bucket("var")
@@ -973,6 +1008,7 @@ class GEBModel(Module):
             in_spinup=True,
             load_data_from_store=load_data_from_store,
             checkpoint_path=checkpoint_path,
+            continue_from_checkpoint=continue_from_checkpoint is not None,
         )
 
         if initialize_only:
@@ -1169,6 +1205,9 @@ class GEBModel(Module):
         Args:
             run_name: Name of the run. Defaults to current run name.
 
+        Checkpoints that were not completely written (e.g., because the model was killed
+        while saving) are skipped.
+
         Returns:
             Sorted list of (timestamp, checkpoint_path) tuples.
         """
@@ -1178,7 +1217,8 @@ class GEBModel(Module):
 
         checkpoints: list[tuple[datetime.datetime, Path]] = []
         for p in folder.iterdir():
-            if p.is_dir():
+            # checkpoint.json is written last, so checkpoints without it are incomplete
+            if p.is_dir() and (p / "checkpoint.json").exists():
                 try:
                     checkpoints.append((self.parse_checkpoint_timestamp(p), p))
                 except ValueError:
@@ -1214,9 +1254,61 @@ class GEBModel(Module):
         if dt is None:
             dt = self.current_time
         checkpoint_path: Path = self.get_checkpoint_path(dt)
-        self.store.save(checkpoint_path)
+
+        # Write to a temporary folder first and move it into place when complete, so that a
+        # model that is killed while saving (e.g., out of memory) does not leave a corrupt
+        # checkpoint behind, which would then be picked up as the latest checkpoint.
+        # The temporary name is not a valid date, so it is never listed as a checkpoint.
+        tmp_path: Path = checkpoint_path.with_name(f"{checkpoint_path.name}.incomplete")
+        if tmp_path.exists():
+            fast_rmtree(tmp_path)
+        self.store.save(tmp_path)
+        reporter: Reporter | None = getattr(self, "reporter", None)
+        if reporter is not None:
+            reporter.save_history(tmp_path / REPORTER_HISTORY_FOLDER)
+        if checkpoint_path.exists():
+            fast_rmtree(checkpoint_path)
+        tmp_path.rename(checkpoint_path)
+
         self.logger.info(f"Saved checkpoint for {dt} at {checkpoint_path}")
         return checkpoint_path
+
+    @staticmethod
+    def _get_checkpoint_dates(
+        save_checkpoints: tuple[str, ...] | list[str] | None,
+        start: datetime.datetime,
+        end_exclusive: datetime.datetime,
+    ) -> set[datetime.datetime]:
+        """Get the dates at which to save intermediate checkpoints.
+
+        Args:
+            save_checkpoints: Checkpoint specifications: a date (YYYY-MM-DD), "yearly" (every
+                1 January), "monthly" (every first day of the month) or "end" (handled by the caller).
+            start: Start of the simulation. No checkpoint is saved at the start itself.
+            end_exclusive: End of the simulation (exclusive).
+
+        Returns:
+            Set of checkpoint datetimes.
+        """
+        dates: set[datetime.datetime] = set()
+        for item in save_checkpoints or ():
+            if item == "end":
+                continue
+            elif item in ("yearly", "monthly"):
+                step: relativedelta = relativedelta(
+                    years=1 if item == "yearly" else 0,
+                    months=1 if item == "monthly" else 0,
+                )
+                dt: datetime.datetime = datetime.datetime(
+                    start.year, 1 if item == "yearly" else start.month, 1
+                )
+                while dt < end_exclusive:
+                    if dt > start:
+                        dates.add(dt)
+                    dt += step
+            else:
+                dates.add(datetime.datetime.fromisoformat(item))
+        return dates
 
     def _resolve_checkpoint_to_load(
         self,
@@ -1525,11 +1617,15 @@ class GEBModel(Module):
 
     @property
     def simulation_start(self) -> datetime.datetime:
-        """Get the start of the current simulation, depending on whether in spinup or run mode.
+        """Get the start of the current simulation.
+
+        This is the start of the spinup or run, or the checkpoint time when continuing from a checkpoint.
 
         Returns:
             Datetime object representing the start of the current simulation.
         """
+        if hasattr(self, "_simulation_start"):
+            return self._simulation_start
         if self.in_spinup:
             return self.spinup_start
         else:

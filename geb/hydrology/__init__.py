@@ -168,6 +168,20 @@ class Hydrology(Data, Module):
             self.grid.full_compressed(0, dtype=np.float64)
         )
 
+    def restore_pending_storage_from_store(self) -> None:
+        """Restore the pending storage after loading the model state from the store (checkpoint).
+
+        The river transmission loss of the last timestep is held as pending storage (see
+        `pending_river_transmission_loss_m3`), which is not part of the store. At the end of
+        a timestep it equals the transmission loss of the routing in that timestep, which
+        is stored, so it is restored from there. Otherwise this water would be lost when
+        continuing from a checkpoint, and the continued simulation would differ from an
+        uninterrupted one.
+        """
+        self.pending_river_transmission_loss_m3[:] = (
+            self.routing.var.river_transmission_loss_m3.astype(np.float64)
+        )
+
     def get_landsurface_storage_m3(self) -> np.float64:
         """Get the current water storage in the land surface components.
 
