@@ -680,6 +680,7 @@ def test_routing_updates_rivers_geometry() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=floodplain_profile_widths_grid_m,
@@ -690,6 +691,7 @@ def test_routing_updates_rivers_geometry() -> None:
     assert np.isclose(routing.var.rivers.loc[10, "width"], 25.0)
     assert np.isclose(routing.var.rivers.loc[10, "depth"], 3.0)
     assert np.isclose(routing.var.rivers.loc[10, "manning"], 0.04)
+    assert np.isclose(routing.var.rivers.loc[10, "shape_exponent"], 0.5)
     assert np.isclose(routing.var.rivers.loc[10, "floodplain_profile_width_0_m"], 50.0)
     assert np.isclose(routing.var.rivers.loc[10, "floodplain_side_slope_m_per_m"], 2.0)
 
@@ -749,6 +751,7 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
         routing._update_rivers_geometry(
             width_grid=width_grid,
             depth_grid=depth_grid,
+            shape_exponent_grid=np.full_like(depth_grid, 0.5),
             levee_depth_grid=depth_grid,
             manning_grid=manning_grid,
             floodplain_profile_widths_grid_m=np.zeros(
@@ -1012,6 +1015,7 @@ def test_unrepresented_river_geometry_confluence() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
@@ -1092,6 +1096,7 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
@@ -1164,6 +1169,7 @@ def test_unrepresented_river_cascade_with_bankfull_multiplier() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
@@ -1244,6 +1250,7 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
@@ -1311,6 +1318,7 @@ def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
@@ -1377,6 +1385,7 @@ def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
@@ -1444,6 +1453,7 @@ def test_unrepresented_river_confluence_both_observed_widths() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
@@ -1508,6 +1518,7 @@ def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
@@ -1570,6 +1581,7 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
+        shape_exponent_grid=np.full_like(depth_grid, 0.5),
         levee_depth_grid=depth_grid,
         manning_grid=manning_grid,
         floodplain_profile_widths_grid_m=np.zeros(
@@ -1630,6 +1642,7 @@ def test_unrepresented_river_non_positive_width_raises_assertion() -> None:
         routing._update_rivers_geometry(
             width_grid=np.array([0.0], dtype=np.float32),
             depth_grid=np.array([1.0], dtype=np.float32),
+            shape_exponent_grid=np.full_like(np.array([1.0], dtype=np.float32), 0.5),
             levee_depth_grid=np.array([1.0], dtype=np.float32),
             manning_grid=np.array([0.03], dtype=np.float32),
             floodplain_profile_widths_grid_m=np.zeros((1, 10), dtype=np.float32),
@@ -3411,6 +3424,7 @@ def test_routing_calculate_levee_depth_integration() -> None:
     routing._update_rivers_geometry(
         width_grid=widths,
         depth_grid=bankfull_depths,
+        shape_exponent_grid=np.full_like(bankfull_depths, 0.5),
         manning_grid=routing.grid.var.river_mannings,
         floodplain_profile_widths_grid_m=fp_widths,
         floodplain_side_slope_grid_m_per_m=fp_slopes,

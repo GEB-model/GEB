@@ -1,5 +1,6 @@
 """Utility functions for flood hazard workflows."""
 
+import logging
 import os
 import shutil
 import subprocess
@@ -16,13 +17,13 @@ import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.components.config.config_variables import SfincsConfigVariables
-from hydromt_sfincs.workflows import downscale_floodmap
 from matplotlib.colors import LinearSegmentedColormap
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
 
 from geb.geb_types import ArrayFloat32, ArrayInt64
-from geb.workflows.io import read_geom
+from geb.hazards.floods.workflows.downscaling import downscale_flood_depth
+from geb.workflows.io import read_geom, read_zarr, write_zarr
 
 # Flood depth color scheme (shallow light blue -> deep dark red), also used for
 # the flood animation in `geb evaluate hydrodynamics.animate_flood`.
@@ -64,17 +65,25 @@ def import_rivers(model_root: Path, postfix: str = "") -> gpd.GeoDataFrame:
     return read_geom(model_root / f"rivers{postfix}.geoparquet")
 
 
+# No statistics and figure are made of flood maps with more pixels than this.
+LARGE_FLOOD_MAP_PIXELS: int = 1_000_000_000
+
+
 def read_flood_depth(
     model_root: Path,
     simulation_root: Path,
     method: str,
     minimum_flood_depth: float,
     end_time: datetime,
+    logger: logging.Logger,
     mask: xr.DataArray | None = None,
+    output_path: Path | None = None,
 ) -> xr.DataArray:
     """Read the maximum flood depth from the SFINCS model results.
 
-    If SFINCS was run with subgrid, the flood depth is downscaled to subgrid resolution.
+    If SFINCS was run with subgrid, the flood depth is downscaled to subgrid resolution
+    (see `geb.hazards.floods.workflows.downscaling.downscale_flood_depth`). The flood
+    depth is always written to a zarr file and returned lazily from it.
 
     Notes:
         If SFINCS was run as a fluvial model, a minimum flood depth of 0.15 m is applied.
@@ -91,10 +100,14 @@ def read_flood_depth(
         method: The method to use for calculating flood depth. Options are 'max' for maximum flood depth
             and 'final' for flood depth at the final time step.
         end_time: The end time of the simulation.
+        logger: Logger for progress messages.
         mask: Optional xarray DataArray mask to apply to the flood depth. Defaults to None.
+        output_path: Zarr file to write the flood depth to. Defaults to None: the
+            flood depth is then written to `flood_depth_{method}.zarr` in the
+            simulation folder.
 
     Returns:
-        The maximum flood depth downscaled to subgrid resolution.
+        The flood depth (m), read lazily from the zarr file.
 
     Raises:
         ValueError: If an unknown method is provided.
@@ -106,6 +119,12 @@ def read_flood_depth(
         mode="r",
     )
     model.config.read()
+
+    flood_depth_path: Path = (
+        output_path
+        if output_path is not None
+        else simulation_root / f"flood_depth_{method}.zarr"
+    )
 
     # to detect whether SFINCS was run with subgrid
     if model.config.data.sbgfile is not None:
@@ -135,20 +154,14 @@ def read_flood_depth(
             mask = mask.compute()
             water_surface_elevation = water_surface_elevation.compute()
             water_surface_elevation = water_surface_elevation.where(mask, np.nan)
-        # read subgrid elevation
-        surface_elevation: xr.DataArray = (
-            xr.open_dataarray(model_root / "subgrid" / "dep_subgrid.tif")
-            .sel(band=1)
-            .drop_vars(["band"])
+        downscale_flood_depth(
+            water_level=water_surface_elevation.rio.write_crs(model.crs),
+            subgrid_elevation_path=model_root / "subgrid" / "dep_subgrid.tif",
+            minimum_flood_depth=minimum_flood_depth,
+            output_path=flood_depth_path,
+            logger=logger,
         )
-
-        flood_depth_m: xr.DataArray = downscale_floodmap(
-            zsmax=water_surface_elevation,
-            dep=surface_elevation,
-            hmin=minimum_flood_depth,
-            reproj_method="bilinear",  # maybe use "nearest" for coastal
-        )
-        flood_depth_m: xr.DataArray = flood_depth_m.rio.write_crs(model.crs)
+        flood_depth_m: xr.DataArray = read_zarr(flood_depth_path)
 
     else:
         if method == "max":
@@ -178,6 +191,13 @@ def read_flood_depth(
             flood_depth_m = flood_depth_m.where(mask.values, np.nan)
 
         flood_depth_m.attrs["_FillValue"] = np.nan
+        flood_depth_m = write_zarr(
+            flood_depth_m, flood_depth_path, crs=flood_depth_m.rio.crs
+        )
+
+    if flood_depth_m.size > LARGE_FLOOD_MAP_PIXELS:
+        # too large for the statistics and the figure below
+        return flood_depth_m
 
     print(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
@@ -208,8 +228,9 @@ def read_flood_depth(
 
     ax.set_title("Maximum Water Depth over all time steps")
 
-    output_path: Path = model_root / "flood_depth_all_time_steps.png"
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.savefig(
+        model_root / "flood_depth_all_time_steps.png", dpi=300, bbox_inches="tight"
+    )
     plt.close(fig)
     return flood_depth_m
 

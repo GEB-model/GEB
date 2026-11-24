@@ -903,19 +903,16 @@ def test_initial_water_level(geb_model: GEBModel, subgrid: bool) -> None:
                 rel_tol=1e-5,
             )
 
-            calculated_volume_workflow: float = calculate_initial_water_volume(
-                initial_level=ini,
-                cell_area_coarse=simulation.sfincs_root_model.cell_area_m2,
-                bed_elevation=simulation.bed_elevation,
-                subgrid_dem=simulation.subgrid_dem_path
-                if simulation.is_subgrid
-                else None,
-                is_geographic=simulation.sfincs_root_model.is_geographic,
-            )
-            assert math.isclose(
-                calculated_volume_workflow,
-                simulation.total_initial_water_volume_m3,
-                rel_tol=1e-5,
-            )
+            if not simulation.is_subgrid:
+                calculated_volume_workflow: float = calculate_initial_water_volume(
+                    initial_level=ini,
+                    cell_area_coarse=simulation.sfincs_root_model.cell_area_m2,
+                    bed_elevation=simulation.bed_elevation,
+                )
+                assert math.isclose(
+                    calculated_volume_workflow,
+                    simulation.total_initial_water_volume_m3,
+                    rel_tol=1e-5,
+                )
 
         sfincs_model.cleanup()

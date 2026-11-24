@@ -282,6 +282,7 @@ class Floods(Module):
             mannings=self.mannings,
             grid_size_multiplier=self.config["grid_size_multiplier"],
             subgrid=self.config["subgrid"],
+            nr_subgrid_pixels=self.config["subgrid_pixels"],
             low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
             coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
             coastal=coastal,
@@ -424,6 +425,31 @@ class Floods(Module):
         simulation.set_river_initial_water_level()
 
         return simulation
+
+    def flood_map_path(self, event: Event) -> Path:
+        """Path of the output flood map of an event.
+
+        Args:
+            event: The flood event.
+
+        Returns:
+            Path to the zarr file of the flood map in the model output folder.
+
+        Raises:
+            ValueError: If neither 'export_max_intensity' nor 'export_final_intensity'
+                is True in the event.
+        """
+        if event.export_max_intensity:
+            postfix = "_max"
+        elif event.export_final_intensity:
+            postfix = "_final"
+        else:
+            raise ValueError(
+                "Either 'export_max_intensity' or 'export_final_intensity' must be True."
+            )
+        return (
+            self.model.output_folder / "flood_maps" / (event.name + postfix + ".zarr")
+        )
 
     def run_single_event(
         self,
@@ -582,16 +608,19 @@ class Floods(Module):
                     raise ValueError(
                         "Only one of 'export_max_intensity' or 'export_final_intensity' can be True."
                     )
+                # the flood depth is written directly to the output file
                 if event.export_max_intensity:
                     flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
-                        self.config["minimum_flood_depth"]
-                    )  # read the flood depth results
+                        self.config["minimum_flood_depth"],
+                        output_path=self.flood_map_path(event),
+                    )
                 elif event.export_final_intensity:
                     flood_depth: xr.DataArray = (
                         sfincs_simulation.read_final_flood_depth(
-                            self.config["minimum_flood_depth"]
+                            self.config["minimum_flood_depth"],
+                            output_path=self.flood_map_path(event),
                         )
-                    )  # read the flood depth results
+                    )
                 else:
                     raise ValueError(
                         "Either 'export_max_intensity' or 'export_final_intensity' must be True."
@@ -612,25 +641,11 @@ class Floods(Module):
                 flood_depth = dummy_mask.astype(np.float32)
                 flood_depth[:] = 0
                 flood_depth.attrs["_FillValue"] = np.nan
-
-        if event.export_max_intensity:
-            postfix = "_max"
-        elif event.export_final_intensity:
-            postfix = "_final"
-        else:
-            raise ValueError(
-                "Either 'export_max_intensity' or 'export_final_intensity' must be True."
-            )
-
-        filename: Path = (
-            self.model.output_folder / "flood_maps" / (event.name + postfix + ".zarr")
-        )
-
-        flood_depth: xr.DataArray = write_zarr(
-            da=flood_depth,
-            path=filename,
-            crs=flood_depth.rio.crs,
-        )  # save the flood depth to a zarr file
+                flood_depth = write_zarr(
+                    da=flood_depth,
+                    path=self.flood_map_path(event),
+                    crs=flood_depth.rio.crs,
+                )
 
         # This check is done to compute damages (using ERA5) only after multiverse is finished
         if self.model.multiverse_name is None:
@@ -1009,11 +1024,16 @@ class Floods(Module):
             discharge_m3_s_per_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
-    def save_runoff_m(self, overland_runoff_m: TwoDArrayFloat32) -> None:
-        """Saves the current runoff for the current timestep."""
-        self.var.runoff_m_per_timestep.append(
-            overland_runoff_m
-        )  # this is a deque, so it will automatically remove the oldest runoff
+    def save_runoff_m(self, runoff_m: TwoDArrayFloat32) -> None:
+        """Saves the runoff of the current timestep, for accumulated runoff forcing.
+
+        Args:
+            runoff_m: Water entering the rivers per hourly substep and grid cell (m):
+                overland runoff, interflow and groundwater drainage (baseflow), as the
+                river routing receives it.
+        """
+        # a deque of fixed length, so the oldest runoff is dropped automatically
+        self.var.runoff_m_per_timestep.append(runoff_m)
 
     def discharge_by_river(self, run_name: str | None = None) -> pd.DataFrame:
         """Open the discharge datasets from the model output folder.

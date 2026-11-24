@@ -8,14 +8,9 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-from hydromt_sfincs.workflows.bathymetry import burn_river_rect
 from shapely.geometry import LineString
 
-from geb.hazards.floods.workflows.bathymetry import (
-    burn_rivers,
-    capture_subgrid_initial_water_level,
-    skip_subgrid_tiles_without_river_bed_levels,
-)
+from geb.hazards.floods.workflows.bathymetry import burn_rivers
 from geb.workflows.river_profiles import (
     estimate_river_surface_profiles,
     river_bed_profiles,
@@ -385,116 +380,4 @@ def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
         gdf_riv,
         f"burn_river_monotonic ({crs_lbl} - {obs_lbl})",
         f"custom_burn_{crs_lbl}_{obs_lbl}.png",
-    )
-
-
-def test_subgrid_tile_without_river_bed_levels() -> None:
-    """A tile with only a sliver of river must be left unchanged instead of crashing."""
-    x_coordinates: np.ndarray = np.arange(0.5, 10.5) * 100 + 500000
-    y_coordinates: np.ndarray = np.arange(9.5, -0.5, -1.0) * 100 + 5000000
-    elevation: xr.DataArray = xr.DataArray(
-        np.full((10, 10), 10.0, dtype=np.float32),
-        coords={"y": y_coordinates, "x": x_coordinates},
-        dims=("y", "x"),
-    )
-    elevation.raster.set_crs(32631)
-    manning: xr.DataArray = elevation * 0 + 0.03
-    river_on_tile_edge: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {"rivwth": [200.0], "rivdph": [2.0], "manning": [0.03]},
-        geometry=[LineString([(500000, 4999000), (500000, 5000500)])],
-        crs=32631,
-    )
-
-    with pytest.raises(ValueError, match="Lengths of inputs do not match"):
-        burn_river_rect(da_elv=elevation, da_man=manning, gdf_riv=river_on_tile_edge)
-
-    with skip_subgrid_tiles_without_river_bed_levels():
-        burned_elevation, burned_manning = burn_river_rect(
-            da_elv=elevation, da_man=manning, gdf_riv=river_on_tile_edge
-        )
-
-    np.testing.assert_array_equal(burned_elevation.values, elevation.values)
-    np.testing.assert_array_equal(burned_manning.values, manning.values)
-
-    # the original function must be restored afterwards
-    with pytest.raises(ValueError, match="Lengths of inputs do not match"):
-        burn_river_rect(da_elv=elevation, da_man=manning, gdf_riv=river_on_tile_edge)
-
-
-def test_capture_subgrid_initial_water_level() -> None:
-    """Capturing subgrid initial water levels must match the exact burned subgrid pixels."""
-    import hydromt_sfincs.workflows.bathymetry as hydromt_sfincs_bathymetry
-
-    nr_subgrid_pixels: int = 2
-    # Coarse grid is 4x4 with 100 m cells; subgrid tile has +1 overlap cell -> (5*2, 5*2) = (10, 10) at 50 m
-    coarse_x: np.ndarray = np.arange(0.5, 4.5) * 100.0 + 500000.0
-    coarse_y: np.ndarray = np.arange(3.5, -0.5, -1.0) * 100.0 + 5000000.0
-    grid_mask: xr.DataArray = xr.DataArray(
-        np.ones((4, 4), dtype=np.uint8),
-        coords={"y": coarse_y, "x": coarse_x},
-        dims=("y", "x"),
-    ).rio.write_crs(32631)
-
-    subgrid_x: np.ndarray = np.arange(0.5, 10.5) * 50.0 + 500000.0
-    subgrid_y: np.ndarray = np.arange(9.5, -0.5, -1.0) * 50.0 + 4999900.0
-    elevation: xr.DataArray = xr.DataArray(
-        np.full((10, 10), 12.0, dtype=np.float32),
-        coords={"y": subgrid_y, "x": subgrid_x},
-        dims=("y", "x"),
-    )
-    elevation.raster.set_crs(32631)
-    manning: xr.DataArray = elevation * 0 + 0.03
-    river: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {"rivwth": [100.0], "rivdph": [3.0], "manning": [0.03]},
-        geometry=[LineString([(500050.0, 5000225.0), (500350.0, 5000225.0)])],
-        crs=32631,
-    )
-
-    with capture_subgrid_initial_water_level(
-        grid_mask=grid_mask,
-        nr_subgrid_pixels=nr_subgrid_pixels,
-    ) as initial_water_level:
-        burned_elv, _ = hydromt_sfincs_bathymetry.burn_river_rect(
-            da_elv=elevation,
-            da_man=manning,
-            gdf_riv=river,
-        )
-
-    burned_subgrid = (
-        burned_elv.values[:-nr_subgrid_pixels, :-nr_subgrid_pixels]
-        < elevation.values[:-nr_subgrid_pixels, :-nr_subgrid_pixels]
-    )
-    expected_burned_coarse = burned_subgrid.reshape(
-        4, nr_subgrid_pixels, 4, nr_subgrid_pixels
-    ).any(axis=(1, 3))
-    assert expected_burned_coarse.any()
-    np.testing.assert_array_equal(
-        initial_water_level.notnull().values,
-        expected_burned_coarse,
-    )
-    np.testing.assert_allclose(
-        initial_water_level.values[expected_burned_coarse],
-        12.0,
-    )
-
-
-def test_subgrid_burn_uses_river_bed_points() -> None:
-    """hydromt-sfincs burns the riverbed of the GEB river profiles (point_zb)."""
-    da_elv, da_man, gdf_riv = create_dummy_data(crs=32631)
-    river_bed_points = get_river_bed_points(gdf_riv, da_elv)
-    burned_elevation, _ = burn_river_rect(
-        da_elv=da_elv.copy(),
-        da_man=da_man.copy(),
-        gdf_riv=gpd.GeoDataFrame(
-            gdf_riv.rename(columns={"width": "rivwth", "depth": "rivdph"})
-        ),
-        gdf_zb=river_bed_points[["geometry"]].assign(
-            rivbed=river_bed_points["bed_elevation_m"]
-        ),
-    )
-    lowered = burned_elevation.values < da_elv.values - 1e-3
-    assert lowered.any()
-    # every burned cell lies within the range of the riverbed points
-    assert burned_elevation.values[lowered].min() >= (
-        river_bed_points["bed_elevation_m"].min() - 1e-3
     )

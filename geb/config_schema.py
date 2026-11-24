@@ -119,6 +119,12 @@ class FloodsConfig(BaseModel):
         description="Must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.",
     )
     subgrid: bool = Field(..., description="Whether to use subgrid.")
+    subgrid_pixels: int | None = Field(
+        ...,
+        ge=2,
+        multiple_of=2,
+        description="Number of subgrid pixels per grid cell along each axis (even). null: the subgrid has the resolution of the DEM (grid_size_multiplier pixels per cell). A larger number gives a subgrid that is finer than the DEM: the elevation is interpolated (bilinear) to the subgrid, so that rivers narrower than a DEM pixel can be burned in. Only used when subgrid is true.",
+    )
     overwrite: bool | Literal["auto"] = Field(
         ...,
         description="Whether to overwrite existing flood model. True, False, 'auto'. If 'auto', it will check if a GPU is available using nvidia-smi.",

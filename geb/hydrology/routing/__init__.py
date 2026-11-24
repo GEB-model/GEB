@@ -803,6 +803,10 @@ class Routing(Module):
         self._groundwater_drainage_buffer_m3: ArrayFloat64 = self.grid.full_compressed(
             0, dtype=np.float64
         )
+        # the hourly groundwater drainage of the current day, for the flood model
+        self.groundwater_drainage_m3_per_hour: TwoDArrayFloat32 = np.zeros(
+            (24, self.grid.compressed_size), dtype=np.float32
+        )
         self._remaining_groundwater_storage_m3: ArrayFloat64 = (
             self.grid.full_compressed(0, dtype=np.float64)
         )
@@ -1020,6 +1024,7 @@ class Routing(Module):
         floodplain_profile_widths_grid_m: TwoDArrayFloat32,
         floodplain_side_slope_grid_m_per_m: ArrayFloat32,
         levee_depth_grid: ArrayFloat32,
+        shape_exponent_grid: ArrayFloat32,
     ) -> None:
         """Update bankfull width, depth, and Manning's n on river reaches GeoDataFrame from routing grid arrays.
 
@@ -1040,6 +1045,9 @@ class Routing(Module):
             floodplain_side_slope_grid_m_per_m: Valley side-slope ratio z per routing grid cell (m/m horizontal:vertical).
             levee_depth_grid: Levee crest channel depth per routing grid cell (meters), assigned as
                 reach averages to self.var.rivers['levee_depth'].
+            shape_exponent_grid: Power-law cross-sectional shape exponent of the channel
+                per routing grid cell (dimensionless, 0.5: parabolic), assigned as reach
+                averages to self.var.rivers['shape_exponent'].
         """
         valid_river_cell_mask: ArrayBool = self.var.river_ids != -1
         valid_reach_ids: ArrayInt32 = self.var.river_ids[valid_river_cell_mask]
@@ -1060,6 +1068,7 @@ class Routing(Module):
             "river_width_alpha": self.var.river_width_alpha[valid_river_cell_mask],
             "river_width_beta": self.var.river_width_beta[valid_river_cell_mask],
             "levee_depth": levee_depth_grid[valid_river_cell_mask],
+            "shape_exponent": shape_exponent_grid[valid_river_cell_mask],
         }
         grid_dict["floodplain_side_slope_m_per_m"] = floodplain_side_slope_grid_m_per_m[
             valid_river_cell_mask
@@ -1073,6 +1082,7 @@ class Routing(Module):
             "river_width_beta",
             "floodplain_side_slope_m_per_m",
             "levee_depth",
+            "shape_exponent",
         ]
         for k in range(NUM_FLOODPLAIN_LEVELS):
             col_k: str = f"floodplain_profile_width_{k}_m"
@@ -1268,6 +1278,7 @@ class Routing(Module):
                     "river_width_beta",
                     "return_period_2_years_daily_m3_per_s",
                     "width_is_observed",
+                    "shape_exponent",
                 ],
             ] = [
                 float(estimated_width),
@@ -1277,6 +1288,7 @@ class Routing(Module):
                 float(combined_beta),
                 float(raw_summed_q),
                 bool(is_observed),
+                shape_exponent,
             ]
 
             # Levee height scales with the discharge-weighted upstream levee-to-bankfull depth ratio
@@ -2056,6 +2068,7 @@ class Routing(Module):
             floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
             floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
             levee_depth_grid=levee_depth_m,
+            shape_exponent_grid=self.shape_exponent,
         )
 
         bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
@@ -2484,7 +2497,7 @@ class Routing(Module):
 
     def step(
         self,
-        total_runoff_m: TwoDArrayFloat32,
+        quickflow_m: TwoDArrayFloat32,
         channel_abstraction_m3: ArrayFloat32,
         return_flow: ArrayFloat32,
         potential_open_water_evaporation_m: TwoDArrayFloat32,
@@ -2496,7 +2509,9 @@ class Routing(Module):
         """Perform a daily routing step with multiple substeps.
 
         Args:
-            total_runoff_m: Total runoff in meters for each grid cell for each hour.
+            quickflow_m: Overland runoff and interflow reaching the river network, per
+                grid cell and hour (m), after runoff concentration. Groundwater
+                drainage (baseflow) is not included; it is computed in this step.
                 Shape is (24, n_cells).
             channel_abstraction_m3: Channel abstraction in m3 for each grid cell over the whole day.
             return_flow: Return flow in meters for each grid cell over the whole day.
@@ -2647,7 +2662,7 @@ class Routing(Module):
             self.inflow_idx += 1
 
             np.multiply(
-                total_runoff_m[hour, :],
+                quickflow_m[hour, :],
                 self.grid.var.cell_area,
                 out=self._side_flow_buffer_m3,
             )
@@ -2667,6 +2682,9 @@ class Routing(Module):
                 np.float32
             )
             self.groundwater_drainage_m3 += self._groundwater_drainage_buffer_m3
+            self.groundwater_drainage_m3_per_hour[hour] = (
+                self._groundwater_drainage_buffer_m3
+            )
 
             # then split the runoff into runoff directly to water bodies,
             # calculate waterbody evaporation, and route remaining runoff to channel network
@@ -2941,7 +2959,7 @@ class Routing(Module):
             balance_check(
                 how="sum",
                 influxes=[
-                    total_runoff_m.sum(axis=0) * self.grid.var.cell_area,
+                    quickflow_m.sum(axis=0) * self.grid.var.cell_area,
                     return_flow * self.grid.var.cell_area,
                     over_abstraction_m3,
                     total_inflow_m3,
@@ -3294,6 +3312,7 @@ class Routing(Module):
                 floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
                 floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
                 levee_depth_grid=updated_levee_depth,
+                shape_exponent_grid=self.shape_exponent,
             )
 
         self._set_retention_activation_thresholds()

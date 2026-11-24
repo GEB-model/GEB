@@ -23,6 +23,7 @@ hazards:
     flood_map_output_interval_seconds: null
     grid_size_multiplier: 1
     subgrid: false
+    subgrid_pixels: null
     overwrite: auto
     coastal_only: false
     write_figures: false

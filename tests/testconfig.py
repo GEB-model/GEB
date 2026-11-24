@@ -75,6 +75,9 @@ def ensure_test_model() -> Path:
                 timing=False,
             )
             model.step_to_end()
+            # the report (e.g. river outflow, used by the SFINCS tests) is only written
+            # when the reporter is finalized, as at the end of `geb spinup`
+            model.reporter.finalize()
             model.store.save()
             model.close()
     return TEST_MODEL_DIR

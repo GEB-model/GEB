@@ -334,9 +334,6 @@ class Hydrology(Data, Module):
 
         groundwater_recharge_m += karst_recharge_m.astype(np.float32)
 
-        if self.model.config["hazards"]["floods"]["simulate"]:
-            self.model.hazard_driver.floods.save_runoff_m(overland_runoff_m)
-
         if __debug__:
             outflux_m3: np.float64 = (
                 actual_evapotranspiration_m.astype(np.float64) * self.HRU.var.cell_area
@@ -418,7 +415,9 @@ class Hydrology(Data, Module):
 
         timer.finish_split("GW")
 
-        total_runoff_m = self.runoff_concentrator.step(
+        # quickflow: overland runoff and interflow, delayed by their travel time to
+        # the channel; baseflow (groundwater drainage) is added in the routing
+        quickflow_m = self.runoff_concentrator.step(
             interflow_m=interflow_m, runoff_m=overland_runoff_m
         ).astype(np.float32)
 
@@ -427,7 +426,7 @@ class Hydrology(Data, Module):
                 (interflow_m.sum(axis=0) + overland_runoff_m.sum(axis=0))
                 * self.grid.var.cell_area
             ).sum()  # added to sinks, so remove from invented water
-            invented_water -= (total_runoff_m * self.grid.var.cell_area).sum()
+            invented_water -= (quickflow_m * self.grid.var.cell_area).sum()
 
             balance_check(
                 name="total water balance 3",
@@ -445,7 +444,7 @@ class Hydrology(Data, Module):
         timer.finish_split("Runoff concentration")
 
         total_inflow_m3, routing_loss_m3, over_abstraction_m3 = self.routing.step(
-            total_runoff_m,
+            quickflow_m,
             channel_abstraction_m3,
             return_flow_m,
             potential_open_water_evaporation_m,
@@ -459,6 +458,13 @@ class Hydrology(Data, Module):
         )
 
         if self.model.config["hazards"]["floods"]["simulate"]:
+            # SFINCS gets all water that enters the rivers: the quickflow and the
+            # hourly groundwater drainage (baseflow).
+            self.model.hazard_driver.floods.save_runoff_m(
+                quickflow_m
+                + self.routing.groundwater_drainage_m3_per_hour
+                / self.grid.var.cell_area.astype(np.float32)
+            )
             self.model.hazard_driver.floods.save_discharge(
                 discharge_m3_s_per_substep=self.routing.var.discharge_m3_s_per_substep
             )
@@ -473,7 +479,7 @@ class Hydrology(Data, Module):
                 return_flow_m * self.grid.var.cell_area
             ).sum()  # added to sinks, so remove from invented water
 
-            invented_water += (total_runoff_m * self.grid.var.cell_area).sum()
+            invented_water += (quickflow_m * self.grid.var.cell_area).sum()
 
             invented_water -= (
                 channel_abstraction_m3.sum()  # now removed from river

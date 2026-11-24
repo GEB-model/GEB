@@ -45,11 +45,12 @@ if Path("/research/BETA-IVM-HPC/GEB").exists():
     os.environ["GEB_SHARE_GLOBAL_CACHE"] = os.getenv("GEB_SHARE_GLOBAL_CACHE", "true")
     os.environ["SFINCS_BINARY"] = os.getenv(
         "SFINCS_BINARY",
-        f"/research/BETA-IVM-HPC/GEB/sfincs/bin/sfincs-{SFINCS_VERSION}",
+        # optimised SFINCS 2.5.0 build (branch sfincs-optimisations; same results, faster)
+        "/research/BETA-IVM-HPC/GEB/sfincs/bin/sfincs-optimised",
     )
     os.environ["SFINCS_BINARY_GPU"] = os.getenv(
         "SFINCS_BINARY_GPU",
-        f"/research/BETA-IVM-HPC/GEB/sfincs/bin/sfincs-gpu-{SFINCS_VERSION}",
+        "/research/BETA-IVM-HPC/GEB/sfincs/bin/sfincs-gpu-optimised",
     )
     os.environ["SFINCS_CONTAINER"] = os.getenv(
         "SFINCS_CONTAINER",
