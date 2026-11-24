@@ -294,149 +294,90 @@ def calculate_hillslope_saturated_area_fraction(
 
 
 @njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
-def calculate_green_ampt_time_from_infiltration(
-    cumulative_infiltration: np.float32,
+def calculate_green_ampt_infiltration_increment(
+    cumulative_infiltration_m: np.float32,
     saturated_hydraulic_conductivity_m_per_s: np.float32,
     wetting_front_suction_head_m: np.float32,
     moisture_deficit: np.float32,
+    duration_s: np.float32,
 ) -> np.float32:
-    """Calculate the time required to infiltrate a given cumulative amount.
+    """Calculate the Green-Ampt infiltration capacity over a time step.
 
-    This implements the exact analytical inversion of the Green-Ampt equation.
+    Under ponded conditions the infiltration rate is (Heber Green and Ampt, 1911)
+        f = K (1 + P / F),  with P = psi * dtheta,
+    which integrates to (Chow et al., 1988; Eq. 4.3.6)
+        K t = F - P ln(1 + F / P).
+    Starting from the current cumulative infiltration F, the increment dF over a
+    step dt therefore satisfies
+        g(dF) = dF - P ln(1 + dF / (F + P)) - K dt = 0.
+    This equation is solved directly for dF. Computing dF as the difference of two
+    cumulative totals instead would let any error in the totals, which grow during
+    an event, swamp the much smaller increment.
 
-    The standard Green-Ampt rate equation is (Heber Green and Ampt, 1911):
-        f = K (1 + (psi * dtheta) / F)
-
-    Integrating this yields the cumulative infiltration equation (Chow et al., 1988; Eq 4.3.6):
-        K * t = F - (psi * dtheta) * ln(1 + F / (psi * dtheta))
-
-    Thus, given cumulative infiltration F, we can solve for time t:
-        t = (F - (psi * dtheta) * ln(1 + F / (psi * dtheta))) / K
+    g is increasing and convex in dF, so Newton iterations that start above the
+    root decrease monotonically to it without overshooting. Two upper bounds are
+    available: dF <= f(F) dt, because the rate only decreases during the step, and
+    dF <= K dt + sqrt(2 K P dt), the increment of a dry soil (F = 0) over the same
+    step, because a wetter soil infiltrates less. The lower bound is dF >= K dt.
 
     References:
-        Heber Green, W. and Ampt, G.A. (1911) ‘Studies on Soil Phyics.’, The Journal of Agricultural Science, 4(1), pp. 1–24. doi:10.1017/S0021859600001441.
+        Heber Green, W. and Ampt, G.A. (1911) 'Studies on Soil Phyics.', The Journal of Agricultural Science, 4(1), pp. 1-24. doi:10.1017/S0021859600001441.
         Chow, V. T., Maidment, D. R., & Mays, L. W. (1988). Applied Hydrology. McGraw-Hill.
 
     Args:
-        cumulative_infiltration: Cumulative infiltration amount (m).
+        cumulative_infiltration_m: Cumulative infiltration at the start of the step (m).
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity (m/s).
-        wetting_front_suction_head_m: Wetting front suction head (m).
-        moisture_deficit: Moisture deficit [-].
+        wetting_front_suction_head_m: Wetting front suction head psi (m).
+        moisture_deficit: Moisture deficit dtheta [-].
+        duration_s: Length of the step (s).
 
     Returns:
-        Time t corresponding to the infiltration amount.
+        Infiltration capacity over the step (m).
     """
-    if cumulative_infiltration <= np.float32(0.0):
-        return np.float32(0.0)
-
-    if saturated_hydraulic_conductivity_m_per_s <= np.float32(0.0):
-        return np.float32(0.0)
-
-    wetting_front_suction_potential: np.float32 = (
-        wetting_front_suction_head_m * moisture_deficit
-    )
-
-    # Darcy limit: if there is no capillary suction effect (sf -> 0),
-    # then cumulative infiltration is I = K_s t.
-    if wetting_front_suction_potential <= np.float32(0.0):
-        return cumulative_infiltration / saturated_hydraulic_conductivity_m_per_s
-
-    # np.log1p(x) computes log(1 + x) accurately for small x
-    term_log = np.log1p(cumulative_infiltration / wetting_front_suction_potential)
-    t = (
-        cumulative_infiltration - wetting_front_suction_potential * term_log
-    ) / saturated_hydraulic_conductivity_m_per_s
-    return max(t, np.float32(0.0))
-
-
-@njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
-def calculate_green_ampt_potential_cumulative_infiltration(
-    seconds_since_start: np.float32,
-    saturated_hydraulic_conductivity_m_per_s: np.float32,
-    wetting_front_suction_head_m: np.float32,
-    moisture_deficit: np.float32,
-    adjust_for_coarse_soils: bool = False,
-) -> np.float32:
-    """Calculate cumulative infiltration using the Sadeghi et al. (2024) explicit Green-Ampt formula.
-
-    F = K_s t (0.70635 + 0.32415 sqrt(1 + 9.43456 S^2 / (K_s^2 t)))  (their eq. 13),
-    with S the sorptivity, S^2 = 2 K_s psi dtheta (their eq. 3).
-
-    Accuracy against the implicit Green-Ampt solution, as reported in the paper:
-    - The relative error stays within 0.3 percent as long as K_s t / F <= 0.904. That
-      limit is reached after t = 17.254 (S / K_s)^2 (their eq. 19a): about 6 hours of
-      continuous ponded infiltration in sand, 0.8 day in loamy sand, 3 days or more
-      in sandy loam and finer soils (their Table 1).
-    - Beyond the limit the error grows: 1.6 percent for sand after 24 hours and
-      1.9 percent for a very coarse sand after 60 hours.
-    - With the linear adjustment F_adj = 0.9796 F + 0.335 S^2 / K_s for
-      K_s t / F > 0.904 (their eq. 21) the error stays within 0.3 percent up to
-      K_s t / F = 0.983 (2.4 days in sand).
-
-    Based on:
-        Sadeghi, S. H., Loescher, H. W., Jacoby, P. W., & Sullivan, P. L. (2024).
-        A simple, accurate, and explicit form of the Green–Ampt model to estimate infiltration,
-        sorptivity, and hydraulic conductivity. Vadose Zone Journal, 23, e20341,
-        doi:10.1002/vzj2.20341
-
-    Args:
-        seconds_since_start: Seconds since the start of the infiltration event.
-        saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity (m/s).
-        wetting_front_suction_head_m: Wetting front suction head ψ (m).
-        moisture_deficit: Moisture deficit [-].
-        adjust_for_coarse_soils: Whether to apply the adjustment (their eq. 21) when
-            K_s t / F > 0.904, which only coarse soils reach in long events.
-
-    Returns:
-        Cumulative infiltration amount in meters.
-    """
-    if seconds_since_start == np.float32(0.0):
-        return np.float32(0.0)
-
-    # Darcy limit: if suction or the moisture deficit is zero, there is no
-    # capillarity-driven enhancement and Green-Ampt reduces to I = K_s t.
-    if wetting_front_suction_head_m <= np.float32(
+    if saturated_hydraulic_conductivity_m_per_s <= np.float32(
         0.0
-    ) or moisture_deficit <= np.float32(0.0):
-        return saturated_hydraulic_conductivity_m_per_s * seconds_since_start
+    ) or duration_s <= np.float32(0.0):
+        return np.float32(0.0)
 
-    # Sorptivity (Sadeghi et al., 2024, eq. 3; Philip, J.R., 1969. Theory of infiltration.
-    # In Advances in hydroscience (Vol. 5, pp. 215-296). Elsevier):
-    # S^2 = 2 K_s * psi * dtheta
-    # Since the Sadeghi formula uses S^2 directly, we do not need to take the square root.
-    sorptivity_squared: np.float32 = (
-        np.float32(2.0)
-        * saturated_hydraulic_conductivity_m_per_s
-        * wetting_front_suction_head_m
-        * moisture_deficit
-    )
+    # Solve in float64: g is a small difference of larger terms when dF << F + P.
+    conductivity_times_duration: np.float64 = np.float64(
+        saturated_hydraulic_conductivity_m_per_s
+    ) * np.float64(duration_s)
+    suction_potential: np.float64 = np.float64(
+        wetting_front_suction_head_m
+    ) * np.float64(moisture_deficit)
+    # Darcy limit: without capillary suction the rate is K.
+    if suction_potential <= 0.0:
+        return np.float32(conductivity_times_duration)
 
-    # Apply Sadeghi et al. (2024) explicit formula
-    hydraulic_conductivity_times_time: np.float32 = (
-        saturated_hydraulic_conductivity_m_per_s * seconds_since_start
-    )
+    cumulative: np.float64 = max(np.float64(cumulative_infiltration_m), 0.0)
+    cumulative_plus_suction: np.float64 = cumulative + suction_potential
 
-    # sorptivity_time_ratio corresponds to S^2 / (Ks^2 * t)
-    sorptivity_time_ratio: np.float32 = sorptivity_squared / (
-        saturated_hydraulic_conductivity_m_per_s * hydraulic_conductivity_times_time
+    increment: np.float64 = conductivity_times_duration + np.sqrt(
+        2.0 * conductivity_times_duration * suction_potential
     )
-    cumulative_infiltration: np.float32 = hydraulic_conductivity_times_time * (
-        np.float32(0.70635)
-        + np.float32(0.32415)
-        * np.sqrt(np.float32(1.0) + np.float32(9.43456) * sorptivity_time_ratio)
-    )
-
-    # Apply adjustment for coarse soils if necessary
-    if adjust_for_coarse_soils and (
-        hydraulic_conductivity_times_time / cumulative_infiltration
-    ) > np.float32(0.904):
-        cumulative_infiltration: np.float32 = np.float32(
-            0.9796
-        ) * cumulative_infiltration + np.float32(0.335) * (
-            sorptivity_squared / saturated_hydraulic_conductivity_m_per_s
+    if cumulative > 0.0:
+        increment = min(
+            increment,
+            conductivity_times_duration * (1.0 + suction_potential / cumulative),
         )
 
-    return np.float32(cumulative_infiltration)
+    for _ in range(50):
+        residual: np.float64 = (
+            increment
+            - suction_potential * np.log1p(increment / cumulative_plus_suction)
+            - conductivity_times_duration
+        )
+        derivative: np.float64 = (cumulative + increment) / (
+            cumulative_plus_suction + increment
+        )
+        newton_step: np.float64 = residual / derivative
+        increment -= newton_step
+        # Newton converges quadratically: the remaining error is far below float32 precision
+        if newton_step <= 1e-4 * increment:
+            break
+
+    return np.float32(max(increment, conductivity_times_duration))
 
 
 @njit(cache=NUMBA_CACHE, inline="always", fastmath=True)
@@ -844,8 +785,8 @@ def infiltration(
 ]:
     """Simulates vertical transport of water in the soil for a single cell.
 
-    Uses an explicit Green-Ampt approximation (Sadeghi et al., 2024) combined with the
-    PDM variable infiltration capacity curve and depression storage spillover runoff.
+    Uses the Green-Ampt infiltration capacity, solved for each substep from the exact
+    implicit relation, combined with the PDM variable infiltration capacity curve and depression storage spillover runoff.
 
     The function uses `wetting_front_suction_head_m` which is a state variable
     tracking the matric suction at the sharp wetting front. This should be
@@ -1206,40 +1147,16 @@ def infiltration(
             wetting_front_depth_m * wetting_front_moisture_deficit
         )
 
-        # Calculate effective time since start of infiltration event
-        # If wetting_front_depth is negligible, we start at t=0
-        if wetting_front_depth_m == np.float32(0.0):
-            effective_seconds_since_start_infiltration: np.float32 = np.float32(0.0)
-        else:
-            effective_seconds_since_start_infiltration: np.float32 = (
-                calculate_green_ampt_time_from_infiltration(
-                    current_cumulative_infiltration,
-                    saturated_conductivity_of_most_restrictive_layer,
-                    wetting_front_suction_head_m,
-                    wetting_front_moisture_deficit,
-                )
-            )
-
-        # Calculate potential cumulative infiltration at end of substep
-        # We advance time by substep_time_s
-        seconds_since_start_of_infiltration: np.float32 = (
-            effective_seconds_since_start_infiltration + substep_time_s
-        )
-
-        potential_cumulative_infiltration = (
-            calculate_green_ampt_potential_cumulative_infiltration(
-                seconds_since_start_of_infiltration,
+        # Infiltration capacity over this substep, solved from the exact Green-Ampt
+        # relation starting at the current cumulative infiltration
+        infiltration_capacity_m_step: np.float32 = (
+            calculate_green_ampt_infiltration_increment(
+                current_cumulative_infiltration,
                 saturated_conductivity_of_most_restrictive_layer,
                 wetting_front_suction_head_m,
                 wetting_front_moisture_deficit,
-                adjust_for_coarse_soils=False,
+                substep_time_s,
             )
-        )
-
-        # Determine infiltration capacity for this substep
-        infiltration_capacity_m_step: np.float32 = max(
-            np.float32(0.0),
-            potential_cumulative_infiltration - current_cumulative_infiltration,
         )
         infiltration_capacity_m_step *= transmission_permeable_fraction
 
