@@ -38,6 +38,7 @@ from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
     abstract_water,
+    abstract_water_hour,
     crop_profit_difference_total,
     farmer_command_area,
     find_most_similar_index,
@@ -1789,6 +1790,297 @@ class CropFarmers(AgentBaseClass):
             reservoir_abstraction_m3,
             groundwater_abstraction_m3,
         )
+
+    def prepare_irrigation_day(
+        self,
+        gross_irrigation_demand_m3_per_field: npt.NDArray[np.float32],
+        gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir: npt.NDArray[
+            np.float32
+        ],
+        gross_irrigation_demand_m3_per_field_limit_adjusted_channel: npt.NDArray[
+            np.float32
+        ],
+        gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater: npt.NDArray[
+            np.float32
+        ],
+    ) -> None:
+        """Initialize field demand and source caps for 24 hourly allocations.
+
+        Args:
+            gross_irrigation_demand_m3_per_field: Gross daily demand per field (m3).
+            gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir:
+                Limit-adjusted daily reservoir demand per field (m3).
+            gross_irrigation_demand_m3_per_field_limit_adjusted_channel:
+                Limit-adjusted daily channel demand per field (m3).
+            gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater:
+                Limit-adjusted daily groundwater demand per field (m3).
+
+        Raises:
+            ValueError: If a finite source cap is negative.
+        """
+        reservoir_demand_by_farmer = self.field_to_farmer(
+            gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir
+        )
+        reservoir_cap_by_farmer = (
+            self.agents.reservoir_operators.get_maximum_abstraction_m3_by_farmer(
+                self.command_area, reservoir_demand_by_farmer
+            )
+        )
+        channel_cap_by_farmer = self.field_to_farmer(
+            gross_irrigation_demand_m3_per_field_limit_adjusted_channel
+        )
+        groundwater_cap_by_farmer = self.field_to_farmer(
+            gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater
+        )
+
+        self._hourly_initial_demand_m3 = gross_irrigation_demand_m3_per_field.astype(
+            np.float64
+        )
+        self._hourly_remaining_demand_m3 = self._hourly_initial_demand_m3.copy()
+        self._hourly_remaining_reservoir_cap_m3 = np.zeros_like(
+            self._hourly_initial_demand_m3
+        )
+        self._hourly_remaining_channel_cap_m3 = np.zeros_like(
+            self._hourly_initial_demand_m3
+        )
+        self._hourly_remaining_groundwater_cap_m3 = np.zeros_like(
+            self._hourly_initial_demand_m3
+        )
+
+        for farmer in range(self.var.n):
+            fields = self.var.field_indices[
+                self.var.field_indices_by_farmer[
+                    farmer, 0
+                ] : self.var.field_indices_by_farmer[farmer, 1]
+            ]
+            demand_sum = self._hourly_initial_demand_m3[fields].sum()
+            if demand_sum <= 0:
+                continue
+            shares = self._hourly_initial_demand_m3[fields] / demand_sum
+            for field_caps, farmer_caps in (
+                (self._hourly_remaining_reservoir_cap_m3, reservoir_cap_by_farmer),
+                (self._hourly_remaining_channel_cap_m3, channel_cap_by_farmer),
+                (self._hourly_remaining_groundwater_cap_m3, groundwater_cap_by_farmer),
+            ):
+                cap = farmer_caps[farmer]
+                if np.isposinf(cap):
+                    # An unlimited source never needs more than the field's demand.
+                    field_caps[fields] = self._hourly_initial_demand_m3[fields]
+                elif np.isnan(cap):
+                    field_caps[fields] = 0.0
+                elif cap >= 0:
+                    field_caps[fields] = cap * shares
+                else:
+                    raise ValueError("Source cap must be nonnegative or unlimited")
+
+        self._hourly_channel_by_farmer = np.zeros(self.var.n, dtype=np.float64)
+        self._hourly_reservoir_by_farmer = np.zeros(self.var.n, dtype=np.float64)
+        self._hourly_groundwater_by_farmer = np.zeros(self.var.n, dtype=np.float64)
+        self._hourly_gross_by_field = np.zeros(
+            self.HRU.var.cell_area.size, dtype=np.float64
+        )
+        if __debug__:
+            self._hourly_limit_pre_reservoir = (
+                self.var.remaining_irrigation_limit_m3_reservoir.copy()
+            )
+            self._hourly_limit_pre_channel = (
+                self.var.remaining_irrigation_limit_m3_channel.copy()
+            )
+            self._hourly_limit_pre_groundwater = (
+                self.var.remaining_irrigation_limit_m3_groundwater.copy()
+            )
+
+    def abstract_water_hour(
+        self,
+        available_channel_storage_m3: npt.NDArray[np.float64],
+        available_groundwater_m3: npt.NDArray[np.float64],
+        groundwater_depth: npt.NDArray[np.float64],
+        available_reservoir_storage_m3: npt.NDArray[np.float64],
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float64],
+        npt.NDArray[np.float64],
+        npt.NDArray[np.float64],
+    ]:
+        """Withdraw and partition actual irrigation water for one hour.
+
+        Args:
+            available_channel_storage_m3: Shared channel budget after non-farm
+                withdrawals (m3), modified in place.
+            available_groundwater_m3: Current groundwater availability (m3).
+            groundwater_depth: Groundwater depth per grid cell (m).
+            available_reservoir_storage_m3: Current reservoir availability (m3).
+
+        Returns:
+            Per-field gross, net, return and evaporative-loss depths (m), followed
+            by reservoir, groundwater and channel withdrawal volumes (m3).
+
+        Raises:
+            AssertionError: If withdrawals are negative or a water ledger is unbalanced.
+        """
+        (
+            channel_by_farmer,
+            reservoir_by_farmer,
+            groundwater_by_farmer,
+            water_withdrawal_m,
+            water_consumption_m,
+            return_flow_m,
+            evaporation_loss_m,
+            reservoir_abstraction_m3,
+            groundwater_abstraction_m3,
+            channel_abstraction_m3_by_grid,
+        ) = abstract_water_hour(
+            activation_order=self.activation_order_by_elevation.data,
+            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
+            field_indices=self.var.field_indices,
+            irrigation_efficiency=self.var.irrigation_efficiency.data,
+            channel_irrigated=self.channel_irrigating.data,
+            well_irrigated=self.well_irrigated.data,
+            cell_area=self.HRU.var.cell_area,
+            HRU_to_grid=self.HRU.var.HRU_to_grid,
+            nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
+            available_channel_storage_m3=available_channel_storage_m3,
+            available_groundwater_m3=available_groundwater_m3,
+            groundwater_depth=groundwater_depth,
+            available_reservoir_storage_m3=available_reservoir_storage_m3,
+            command_area_by_farmer=self.command_area,
+            return_fraction=self.var.return_fraction.data,
+            well_depth=self.var.well_depth.data,
+            remaining_irrigation_limit_m3_reservoir=self.var.remaining_irrigation_limit_m3_reservoir.data,
+            remaining_irrigation_limit_m3_channel=self.var.remaining_irrigation_limit_m3_channel.data,
+            remaining_irrigation_limit_m3_groundwater=self.var.remaining_irrigation_limit_m3_groundwater.data,
+            remaining_demand_m3=self._hourly_remaining_demand_m3,
+            remaining_reservoir_cap_m3=self._hourly_remaining_reservoir_cap_m3,
+            remaining_channel_cap_m3=self._hourly_remaining_channel_cap_m3,
+            remaining_groundwater_cap_m3=self._hourly_remaining_groundwater_cap_m3,
+        )
+        self._hourly_channel_by_farmer += channel_by_farmer
+        self._hourly_reservoir_by_farmer += reservoir_by_farmer
+        self._hourly_groundwater_by_farmer += groundwater_by_farmer
+        self._hourly_gross_by_field += (
+            water_withdrawal_m.astype(np.float64) * self.HRU.var.cell_area
+        )
+
+        if __debug__:
+            if (
+                (channel_by_farmer < 0).any()
+                or (reservoir_by_farmer < 0).any()
+                or (groundwater_by_farmer < 0).any()
+            ):
+                raise AssertionError("Hourly farmer withdrawal cannot be negative")
+            balance_check(
+                name="hourly irrigation partition",
+                how="cellwise",
+                influxes=[water_withdrawal_m],
+                outfluxes=[water_consumption_m, return_flow_m, evaporation_loss_m],
+                tolerance=1e-6,
+            )
+            balance_check(
+                name="hourly water withdrawal source-to-field",
+                how="sum",
+                influxes=[
+                    channel_by_farmer,
+                    reservoir_by_farmer,
+                    groundwater_by_farmer,
+                ],
+                outfluxes=[
+                    water_withdrawal_m.astype(np.float64) * self.HRU.var.cell_area
+                ],
+                tolerance=50,
+            )
+        return (
+            water_withdrawal_m,
+            water_consumption_m,
+            return_flow_m,
+            evaporation_loss_m,
+            reservoir_abstraction_m3,
+            groundwater_abstraction_m3,
+            channel_abstraction_m3_by_grid,
+        )
+
+    def finish_irrigation_day(self) -> None:
+        """Publish float64 hourly ledgers to the existing daily farmer variables.
+
+        Raises:
+            AssertionError: If demand, source or seasonal-limit ledgers are unbalanced.
+        """
+        self.var.channel_abstraction_m3_by_farmer[:] = (
+            self._hourly_channel_by_farmer.astype(
+                self.var.channel_abstraction_m3_by_farmer.dtype
+            )
+        )
+        self.var.reservoir_abstraction_m3_by_farmer[:] = (
+            self._hourly_reservoir_by_farmer.astype(
+                self.var.reservoir_abstraction_m3_by_farmer.dtype
+            )
+        )
+        self.var.groundwater_abstraction_m3_by_farmer[:] = (
+            self._hourly_groundwater_by_farmer.astype(
+                self.var.groundwater_abstraction_m3_by_farmer.dtype
+            )
+        )
+        if __debug__:
+            residual_m3 = (
+                self._hourly_initial_demand_m3
+                - self._hourly_gross_by_field
+                - self._hourly_remaining_demand_m3
+            )
+            if not np.allclose(residual_m3, 0.0, rtol=1e-5, atol=1e-3):
+                raise AssertionError(
+                    "Daily field-level irrigation demand is not conserved"
+                )
+            balance_check(
+                name="hourly daily water withdrawal source-to-field",
+                how="sum",
+                influxes=[
+                    self._hourly_channel_by_farmer,
+                    self._hourly_reservoir_by_farmer,
+                    self._hourly_groundwater_by_farmer,
+                ],
+                outfluxes=[self._hourly_gross_by_field],
+                tolerance=50,
+            )
+            balance_check(
+                name="hourly daily seasonal irrigation limits",
+                how="sum",
+                outfluxes=[
+                    self._hourly_channel_by_farmer[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
+                    ],
+                    self._hourly_reservoir_by_farmer[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
+                    ],
+                    self._hourly_groundwater_by_farmer[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
+                    ],
+                ],
+                prestorages=[
+                    self._hourly_limit_pre_reservoir[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
+                    ].astype(np.float64),
+                    self._hourly_limit_pre_channel[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
+                    ].astype(np.float64),
+                    self._hourly_limit_pre_groundwater[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
+                    ].astype(np.float64),
+                ],
+                poststorages=[
+                    self.var.remaining_irrigation_limit_m3_channel[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
+                    ].astype(np.float64),
+                    self.var.remaining_irrigation_limit_m3_reservoir[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
+                    ].astype(np.float64),
+                    self.var.remaining_irrigation_limit_m3_groundwater[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
+                    ].astype(np.float64),
+                ],
+                tolerance=50,
+            )
 
     @staticmethod
     @njit(cache=True)

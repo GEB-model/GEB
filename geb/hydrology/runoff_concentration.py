@@ -170,6 +170,59 @@ class RunoffConcentrator(Module):
         """Shift the model's water buffer forward in time."""
         advance_buffer(self.grid.var.overland_flow_buffer, hours_to_advance)
 
+    def step_hour(
+        self,
+        interflow_h_m: ArrayFloat32,
+        baseflow_h_m: ArrayFloat32,
+        runoff_h_m: ArrayFloat32,
+    ) -> ArrayFloat32:
+        """Advance the runoff buffer by one hour and return that hour's lateral flow.
+
+        Args:
+            interflow_h_m: Interflow for this hour per grid cell (m).
+            baseflow_h_m: Baseflow for this hour per grid cell (m). The caller must
+                already have divided the daily baseflow by 24.
+            runoff_h_m: Surface runoff for this hour per grid cell (m).
+
+        Returns:
+            Concentrated runoff, interflow and baseflow for this hour (m).
+
+        Raises:
+            ValueError: If an input has the wrong shape or is negative or non-finite.
+            AssertionError: If the hourly runoff buffer does not conserve water.
+        """
+        n_cells = self.grid.var.overland_flow_buffer.shape[1]
+        for name, values in (
+            ("interflow_h_m", interflow_h_m),
+            ("baseflow_h_m", baseflow_h_m),
+            ("runoff_h_m", runoff_h_m),
+        ):
+            if values.shape != (n_cells,):
+                raise ValueError(f"{name} must have shape ({n_cells},)")
+            if not np.isfinite(values).all() or (values < 0).any():
+                raise ValueError(f"{name} must be finite and nonnegative")
+
+        buffer = self.grid.var.overland_flow_buffer
+        before = buffer.sum(axis=0, dtype=np.float64) if __debug__ else None
+        self._apply_triangular(
+            runoff_h_m[np.newaxis, :], self.grid.var.overland_flow_buffer_weights
+        )
+        runoff_out = buffer[0].copy()
+        outflow = runoff_out + interflow_h_m + baseflow_h_m
+        self._advance_buffer(1)
+
+        if __debug__:
+            residual = (
+                before.astype(np.float64)
+                + runoff_h_m.astype(np.float64)
+                - runoff_out.astype(np.float64)
+                - buffer.sum(axis=0, dtype=np.float64)
+            )
+            if not np.allclose(residual, 0.0, rtol=0.0, atol=1e-5):
+                raise AssertionError("Hourly runoff-buffer water balance failed")
+
+        return outflow
+
     def step(
         self,
         interflow_m: TwoDArrayFloat32,  # shape (24, n_cells)

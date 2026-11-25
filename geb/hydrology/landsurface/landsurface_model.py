@@ -159,6 +159,8 @@ def land_surface_model(
     interflow_multiplier: np.float32,
     deep_soil_temperature_C: ArrayFloat32,
     leaf_area_index: ArrayFloat32,
+    hour_index: int | None = None,
+    irrigation_is_hourly: bool = False,
 ) -> tuple[
     ArrayFloat32,
     ArrayFloat32,
@@ -253,6 +255,10 @@ def land_surface_model(
         interflow_multiplier: Calibration factor for interflow calculation.
         deep_soil_temperature_C: Deep soil temperature in Celsius.
         leaf_area_index: Leaf area index for the cell.
+        hour_index: Optional zero-based hour to calculate. If omitted, all 24 hours
+            are calculated as in the original daily path.
+        irrigation_is_hourly: Whether actual irrigation is already an hourly depth.
+            If false, the daily irrigation depth is divided equally over 24 hours.
 
     Returns:
         Tuple of:
@@ -281,8 +287,11 @@ def land_surface_model(
     """
     CO2_induced_crop_factor_adustment = get_CO2_induced_crop_factor_adustment(CO2_ppm)
 
+    # Keep one Numba dtype across the daily and hourly irrigation branches.
+    actual_irrigation_consumption_m = actual_irrigation_consumption_m.astype(np.float64)
     # convert values to substep (i.e., per hour)
-    actual_irrigation_consumption_m = actual_irrigation_consumption_m / 24.0
+    if not irrigation_is_hourly:
+        actual_irrigation_consumption_m = actual_irrigation_consumption_m / 24.0
     capillar_rise_m = capillar_rise_m / 24.0
     saturated_hydraulic_conductivity_m_per_hour = (
         saturated_hydraulic_conductivity_m_per_s
@@ -357,7 +366,11 @@ def land_surface_model(
         liquid_water_in_snow_m_cell = liquid_water_in_snow_m[i]
         snow_temperature_C_cell = snow_temperature_C[i]
 
-        for hour in range(24):
+        if hour_index is None:
+            hours = range(24)
+        else:
+            hours = range(hour_index, hour_index + 1)
+        for hour in hours:
             # Climate values for current hour (contigous access [i, hour])
             tas_2m_K_val = tas_2m_K[i, hour]
             ps_pascal_val = ps_pascal[i, hour]
@@ -1775,6 +1788,413 @@ class LandSurface(Module):
         )
         self.HRU.var.crop_group_number_grassland_like = self.hydrology.to_HRU(
             data=crop_group_number_grassland_like
+        )
+
+    def prepare_day(self) -> ArrayFloat32:
+        """Prepare meteorological and crop inputs for 24 coupled hours.
+
+        Returns:
+            Daily root depth per HRU (m), used to calculate irrigation demand once.
+        """
+        crop_stage_lengths = np.column_stack(
+            [
+                self.model.agents.crop_farmers.var.crop_data["l_ini"],
+                self.model.agents.crop_farmers.var.crop_data["l_dev"],
+                self.model.agents.crop_farmers.var.crop_data["l_mid"],
+                self.model.agents.crop_farmers.var.crop_data["l_late"],
+            ]
+        )
+        get_crop_sub_stage = self.model.agents.crop_farmers.var.crop_data_type == "GAEZ"
+        if get_crop_sub_stage:
+            crop_sub_stage_lengths = np.column_stack(
+                [
+                    self.model.agents.crop_farmers.var.crop_data["d1"],
+                    self.model.agents.crop_farmers.var.crop_data["d2a"],
+                    self.model.agents.crop_farmers.var.crop_data["d2b"],
+                    self.model.agents.crop_farmers.var.crop_data["d3a"],
+                    self.model.agents.crop_farmers.var.crop_data["d3b"],
+                    self.model.agents.crop_farmers.var.crop_data["d4"],
+                ]
+            )
+        else:
+            crop_sub_stage_lengths = np.full(
+                (self.model.agents.crop_farmers.var.crop_data.shape[0], 6),
+                np.nan,
+                dtype=np.float32,
+            )
+        crop_factor_per_crop_stage = np.column_stack(
+            [
+                self.model.agents.crop_farmers.var.crop_data["kc_initial"],
+                self.model.agents.crop_farmers.var.crop_data["kc_mid"],
+                self.model.agents.crop_farmers.var.crop_data["kc_end"],
+            ]
+        )
+        crop_root_depths = np.column_stack(
+            [
+                self.model.agents.crop_farmers.var.crop_data["rd_rain"],
+                self.model.agents.crop_farmers.var.crop_data["rd_irr"],
+            ]
+        )
+        dekad = map_date_to_dekad(self.model.current_time)
+        crop_factor, root_depth_m, crop_sub_stage = get_crop_factors_and_root_depths(
+            land_use_map=self.HRU.var.land_use_type,
+            leaf_area_index_forest=self.HRU.var.leaf_area_index_forest[dekad],
+            leaf_area_index_grassland_like=self.HRU.var.leaf_area_index_grassland_like[
+                dekad
+            ],
+            crop_map=self.HRU.var.crop_map,
+            crop_age_days_map=self.HRU.var.crop_age_days_map,
+            crop_harvest_age_days=self.HRU.var.crop_harvest_age_days,
+            crop_stage_lengths=crop_stage_lengths,
+            crop_sub_stage_lengths=crop_sub_stage_lengths,
+            crop_factor_per_crop_stage=crop_factor_per_crop_stage,
+            crop_root_depths=crop_root_depths,
+            get_crop_sub_stage=get_crop_sub_stage,
+        )
+        crop_factor *= self.model.config["parameters"]["crop_factor_multiplier"]
+        interception_capacity_m = get_interception_capacity(
+            land_use_type=self.HRU.var.land_use_type,
+            interception_capacity_m_forest_HRU=self.HRU.var.interception_capacity_forest_m[
+                dekad
+            ],
+            interception_capacity_m_grassland_HRU=self.HRU.var.interception_capacity_grassland_like_m[
+                dekad
+            ],
+        )
+        leaf_area_index = get_leaf_area_index(
+            land_use_type=self.HRU.var.land_use_type,
+            leaf_area_index_forest_HRU=self.HRU.var.leaf_area_index_forest[dekad],
+            leaf_area_index_grassland_HRU=self.HRU.var.leaf_area_index_grassland_like[
+                dekad
+            ],
+            crop_map=self.HRU.var.crop_map,
+        )
+        capillar_rise_m = self.hydrology.to_HRU(data=self.grid.var.capillar)
+        if capillar_rise_m.sum() > 0.0:
+            raise NotImplementedError(
+                "Capillary rise is not implemented in the land surface model yet."
+            )
+        delta_z = (
+            self.HRU.var.soil_layer_height_m[:-1, :]
+            + self.HRU.var.soil_layer_height_m[1:, :]
+        ) / 2
+        averaging_weight_alpha = np.float32(1.0) / np.float32(10.0 * 365.25)
+        tas_2m_K = self.HRU.tas_2m_K
+        self.HRU.var.deep_soil_temperature_C[:] = (
+            self.HRU.var.deep_soil_temperature_C * (1.0 - averaging_weight_alpha)
+            + (tas_2m_K.mean(axis=1).astype(np.float32) - 273.15)
+            * averaging_weight_alpha
+        )
+        pr_kg_per_m2_per_s = self.HRU.pr_kg_per_m2_per_s
+        self._hourly_land_surface_inputs = self._build_land_surface_inputs(
+            root_depth_m=root_depth_m,
+            interception_capacity_m=interception_capacity_m,
+            pr_kg_per_m2_per_s=pr_kg_per_m2_per_s,
+            tas_2m_K=tas_2m_K,
+            crop_factor=crop_factor,
+            actual_irrigation_consumption_m=np.zeros_like(root_depth_m),
+            capillar_rise_m=capillar_rise_m,
+            delta_z=delta_z,
+            deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
+            leaf_area_index=leaf_area_index,
+        )
+        self._hourly_crop_sub_stage = crop_sub_stage
+        self._hourly_pr_kg_per_m2_per_s = pr_kg_per_m2_per_s
+        self._hourly_capillar_rise_m = capillar_rise_m
+        self._hourly_results: dict[int, np.ndarray] = {}
+        self._hourly_enthalpy_prev = self.HRU.var.soil_enthalpy_J_per_m2.copy()
+        return root_depth_m
+
+    def step_hour(
+        self, hour: int, actual_irrigation_consumption_hour_m: ArrayFloat32
+    ) -> tuple[ArrayFloat32, ArrayFloat32, ArrayFloat32]:
+        """Run land-surface processes for one hour with actual net irrigation.
+
+        Args:
+            hour: Zero-based hour of the day.
+            actual_irrigation_consumption_hour_m: Actual net irrigation allocated
+                in this hour per HRU (m).
+
+        Returns:
+            Reference evaporation from open water, interflow and surface runoff,
+            each averaged to grid cells for this hour (m).
+
+        Raises:
+            ValueError: If ``hour`` is outside the range 0..23.
+            AssertionError: If the hourly water or soil-enthalpy balance fails.
+        """
+        if not 0 <= hour < 24:
+            raise ValueError("hour must be in the range 0..23")
+        if __debug__:
+            snow_prev = self.HRU.var.snow_water_equivalent_m.copy()
+            liquid_snow_prev = self.HRU.var.liquid_water_in_snow_m.copy()
+            interception_prev = self.HRU.var.interception_storage_m.copy()
+            topwater_prev = self.HRU.var.topwater_m.copy()
+            water_content_prev = self.HRU.var.water_content_m.copy()
+            enthalpy_prev = self.HRU.var.soil_enthalpy_J_per_m2.copy()
+
+        inputs = self._hourly_land_surface_inputs._replace(
+            actual_irrigation_consumption_m=actual_irrigation_consumption_hour_m
+        )
+        result = land_surface_model(
+            **inputs._asdict(), hour_index=hour, irrigation_is_hourly=True
+        )
+        flux_indices = (
+            0,
+            1,
+            3,
+            4,
+            7,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+        )
+        for index in flux_indices:
+            if index not in self._hourly_results:
+                self._hourly_results[index] = result[index].copy()
+            else:
+                self._hourly_results[index] += result[index]
+
+        if __debug__:
+            balance_check(
+                name="hourly land surface water",
+                how="cellwise",
+                influxes=[
+                    self._hourly_pr_kg_per_m2_per_s[:, hour] * 3.6,
+                    actual_irrigation_consumption_hour_m,
+                    self._hourly_capillar_rise_m / 24.0,
+                ],
+                outfluxes=[
+                    -result[7],
+                    result[10],
+                    result[11],
+                    result[12][:, hour],
+                    result[14][:, hour],
+                    result[13],
+                    result[15],
+                    result[16],
+                ],
+                prestorages=[
+                    snow_prev,
+                    liquid_snow_prev,
+                    interception_prev,
+                    topwater_prev,
+                    water_content_prev.sum(axis=0),
+                ],
+                poststorages=[
+                    self.HRU.var.snow_water_equivalent_m,
+                    self.HRU.var.liquid_water_in_snow_m,
+                    self.HRU.var.interception_storage_m,
+                    self.HRU.var.topwater_m,
+                    self.HRU.var.water_content_m.sum(axis=0),
+                ],
+                tolerance=1e-5,
+            )
+            enthalpy_balanced, enthalpy_imbalance_index = (
+                self._check_soil_enthalpy_balance(
+                    soil_enthalpy_J_per_m2_prev=enthalpy_prev,
+                    soil_boundary_enthalpy_flux_J_per_m2=result[19],
+                    rain_advection_enthalpy_flux_J_per_m2=result[20],
+                    evaporative_cooling_enthalpy_loss_J_per_m2=result[21],
+                    interflow_enthalpy_loss_J_per_m2=result[22],
+                    groundwater_recharge_enthalpy_loss_J_per_m2=result[23],
+                    transpiration_enthalpy_loss_J_per_m2=result[24],
+                )
+            )
+            if not enthalpy_balanced:
+                raise AssertionError(
+                    f"Hourly land-surface enthalpy balance failed in hour {hour} "
+                    f"at HRU index {enthalpy_imbalance_index}."
+                )
+
+        reference_evapotranspiration_water_grid_m = self.hydrology.to_grid(
+            HRU_data=result[4][:, hour], fn="weightedmean"
+        )
+        runoff_grid_m = self.hydrology.to_grid(
+            HRU_data=result[12][:, hour], fn="weightedmean"
+        )
+        interflow_grid_m = self.hydrology.to_grid(
+            HRU_data=result[14][:, hour], fn="weightedmean"
+        )
+        return (
+            reference_evapotranspiration_water_grid_m,
+            interflow_grid_m,
+            runoff_grid_m,
+        )
+
+    def finish_day(
+        self,
+        water_demand_results: tuple[
+            ArrayFloat64, ArrayFloat32, ArrayFloat32, ArrayFloat32, float, ArrayFloat32
+        ],
+    ) -> tuple[
+        TwoDArrayFloat32,
+        TwoDArrayFloat32,
+        TwoDArrayFloat32,
+        ArrayFloat32,
+        ArrayFloat64,
+        ArrayFloat32,
+        ArrayFloat32,
+        float,
+        ArrayFloat32,
+        ArrayFloat32,
+        np.float64,
+    ]:
+        """Finalize daily land-surface diagnostics after 24 hourly calls.
+
+        Args:
+            water_demand_results: Daily results from ``WaterDemand.finish_day``.
+
+        Returns:
+            The same eleven daily outputs as ``LandSurface.step``.
+
+        Raises:
+            AssertionError: If the accumulated daily soil-enthalpy balance fails.
+        """
+        (
+            groundwater_abstraction_m3,
+            channel_abstraction_m3,
+            return_flow_m,
+            irrigation_loss_to_evaporation_m,
+            total_water_demand_loss_m3,
+            actual_irrigation_consumption_m,
+        ) = water_demand_results
+        r = self._hourly_results
+        rain_m = r[0]
+        snow_m = r[1]
+        reference_evapotranspiration_grass_m = r[3]
+        reference_evapotranspiration_water_m = r[4]
+        sublimation_or_deposition_m = r[7]
+        interception_evaporation_m = r[10]
+        open_water_evaporation_m = r[11]
+        runoff_m = r[12]
+        groundwater_recharge_m = r[13]
+        interflow_m = r[14]
+        bare_soil_evaporation_m = r[15]
+        transpiration_m = r[16]
+        potential_transpiration_m = r[17]
+        potential_evapotranspiration_m = r[18]
+        top_soil_infiltration_m = r[25]
+        top_soil_rise_from_layer_2_m = r[26]
+        top_soil_percolation_to_layer_2_m = r[27]
+        top_soil_transpiration_m = r[28]
+        pr_kg_per_m2_per_s = self._hourly_pr_kg_per_m2_per_s
+        capillar_rise_m = self._hourly_capillar_rise_m
+
+        if __debug__:
+            enthalpy_balanced, enthalpy_imbalance_index = (
+                self._check_soil_enthalpy_balance(
+                    soil_enthalpy_J_per_m2_prev=self._hourly_enthalpy_prev,
+                    soil_boundary_enthalpy_flux_J_per_m2=r[19],
+                    rain_advection_enthalpy_flux_J_per_m2=r[20],
+                    evaporative_cooling_enthalpy_loss_J_per_m2=r[21],
+                    interflow_enthalpy_loss_J_per_m2=r[22],
+                    groundwater_recharge_enthalpy_loss_J_per_m2=r[23],
+                    transpiration_enthalpy_loss_J_per_m2=r[24],
+                )
+            )
+            if not enthalpy_balanced:
+                raise AssertionError(
+                    "Daily accumulated land-surface enthalpy balance failed at "
+                    f"HRU index {enthalpy_imbalance_index}."
+                )
+
+        soil_temperature_C = np.full_like(
+            self.HRU.var.soil_enthalpy_J_per_m2, np.nan, dtype=np.float32
+        )
+        soil_temperature_C[0, :] = get_temperature_from_enthalpy(
+            enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[0, :],
+            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K[
+                0, :
+            ],
+            water_content_m=self.HRU.var.water_content_m[0, :],
+            topwater_m=self.HRU.var.topwater_m,
+        )
+        soil_temperature_C[1:, :] = get_temperature_from_enthalpy(
+            enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[1:, :],
+            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K[
+                1:, :
+            ],
+            water_content_m=self.HRU.var.water_content_m[1:, :],
+        )
+        actual_evapotranspiration_m = (
+            interception_evaporation_m
+            + open_water_evaporation_m
+            + transpiration_m
+            + bare_soil_evaporation_m
+            + irrigation_loss_to_evaporation_m
+        )
+        growing_crop_mask = self.HRU.var.crop_map != -1
+        crop_sub_stage = self._hourly_crop_sub_stage
+        self.HRU.var.actual_evapotranspiration_crop_life[growing_crop_mask] += (
+            actual_evapotranspiration_m[growing_crop_mask]
+        )
+        self.HRU.var.potential_evapotranspiration_crop_life[growing_crop_mask] += (
+            potential_evapotranspiration_m[growing_crop_mask]
+        )
+        self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage[
+            crop_sub_stage[growing_crop_mask], growing_crop_mask
+        ] += actual_evapotranspiration_m[growing_crop_mask]
+        self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage[
+            crop_sub_stage[growing_crop_mask], growing_crop_mask
+        ] += potential_evapotranspiration_m[growing_crop_mask]
+        reference_evapotranspiration_water_m = self.hydrology.to_grid(
+            HRU_data=reference_evapotranspiration_water_m.transpose(),
+            fn="weightedmean",
+        )
+        self.model.agents.crop_farmers.save_water_deficit(
+            reference_evapotranspiration_grass_m, pr_kg_per_m2_per_s
+        )
+        self.model.agents.crop_farmers.save_pr(pr_kg_per_m2_per_s)
+        top_soil_frozen_fraction = get_frozen_fraction_from_enthalpy(
+            enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[0, :],
+            solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K[
+                0, :
+            ],
+            water_content_m=self.HRU.var.water_content_m[0, :],
+            topwater_m=self.HRU.var.topwater_m,
+        )
+        top_soil_evaporation_m = bare_soil_evaporation_m + open_water_evaporation_m
+        runoff_m_daily = runoff_m.sum(axis=1)
+        runoff_m = runoff_m.transpose()
+        interflow_m = interflow_m.transpose()
+        pr_total_m3 = np.float64(
+            (
+                pr_kg_per_m2_per_s.astype(np.float64).mean(axis=1)
+                * self.HRU.var.cell_area
+            ).sum()
+            * 0.001
+            * (24 * 3600.0)
+        )
+        self.report(locals())
+        return (
+            reference_evapotranspiration_water_m,
+            interflow_m,
+            runoff_m,
+            groundwater_recharge_m,
+            groundwater_abstraction_m3,
+            channel_abstraction_m3,
+            return_flow_m,
+            total_water_demand_loss_m3,
+            actual_evapotranspiration_m,
+            sublimation_or_deposition_m,
+            pr_total_m3,
         )
 
     def step(

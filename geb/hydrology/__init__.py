@@ -71,6 +71,9 @@ class Hydrology(Data, Module):
         self.water_demand = WaterDemand(self.model, self)
         self.hillslope_erosion = HillSlopeErosion(self.model, self)
         self.runoff_concentrator = RunoffConcentrator(self.model, self)
+        self.grid.var.pending_baseflow_m = self.grid.full_compressed(
+            0.0, dtype=np.float32
+        )
 
     def get_current_storage(self) -> np.float64:
         """Get the current water storage in the hydrological system.
@@ -81,6 +84,13 @@ class Hydrology(Data, Module):
         Returns:
             The total water storage in the hydrological system in cubic meters.
         """
+        if hasattr(self.grid.var, "pending_baseflow_m"):
+            pending_baseflow_storage_m3 = (
+                self.grid.var.pending_baseflow_m.astype(np.float64)
+                * self.grid.var.cell_area
+            ).sum()
+        else:
+            pending_baseflow_storage_m3 = 0.0
         return (
             (
                 (
@@ -108,6 +118,7 @@ class Hydrology(Data, Module):
                 self.grid.var.overland_flow_buffer.astype(np.float64)
                 * self.grid.var.cell_area
             ).sum()
+            + pending_baseflow_storage_m3
         )
 
     def step(self) -> None:
@@ -115,6 +126,9 @@ class Hydrology(Data, Module):
 
         Calculates the water balance and updates all hydrological components.
         """
+        if self.model.config["hydrology"].get("hourly_irrigation_abstraction", False):
+            return self.step_hourly_irrigation()
+
         timer: TimingModule = TimingModule("Hydrology")
 
         if __debug__:
@@ -306,6 +320,153 @@ class Hydrology(Data, Module):
         if self.model.timing:
             self.model.logger.debug(timer)
 
+        self.report(locals())
+
+    def step_hourly_irrigation(self) -> None:
+        """Couple allocation, soil, runoff and routing at hourly resolution.
+
+        Daily demand is calculated once. Each hour uses actual withdrawals as soil
+        input and routes the resulting fluxes before the next allocation. MODFLOW
+        runs once after hour 23; its baseflow is stored for the following day.
+        """
+        timer = TimingModule("Hydrology hourly irrigation")
+        if not hasattr(self.grid.var, "pending_baseflow_m"):
+            self.grid.var.pending_baseflow_m = self.grid.full_compressed(
+                0.0, dtype=np.float32
+            )
+        # The legacy storage helper includes topwater twice; correct this only
+        # for the new hourly balance without changing the original daily path.
+        topwater_storage_m3 = (
+            self.HRU.var.topwater_m.astype(np.float64) * self.HRU.var.cell_area
+        ).sum()
+        prev_storage = self.get_current_storage() - topwater_storage_m3
+        influx = (
+            self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
+        ).sum()
+        self.waterbodies.step()
+        timer.finish_split("Waterbodies")
+
+        root_depth_m = self.landsurface.prepare_day()
+        self.water_demand.prepare_day(root_depth_m)
+        self.routing.prepare_day()
+        old_pending_baseflow_m = self.grid.var.pending_baseflow_m.copy()
+        baseflow_h_m = old_pending_baseflow_m / np.float32(24.0)
+        for hour in range(24):
+            (
+                actual_irrigation_consumption_h_m,
+                channel_abstraction_h_m3,
+                return_flow_h_m,
+            ) = self.water_demand.allocate_hour(
+                hour, self.grid.var.discharge_in_rivers_m3_s_substep
+            )
+            (
+                reference_evapotranspiration_water_h_m,
+                interflow_h_m,
+                overland_runoff_h_m,
+            ) = self.landsurface.step_hour(hour, actual_irrigation_consumption_h_m)
+            total_runoff_h_m = self.runoff_concentrator.step_hour(
+                interflow_h_m=interflow_h_m,
+                baseflow_h_m=baseflow_h_m,
+                runoff_h_m=overland_runoff_h_m,
+            )
+            self.routing.step_hour(
+                hour=hour,
+                total_runoff_h_m=total_runoff_h_m,
+                channel_abstraction_h_m3=channel_abstraction_h_m3,
+                return_flow_h_m=return_flow_h_m,
+                reference_evapotranspiration_water_h_m=reference_evapotranspiration_water_h_m,
+            )
+        timer.finish_split("24 coupled hours")
+
+        water_demand_results = self.water_demand.finish_day()
+        (
+            reference_evapotranspiration_water_m,
+            interflow_m,
+            overland_runoff_m,
+            groundwater_recharge_m,
+            groundwater_abstraction_m3,
+            channel_abstraction_m3,
+            return_flow_m,
+            total_water_demand_loss_m3,
+            actual_evapotranspiration_m,
+            sublimation_or_deposition_m,
+            pr_total_m3,
+        ) = self.landsurface.finish_day(water_demand_results)
+        total_inflow_m3, routing_loss_m3, over_abstraction_m3 = (
+            self.routing.finish_day()
+        )
+        groundwater_recharge_m = self.to_grid(
+            HRU_data=groundwater_recharge_m, fn="weightedmean"
+        )
+        new_baseflow_m = self.groundwater.step(
+            groundwater_recharge_m, groundwater_abstraction_m3
+        )
+        self.grid.var.pending_baseflow_m = new_baseflow_m.copy()
+        if __debug__:
+            routed_pending_m3 = (
+                baseflow_h_m.astype(np.float64) * 24.0 * self.grid.var.cell_area
+            ).sum()
+            balance_check(
+                name="hourly pending baseflow daily ledger",
+                how="sum",
+                influxes=[
+                    (new_baseflow_m.astype(np.float64) * self.grid.var.cell_area).sum()
+                ],
+                outfluxes=[routed_pending_m3],
+                prestorages=[
+                    (
+                        old_pending_baseflow_m.astype(np.float64)
+                        * self.grid.var.cell_area
+                    ).sum()
+                ],
+                poststorages=[
+                    (
+                        self.grid.var.pending_baseflow_m.astype(np.float64)
+                        * self.grid.var.cell_area
+                    ).sum()
+                ],
+                tolerance=max(1.0, self.grid.compressed_size * 1e-3),
+            )
+        timer.finish_split("Daily finalization and MODFLOW")
+
+        if self.model.config["hazards"]["floods"]["simulate"]:
+            self.model.hazard_driver.floods.save_runoff_m(overland_runoff_m)
+            self.model.hazard_driver.floods.save_discharge(
+                discharge_m3_s_per_substep=self.grid.var.discharge_m3_s_per_substep
+            )
+        self.hillslope_erosion.step(overland_runoff_m.sum(axis=0))
+
+        capillar_next_step = (
+            self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
+        ).sum()
+        influx += pr_total_m3 + total_inflow_m3 + over_abstraction_m3
+        outflux_m3 = (
+            (
+                actual_evapotranspiration_m.astype(np.float64) * self.HRU.var.cell_area
+            ).sum()
+            + total_water_demand_loss_m3
+            + routing_loss_m3
+            + capillar_next_step
+        )
+        outflux_m3 -= (
+            sublimation_or_deposition_m.astype(np.float64) * self.HRU.var.cell_area
+        ).sum()
+        topwater_storage_m3 = (
+            self.HRU.var.topwater_m.astype(np.float64) * self.HRU.var.cell_area
+        ).sum()
+        adjusted_current_storage = self.get_current_storage() - topwater_storage_m3
+        current_storage = self.get_current_storage()
+        balance_check(
+            name="hourly irrigation total water balance",
+            how="sum",
+            influxes=[influx],
+            outfluxes=[outflux_m3],
+            prestorages=[prev_storage],
+            poststorages=[adjusted_current_storage],
+            tolerance=self.grid.compressed_size / 3,
+        )
+        if self.model.timing:
+            self.model.logger.debug(timer)
         self.report(locals())
 
     def finalize(self) -> None:

@@ -1408,6 +1408,260 @@ class Routing(Module):
 
         return alpha, beta_array
 
+    def prepare_day(self) -> None:
+        """Initialize daily accumulators for 24 explicitly coupled routing hours."""
+        self._hourly_pre_storage = self.hydrology.waterbodies.var.storage.copy()
+        self._hourly_pre_river_storage_m3 = self.router.get_total_storage(
+            self.grid.var.discharge_in_rivers_m3_s_substep,
+            self.grid.var.river_storage_alpha,
+            self.grid.var.river_storage_beta,
+        )
+        n_cells = self.grid.compressed_size
+        self._hourly_total_runoff_m = np.zeros((24, n_cells), dtype=np.float64)
+        self._hourly_return_flow_m = np.zeros((24, n_cells), dtype=np.float64)
+        self._hourly_reference_et_m = np.zeros((24, n_cells), dtype=np.float64)
+        self._hourly_channel_abstraction_m3 = np.zeros(n_cells, dtype=np.float64)
+        self._hourly_river_evaporation_m3 = np.zeros(n_cells, dtype=np.float64)
+        self._hourly_waterbody_evaporation_m3 = np.zeros(
+            self.hydrology.waterbodies.n, dtype=np.float64
+        )
+        self._hourly_over_abstraction_m3 = np.zeros(n_cells, dtype=np.float64)
+        self._hourly_outflow_at_pits_m3 = np.float64(0)
+        self._hourly_command_area_release_m3 = np.float64(0)
+        self._hourly_total_inflow_m3 = np.float64(0)
+        self.grid.var.discharge_m3_s_per_substep[:] = np.nan
+
+    def step_hour(
+        self,
+        hour: int,
+        total_runoff_h_m: ArrayFloat32,
+        channel_abstraction_h_m3: ArrayFloat64,
+        return_flow_h_m: ArrayFloat32,
+        reference_evapotranspiration_water_h_m: ArrayFloat32,
+    ) -> None:
+        """Route actual lateral flow, abstraction and return flow for one hour.
+
+        Args:
+            hour: Zero-based hour of the current day.
+            total_runoff_h_m: Concentrated lateral inflow per grid cell (m).
+            channel_abstraction_h_m3: Actual channel abstraction per cell (m3).
+            return_flow_h_m: Actual return flow per grid cell (m).
+            reference_evapotranspiration_water_h_m: Open-water reference
+                evapotranspiration per grid cell (m).
+
+        Raises:
+            ValueError: If an external inflow is mapped to a waterbody cell.
+            AssertionError: If routing cannot supply the allocated abstraction.
+        """
+        if not 0 <= hour < 24:
+            raise ValueError("hour must be in the range 0..23")
+        self.inflow_idx += 1
+        if self.model.in_spinup:
+            (
+                self.grid.var.river_width_alpha,
+                self.grid.var.river_width_beta,
+            ) = self.get_river_width_alpha_and_beta(
+                default_alpha=self.config["river_width"]["parameters"]["default_alpha"],
+                beta=self.config["river_width"]["parameters"]["beta"],
+            )
+
+        total_runoff_m3 = total_runoff_h_m * self.grid.var.cell_area
+        return_flow_m3 = return_flow_h_m * self.grid.var.cell_area
+        return_flow_to_waterbodies_m3 = np.bincount(
+            self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+            weights=return_flow_m3[self.grid.var.waterbody_ids != -1],
+            minlength=self.hydrology.waterbodies.n,
+        )
+        return_flow_m3 = return_flow_m3.copy()
+        return_flow_m3[self.grid.var.waterbody_ids != -1] = 0.0
+        self.hydrology.waterbodies.var.storage += np.bincount(
+            self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+            weights=total_runoff_m3[self.grid.var.waterbody_ids != -1],
+            minlength=self.hydrology.waterbodies.n,
+        )
+        total_runoff_m3[self.grid.var.waterbody_ids != -1] = 0.0
+        self.hydrology.waterbodies.var.storage += return_flow_to_waterbodies_m3
+
+        waterbody_mask = self.grid.var.waterbody_ids != -1
+        waterbody_cell_count = np.bincount(
+            self.grid.var.waterbody_ids[waterbody_mask],
+            minlength=self.hydrology.waterbodies.n,
+        )
+        potential_evaporation_per_waterbody_m3 = (
+            np.divide(
+                np.bincount(
+                    self.grid.var.waterbody_ids[waterbody_mask],
+                    weights=reference_evapotranspiration_water_h_m[waterbody_mask],
+                    minlength=self.hydrology.waterbodies.n,
+                ),
+                waterbody_cell_count,
+                out=np.zeros(self.hydrology.waterbodies.n, dtype=np.float64),
+                where=waterbody_cell_count > 0,
+            )
+            * self.hydrology.waterbodies.var.lake_area
+        )
+        actual_waterbody_evaporation_m3 = np.minimum(
+            potential_evaporation_per_waterbody_m3,
+            self.hydrology.waterbodies.var.storage,
+        )
+        self.hydrology.waterbodies.var.storage -= actual_waterbody_evaporation_m3
+        outflow_per_waterbody_m3, command_area_release_m3 = (
+            self.hydrology.waterbodies.substep(
+                current_substep=hour,
+                n_routing_substeps=24,
+                routing_step_length_seconds=3600,
+            )
+        )
+        self.hydrology.waterbodies.var.storage -= command_area_release_m3
+        assert (
+            outflow_per_waterbody_m3
+            <= self.hydrology.waterbodies.var.storage.astype(np.float32) + 1e-4
+        ).all()
+
+        side_flow_channel_m3 = (
+            total_runoff_m3 + return_flow_m3 - channel_abstraction_h_m3
+        )
+        assert (side_flow_channel_m3[waterbody_mask] == 0).all()
+        for (y, x), inflow in self.inflow.items():
+            cell_index = self.grid.linear_mapping[y, x]
+            if self.grid.var.waterbody_ids[cell_index] != -1:
+                raise ValueError("Inflow cannot be added to waterbody cells.")
+            inflow_m3 = inflow[self.inflow_idx] * np.float32(3600)
+            side_flow_channel_m3[cell_index] += inflow_m3
+            self._hourly_total_inflow_m3 += inflow_m3
+
+        river_width = get_river_width(
+            self.grid.var.river_width_alpha,
+            self.grid.var.river_width_beta,
+            self.grid.var.discharge_in_rivers_m3_s_substep,
+        )
+        channel_ratio = get_channel_ratio(
+            river_length=self.grid.var.river_length,
+            river_width=np.where(waterbody_mask, 0, river_width),
+            cell_area=self.grid.var.cell_area,
+        )
+        potential_river_evaporation_m3 = (
+            reference_evapotranspiration_water_h_m
+            * channel_ratio
+            * self.grid.var.cell_area
+        )
+        (
+            self.grid.var.discharge_in_rivers_m3_s_substep,
+            actual_river_evaporation_m3,
+            over_abstraction_m3,
+            self.hydrology.waterbodies.var.storage,
+            waterbody_inflow_m3,
+            outflow_at_pits_m3,
+        ) = self.router.step(
+            Q_prev_m3_s=self.grid.var.discharge_in_rivers_m3_s_substep,
+            sideflow_m3=side_flow_channel_m3.astype(np.float32),
+            evaporation_m3=potential_river_evaporation_m3,
+            waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
+            outflow_per_waterbody_m3=outflow_per_waterbody_m3,
+            river_storage_alpha=self.grid.var.river_storage_alpha,
+            river_storage_beta=self.grid.var.river_storage_beta,
+        )
+        total_over_abstraction_m3 = float(over_abstraction_m3.sum(dtype=np.float64))
+        if total_over_abstraction_m3 > 1e-3:
+            raise AssertionError(
+                f"Routing over-abstraction in hour {hour}: "
+                f"{total_over_abstraction_m3} m3"
+            )
+        self.model.agents.reservoir_operators.track_inflow(
+            waterbody_inflow_m3[self.hydrology.waterbodies.is_reservoir]
+        )
+        discharge_m3_s_substep = self.hydrology.waterbodies.map_to_grid_outflow(
+            outflow_per_waterbody_m3 / 3600,
+            out=self.grid.var.discharge_in_rivers_m3_s_substep.copy(),
+        )
+        discharge_m3_s_substep = fill_discharge_in_waterbodies(
+            discharge_m3_s=discharge_m3_s_substep,
+            upstream_matrix_from_up_to_downstream=self.router.upstream_matrix_from_up_to_downstream,
+            idxs_up_to_downstream=self.router.idxs_up_to_downstream,
+        )
+        assert not np.isnan(discharge_m3_s_substep[self.river_ids != -1]).any()
+        self.grid.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
+        self.var.sum_of_all_discharge_steps += discharge_m3_s_substep
+        self.var.discharge_step_count += 1
+
+        self._hourly_total_runoff_m[hour] = total_runoff_h_m
+        self._hourly_return_flow_m[hour] = return_flow_h_m
+        self._hourly_reference_et_m[hour] = reference_evapotranspiration_water_h_m
+        self._hourly_channel_abstraction_m3 += channel_abstraction_h_m3
+        self._hourly_river_evaporation_m3 += actual_river_evaporation_m3
+        self._hourly_waterbody_evaporation_m3 += actual_waterbody_evaporation_m3
+        self._hourly_over_abstraction_m3 += over_abstraction_m3
+        self._hourly_outflow_at_pits_m3 += outflow_at_pits_m3
+        self._hourly_command_area_release_m3 += command_area_release_m3
+
+    def finish_day(self) -> tuple[np.float64, np.float64, np.float64]:
+        """Close the daily routing balance after 24 hourly calls.
+
+        Returns:
+            External inflow (m3), routing losses including pit outflow (m3), and
+            unsatisfied channel abstraction (m3).
+        """
+        self.grid.var.discharge_m3_s = self.grid.var.discharge_m3_s_per_substep.mean(
+            axis=0
+        )
+        river_storage_m3 = self.router.get_total_storage(
+            self.grid.var.discharge_in_rivers_m3_s_substep,
+            river_storage_alpha=self.grid.var.river_storage_alpha,
+            river_storage_beta=self.grid.var.river_storage_beta,
+        )
+        total_runoff_m = self._hourly_total_runoff_m
+        return_flow = self._hourly_return_flow_m
+        channel_abstraction_m3 = self._hourly_channel_abstraction_m3
+        over_abstraction_m3 = self._hourly_over_abstraction_m3
+        total_inflow_m3 = self._hourly_total_inflow_m3
+        outflow_at_pits_m3 = self._hourly_outflow_at_pits_m3
+        evaporation_in_rivers_m3 = self._hourly_river_evaporation_m3
+        waterbody_evaporation_m3 = self._hourly_waterbody_evaporation_m3
+        command_area_release_m3 = self._hourly_command_area_release_m3
+        balance_check(
+            how="sum",
+            influxes=[
+                total_runoff_m.sum(axis=0) * self.grid.var.cell_area,
+                return_flow.sum(axis=0) * self.grid.var.cell_area,
+                over_abstraction_m3,
+                total_inflow_m3,
+            ],
+            outfluxes=[
+                channel_abstraction_m3,
+                outflow_at_pits_m3,
+                evaporation_in_rivers_m3,
+                waterbody_evaporation_m3,
+                command_area_release_m3,
+            ],
+            prestorages=[
+                self._hourly_pre_storage,
+                self._hourly_pre_river_storage_m3,
+            ],
+            poststorages=[
+                self.hydrology.waterbodies.var.storage,
+                river_storage_m3,
+            ],
+            name="hourly routing daily balance",
+            tolerance=100,
+        )
+        routing_loss = np.float64(
+            evaporation_in_rivers_m3.sum(dtype=np.float64)
+            + waterbody_evaporation_m3.sum(dtype=np.float64)
+            + outflow_at_pits_m3
+        )
+        total_over_abstraction_m3 = np.float64(
+            over_abstraction_m3.sum(dtype=np.float64)
+        )
+        total_evaporation_in_rivers_m3 = np.float64(
+            evaporation_in_rivers_m3.sum(dtype=np.float64)
+        )
+        total_waterbody_evaporation_m3 = np.float64(
+            waterbody_evaporation_m3.sum(dtype=np.float64)
+        )
+        total_outflow_at_pits_m3 = np.float64(outflow_at_pits_m3)
+        self.report(locals())
+        return total_inflow_m3, routing_loss, total_over_abstraction_m3
+
     def step(
         self,
         total_runoff_m: TwoDArrayFloat32,

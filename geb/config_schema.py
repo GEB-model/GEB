@@ -186,6 +186,10 @@ class RoutingConfig(BaseModel):
 class HydrologyConfig(BaseModel):
     """Configuration for hydrology."""
 
+    hourly_irrigation_abstraction: bool = Field(
+        False,
+        description="Fully couple water allocation and hydrological processes hourly.",
+    )
     routing: RoutingConfig = Field(
         default_factory=RoutingConfig, description="Routing configuration."
     )

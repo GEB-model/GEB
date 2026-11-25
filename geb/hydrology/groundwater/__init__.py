@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from geb.geb_types import ArrayFloat32, TwoDArrayFloat64
+from geb.geb_types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.module import Module
 from geb.workflows import balance_check
 
@@ -149,7 +149,7 @@ class GroundWater(Module):
     def step(
         self,
         groundwater_recharge_m: ArrayFloat32,
-        groundwater_abstraction_m3: ArrayFloat32,
+        groundwater_abstraction_m3: ArrayFloat32 | ArrayFloat64,
     ) -> ArrayFloat32:
         """Perform a groundwater model step.
 

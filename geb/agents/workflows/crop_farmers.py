@@ -1036,6 +1036,197 @@ def abstract_water(
 
 
 @njit(cache=True)
+def abstract_water_hour(
+    activation_order: npt.NDArray[np.int32],
+    field_indices_by_farmer: npt.NDArray[np.int32],
+    field_indices: npt.NDArray[np.int32],
+    irrigation_efficiency: npt.NDArray[np.float32],
+    channel_irrigated: npt.NDArray[np.bool_],
+    well_irrigated: npt.NDArray[np.bool_],
+    cell_area: npt.NDArray[np.float32],
+    HRU_to_grid: npt.NDArray[np.int32],
+    nearest_river_grid_cell: npt.NDArray[np.int32],
+    available_channel_storage_m3: npt.NDArray[np.float64],
+    available_groundwater_m3: npt.NDArray[np.float64],
+    groundwater_depth: npt.NDArray[np.float64],
+    available_reservoir_storage_m3: npt.NDArray[np.float64],
+    command_area_by_farmer: npt.NDArray[np.int32],
+    return_fraction: npt.NDArray[np.float32],
+    well_depth: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3_reservoir: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3_channel: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3_groundwater: npt.NDArray[np.float32],
+    remaining_demand_m3: npt.NDArray[np.float64],
+    remaining_reservoir_cap_m3: npt.NDArray[np.float64],
+    remaining_channel_cap_m3: npt.NDArray[np.float64],
+    remaining_groundwater_cap_m3: npt.NDArray[np.float64],
+) -> tuple[
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
+]:
+    """Allocate one hour of irrigation while retaining daily field-level state.
+
+    Reservoir, channel and groundwater are tried in that order. All demand,
+    source-cap and seasonal-limit arrays are modified in place, so later hours
+    cannot reuse water or demand that was already allocated.
+
+    Args:
+        activation_order: Farmer activation order.
+        field_indices_by_farmer: Start and stop indices for each farmer's fields.
+        field_indices: Flat array of field indices ordered by farmer.
+        irrigation_efficiency: Net-to-gross irrigation efficiency per farmer.
+        channel_irrigated: Whether each farmer can use channel water.
+        well_irrigated: Whether each farmer can use groundwater.
+        cell_area: Area of each HRU (m2).
+        HRU_to_grid: Map from each HRU to its groundwater grid cell.
+        nearest_river_grid_cell: Map from each HRU to its abstraction river cell.
+        available_channel_storage_m3: Shared channel budget after non-farm use (m3).
+        available_groundwater_m3: Current groundwater availability per cell (m3).
+        groundwater_depth: Groundwater depth per grid cell (m).
+        available_reservoir_storage_m3: Current availability per reservoir (m3).
+        command_area_by_farmer: Reservoir command area per farmer, or -1.
+        return_fraction: Fraction of irrigation losses returned to channels.
+        well_depth: Well depth per farmer (m).
+        remaining_irrigation_limit_m3_reservoir: Seasonal reservoir limits (m3).
+        remaining_irrigation_limit_m3_channel: Seasonal channel limits (m3).
+        remaining_irrigation_limit_m3_groundwater: Seasonal groundwater limits (m3).
+        remaining_demand_m3: Unmet gross daily demand per field (m3).
+        remaining_reservoir_cap_m3: Unused daily reservoir cap per field (m3).
+        remaining_channel_cap_m3: Unused daily channel cap per field (m3).
+        remaining_groundwater_cap_m3: Unused daily groundwater cap per field (m3).
+
+    Returns:
+        Hourly per-farmer channel, reservoir and groundwater withdrawals (m3);
+        per-field gross, net, return and evaporative-loss depths (m); per-reservoir
+        and per-grid groundwater withdrawals (m3); and per-grid channel withdrawals
+        (m3).
+    """
+    n_fields = cell_area.size
+    n_farmers = activation_order.size
+    water_withdrawal_m = np.zeros(n_fields, dtype=np.float32)
+    water_consumption_m = np.zeros(n_fields, dtype=np.float32)
+    irrigation_return_flow_m = np.zeros(n_fields, dtype=np.float32)
+    irrigation_evaporation_m = np.zeros(n_fields, dtype=np.float32)
+    channel_abstraction_m3_by_farmer = np.zeros(n_farmers, dtype=np.float64)
+    reservoir_abstraction_m3_by_farmer = np.zeros(n_farmers, dtype=np.float64)
+    groundwater_abstraction_m3_by_farmer = np.zeros(n_farmers, dtype=np.float64)
+    channel_abstraction_m3_by_grid = np.zeros_like(available_channel_storage_m3)
+    reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
+    groundwater_abstraction_m3 = np.zeros_like(available_groundwater_m3)
+
+    for farmer in activation_order:
+        farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
+        command_area = command_area_by_farmer[farmer]
+        for field in farmer_fields:
+            demand_m3 = remaining_demand_m3[field]
+            if demand_m3 <= 0:
+                continue
+
+            grid_cell = HRU_to_grid[field]
+            river_cell = nearest_river_grid_cell[field]
+            demand_m = demand_m3 / cell_area[field]
+
+            if command_area != -1:
+                reservoir_before_m3 = reservoir_abstraction_m3[command_area]
+                demand_m = withdraw_reservoir(
+                    command_area=command_area,
+                    field=field,
+                    farmer=farmer,
+                    reservoir_abstraction_m3=reservoir_abstraction_m3,
+                    available_reservoir_storage_m3=available_reservoir_storage_m3,
+                    irrigation_water_demand_field_m=demand_m,
+                    water_withdrawal_m=water_withdrawal_m,
+                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_reservoir,
+                    reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+                    maximum_abstraction_reservoir_m3_field=remaining_reservoir_cap_m3[
+                        field
+                    ],
+                    cell_area=cell_area,
+                )
+                take_m3 = reservoir_abstraction_m3[command_area] - reservoir_before_m3
+                remaining_reservoir_cap_m3[field] = max(
+                    remaining_reservoir_cap_m3[field] - take_m3, 0
+                )
+
+            if channel_irrigated[farmer]:
+                channel_before_m3 = available_channel_storage_m3[river_cell]
+                demand_m = withdraw_channel(
+                    available_channel_storage_m3=available_channel_storage_m3,
+                    grid_cell=river_cell,
+                    cell_area=cell_area,
+                    field=field,
+                    farmer=farmer,
+                    water_withdrawal_m=water_withdrawal_m,
+                    irrigation_water_demand_field_m=demand_m,
+                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_channel,
+                    channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+                    maximum_abstraction_channel_m3_field=remaining_channel_cap_m3[
+                        field
+                    ],
+                    minimum_channel_storage_m3=100.0,
+                )
+                take_m3 = channel_before_m3 - available_channel_storage_m3[river_cell]
+                remaining_channel_cap_m3[field] = max(
+                    remaining_channel_cap_m3[field] - take_m3, 0
+                )
+                channel_abstraction_m3_by_grid[river_cell] += take_m3
+
+            if well_irrigated[farmer]:
+                groundwater_before_m3 = groundwater_abstraction_m3[grid_cell]
+                demand_m = withdraw_groundwater(
+                    farmer=farmer,
+                    grid_cell=grid_cell,
+                    field=field,
+                    groundwater_abstraction_m3=groundwater_abstraction_m3,
+                    available_groundwater_m3=available_groundwater_m3,
+                    cell_area=cell_area,
+                    groundwater_depth=groundwater_depth,
+                    well_depth=well_depth,
+                    irrigation_water_demand_field_m=demand_m,
+                    water_withdrawal_m=water_withdrawal_m,
+                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_groundwater,
+                    groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
+                    maximum_abstraction_groundwater_m3_field=remaining_groundwater_cap_m3[
+                        field
+                    ],
+                )
+                take_m3 = groundwater_abstraction_m3[grid_cell] - groundwater_before_m3
+                remaining_groundwater_cap_m3[field] = max(
+                    remaining_groundwater_cap_m3[field] - take_m3, 0
+                )
+
+            remaining_demand_m3[field] = max(demand_m * cell_area[field], 0)
+            gross_m = water_withdrawal_m[field]
+            net_m = gross_m * irrigation_efficiency[farmer]
+            loss_m = gross_m - net_m
+            return_m = loss_m * return_fraction[farmer]
+            water_consumption_m[field] = net_m
+            irrigation_return_flow_m[field] = return_m
+            irrigation_evaporation_m[field] = loss_m - return_m
+
+    return (
+        channel_abstraction_m3_by_farmer,
+        reservoir_abstraction_m3_by_farmer,
+        groundwater_abstraction_m3_by_farmer,
+        water_withdrawal_m,
+        water_consumption_m,
+        irrigation_return_flow_m,
+        irrigation_evaporation_m,
+        reservoir_abstraction_m3,
+        groundwater_abstraction_m3,
+        channel_abstraction_m3_by_grid,
+    )
+
+
+@njit(cache=True)
 def plant(
     n: int,
     day_index: int,

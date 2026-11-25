@@ -57,6 +57,9 @@ hazards:
     simulate: false
 
 hydrology:
+  # Fully couple hourly water allocation, land surface, runoff and river routing.
+  # Disabled by default to preserve the original daily simulation path.
+  hourly_irrigation_abstraction: false
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
     river_width:
