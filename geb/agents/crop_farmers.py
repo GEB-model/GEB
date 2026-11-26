@@ -1897,7 +1897,7 @@ class CropFarmers(AgentBaseClass):
         groundwater_depth: npt.NDArray[np.float64],
         available_reservoir_storage_m3: npt.NDArray[np.float64],
     ) -> tuple[
-        npt.NDArray[np.float32],
+        npt.NDArray[np.float64],
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
@@ -2029,8 +2029,16 @@ class CropFarmers(AgentBaseClass):
                 - self._hourly_remaining_demand_m3
             )
             if not np.allclose(residual_m3, 0.0, rtol=1e-5, atol=1e-3):
+                worst_field = int(np.argmax(np.abs(residual_m3)))
                 raise AssertionError(
-                    "Daily field-level irrigation demand is not conserved"
+                    "Daily field-level irrigation demand is not conserved: "
+                    f"fields={np.count_nonzero(np.abs(residual_m3) > 1e-3)}, "
+                    f"worst_field={worst_field}, "
+                    f"residual_m3={residual_m3[worst_field]:.9g}, "
+                    f"initial_m3={self._hourly_initial_demand_m3[worst_field]:.9g}, "
+                    f"withdrawn_m3={self._hourly_gross_by_field[worst_field]:.9g}, "
+                    f"remaining_m3={self._hourly_remaining_demand_m3[worst_field]:.9g}, "
+                    f"area_m2={self.HRU.var.cell_area[worst_field]:.9g}"
                 )
             balance_check(
                 name="hourly daily water withdrawal source-to-field",

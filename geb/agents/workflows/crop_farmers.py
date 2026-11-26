@@ -1064,7 +1064,7 @@ def abstract_water_hour(
     npt.NDArray[np.float64],
     npt.NDArray[np.float64],
     npt.NDArray[np.float64],
-    npt.NDArray[np.float32],
+    npt.NDArray[np.float64],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
@@ -1111,7 +1111,8 @@ def abstract_water_hour(
     """
     n_fields = cell_area.size
     n_farmers = activation_order.size
-    water_withdrawal_m = np.zeros(n_fields, dtype=np.float32)
+    # Keep the source-to-field ledger in float64 across hourly withdrawals.
+    water_withdrawal_m = np.zeros(n_fields, dtype=np.float64)
     water_consumption_m = np.zeros(n_fields, dtype=np.float32)
     irrigation_return_flow_m = np.zeros(n_fields, dtype=np.float32)
     irrigation_evaporation_m = np.zeros(n_fields, dtype=np.float32)
