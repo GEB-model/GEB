@@ -29,6 +29,9 @@
 - Fixed GeoDataFrame type preservation when assigning SFINCS discharge-point names.
 - Added option to start SFINCS simulations with rivers filled using the stored burned-channel depth, improving the initial water levels.
 - Added `cmip6_model` option to `setup_forcing` (default `gfdl_esm4`) and made it consistently available through the forcing build methods. CMIP6 cache files are now stored per model (`cmip6_combined_deltas_{model}.zarr`); previously cached CMIP6 files are no longer used and can be deleted.
+- Added the optional `hazards.floods.representative_year` setting for sea-level-rise forcing in return-period maps; `null` uses the current model year.
+- Added a `--build-only` flag to `geb exec` (e.g., `geb exec estimate_return_periods --build-only`) to only build the SFINCS models for the return-period flood maps without running the simulations.
+- Reduced memory use when merging the flood maps of multiple SFINCS simulations into one return-period map. Maps are now read one at a time and spilled to temporary files next to the simulations, then merged into a single pre-allocated array, so peak memory is roughly the size of the final map instead of several times the size of all maps combined. This requires temporary disk space equal to the combined size of the individual maps.
 
 # v1.0.0b37
 - Estimate river channel geometry directly using the local inertial solver rather than relying on empirical power laws.

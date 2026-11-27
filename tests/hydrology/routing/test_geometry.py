@@ -1021,7 +1021,9 @@ def test_unrepresented_river_geometry_confluence() -> None:
     )
 
     # Reach 30 must have combined bankfull discharge Q = 50 + 100 = 150 m3/s
-    q30: float = float(routing.var.rivers.loc[30, "return_period_2_years_daily_m3_per_s"])
+    q30: float = float(
+        routing.var.rivers.loc[30, "return_period_2_years_daily_m3_per_s"]
+    )
     assert np.isclose(q30, 150.0)
 
     # Discharge-weighted alpha: (50 * 7.0 + 100 * 7.4) / 150 = 7.2667
@@ -1254,7 +1256,9 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
     assert not np.isnan(float(routing.var.rivers.loc[10, "width"]))
     assert np.isnan(float(routing.var.rivers.loc[99, "width"]))
     assert np.isnan(float(routing.var.rivers.loc[99, "depth"]))
-    assert np.isnan(float(routing.var.rivers.loc[99, "return_period_2_years_daily_m3_per_s"]))
+    assert np.isnan(
+        float(routing.var.rivers.loc[99, "return_period_2_years_daily_m3_per_s"])
+    )
 
 
 def test_unrepresented_river_confluence_with_isolated_headwater() -> None:

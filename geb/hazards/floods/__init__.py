@@ -1,5 +1,7 @@
 """Class to setup, run, and post-process the SFINCS hydrodynamic model."""
 
+import gc
+import tempfile
 from collections import deque
 from copy import deepcopy
 from datetime import timedelta
@@ -19,7 +21,11 @@ from geb.geb_types import (
     TwoDArrayFloat32,
 )
 from geb.hazards.event import Event
-from geb.hazards.floods.workflows.utils import get_start_point
+from geb.hazards.floods.workflows.utils import (
+    SpilledRaster,
+    get_start_point,
+    merge_spilled_rasters_max,
+)
 from geb.hydrology.routing import (
     get_discharge_per_river,
 )
@@ -36,7 +42,6 @@ from ...workflows.io import (
 from ...workflows.raster import reclassify
 from ...workflows.roughness import get_land_cover_mannings_roughness_table
 from .sfincs import (
-    MultipleSFINCSSimulations,
     SFINCSRootModel,
     SFINCSSimulation,
 )
@@ -215,6 +220,22 @@ class Floods(Module):
         Currently, this method does nothing as flood simulations are handled in the HazardDriver.
         """
         pass
+
+    def get_simulations_root(self, sfincs_root_model: SFINCSRootModel) -> Path:
+        """Gets the folder in which simulations of a root model are stored.
+
+        Simulations are always stored in the simulation root of the current model, also
+        when the root model itself is read from `base_model_path`.
+
+        Args:
+            sfincs_root_model: The root model for which simulations are created.
+
+        Returns:
+            Path to the folder that will contain the simulation folders.
+        """
+        folder: Path = self.simulation_root / sfincs_root_model.name / "simulations"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
 
     def get_utm_zone(self, region_file: Path | str) -> str:
         """Determine the UTM zone based on the centroid of the region geometry.
@@ -642,14 +663,15 @@ class Floods(Module):
                     flood_depth=flood_depth
                 )
 
-    def get_return_period_maps(self, run_name: str) -> None:
+    def get_return_period_maps(
+        self, run_name: str, overwrite_flood_maps: bool = False
+    ) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
 
         Args:
             run_name: The name of the run to use for estimating return periods (e.g., "spinup").
+            overwrite_flood_maps: Whether to overwrite existing flood maps for the specified return periods. Defaults to False.
 
-        Raises:
-            ValueError: If no hydrograph is found for a node and return period.
         """
         # load model settings
         coastal_only = self.config["coastal_only"]
@@ -739,67 +761,119 @@ class Floods(Module):
                     subbasins.intersects(low_elevation_coastal_zone_mask.union_all())
                 ].copy()
 
-        sfincs_inland_root_models: list[SFINCSRootModel] = []
+        return_periods_to_simulate: list[int] = []
+        for return_period in self.config["return_periods"]:
+            flood_map_path: Path = (
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+            )
+            if not overwrite_flood_maps and flood_map_path.exists():
+                self.model.logger.info(
+                    f"Flood map for return period {return_period} already exists at {flood_map_path}. Skipping."
+                )
+                continue
+            return_periods_to_simulate.append(return_period)
 
-        # for each subbasin, build a separate sfincs model with its downstream basin
-        # when there is no downstream basin (ocean), only build for the subbasin itself
+        representative_year = self.config["representative_year"]
+        if representative_year is None:
+            representative_year = self.model.current_time.year
 
-        # Subset subbasins to only subbasins that are either represented in the grid,
-        # or have upstream rivers that are.
-        riverine_active_subbasin: gpd.GeoDataFrame = subbasins[
-            subbasins.index.isin(self.model.hydrology.routing.get_active_rivers().index)
-        ]
+        # SFINCS root models are processed one at a time: each model is built (or read),
+        # all return periods are simulated, and the resulting maximum flood depth maps
+        # are spilled to disk before the model is released from memory. The spilled
+        # maps are merged per return period at the end. This keeps memory use
+        # independent of the number of subbasins.
+        with tempfile.TemporaryDirectory(
+            dir=self.simulation_root, prefix="return_period_flood_depth_"
+        ) as tmp_dir:
+            tile_dir: Path = Path(tmp_dir)
+            tiles_by_return_period: dict[int, list[SpilledRaster]] = {
+                return_period: [] for return_period in return_periods_to_simulate
+            }
 
-        for subbasin_id, subbasin in riverine_active_subbasin.iterrows():
-            downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
+            if coastal:
+                for return_period in return_periods_to_simulate:
+                    sfincs_coastal_simulation: SFINCSSimulation = sfincs_coastal_root_model.create_coastal_return_period_simulation(
+                        self.model.output_folder,
+                        return_period,
+                        coastal_forcing_locations,
+                        offset=coastal_offset,
+                        sea_level_rise=sea_level_rise,
+                        year=representative_year,
+                        simulation_root=self.get_simulations_root(
+                            sfincs_coastal_root_model
+                        ),
+                    )
+                    self._run_and_spill_max_flood_depth(
+                        sfincs_coastal_simulation,
+                        tile_dir
+                        / f"{sfincs_coastal_root_model.name}_rp{return_period}.npy",
+                        tiles_by_return_period[return_period],
+                    )
+                    del sfincs_coastal_simulation
+                sfincs_coastal_root_model.close()
+                del sfincs_coastal_root_model
 
-            if not (downstream_basin in subbasins.index or downstream_basin == -1):
-                all_subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
-                region_subbasins = all_subbasins[
-                    all_subbasins.index.isin([subbasin_id, downstream_basin])
-                ].copy()
-            else:
-                region_subbasins = subbasins[
-                    subbasins.index.isin([subbasin_id, downstream_basin])
-                ].copy()
+            # for each subbasin, build a separate sfincs model with its downstream basin
+            # when there is no downstream basin (ocean), only build for the subbasin itself
 
-            region_rivers = rivers.copy()
+            # Subset subbasins to only subbasins that are either represented in the grid,
+            # or have upstream rivers that are.
+            riverine_active_subbasin: gpd.GeoDataFrame = subbasins[
+                subbasins.index.isin(
+                    self.model.hydrology.routing.get_active_rivers().index
+                )
+            ]
 
-            # if there is a downstream basin, mark it as downstream outflow subbasin
-            if downstream_basin != -1:
+            # Location (root, name) of the first inland root model, used for figures.
+            figure_root_model_location: tuple[Path, str] | None = None
+            discharge_for_return_periods: pd.DataFrame | None = None
+
+            for subbasin_id, subbasin in riverine_active_subbasin.iterrows():
+                downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
+                assert downstream_basin != None
+                if not (downstream_basin in subbasins.index or downstream_basin == -1):
+                    all_subbasins = read_geom(
+                        self.model.files["geom"]["routing/subbasins"]
+                    )
+                    region_subbasins = all_subbasins[
+                        all_subbasins.index.isin([subbasin_id, downstream_basin])
+                    ].copy()
+                    if not downstream_basin in all_subbasins.index:
+                        downstream_basin = (
+                            -1
+                        )  # set to -1 if downstream basin is not in the subbasins file
+                        self.model.logger.warning(
+                            f"Downstream basin {downstream_basin} for subbasin {subbasin_id} is not in the subbasins file. Setting downstream basin to -1 (assuming coastal outflow). This may lead to incorrect results if the downstream basin is actually a river basin."
+                        )
+                else:
+                    region_subbasins = subbasins[
+                        subbasins.index.isin([subbasin_id, downstream_basin])
+                    ].copy()
+
+                # if there is no downstream basin, no inland model is built
+                if downstream_basin == -1:
+                    continue
+
+                region_rivers = rivers.copy()
+
+                # mark the downstream basin as downstream outflow subbasin
                 region_subbasins.at[downstream_basin, "is_downstream_outflow"] = True
                 region_rivers.at[downstream_basin, "is_downstream_outflow"] = True
 
-                sfincs_inland_root_model = self.build(
+                sfincs_inland_root_model: SFINCSRootModel = self.build(
                     name=f"inland_subbasin_{subbasin_id}",
                     subbasins=region_subbasins,
                     all_rivers=region_rivers,
                     coastal=False,
                 )
-                spinup_name = self.model.config["spinup_name"]
-                output_root = self.model.report_folder.parent.parent
-                spinup_folder = (
-                    output_root / spinup_name / "report" / "hydrology.routing"
-                )
-                run_folder = output_root / run_name / "report" / "hydrology.routing"
-                spinup_available = spinup_folder.exists()
-                run_available = run_folder.exists() and run_name != spinup_name
+                del region_rivers, region_subbasins
 
-                if spinup_available and run_available:
+                if discharge_for_return_periods is None:
                     discharge_for_return_periods = (
-                        self.discharge_by_river_spinup_and_run(run_name)
+                        self._load_discharge_for_return_periods(run_name)
                     )
-                elif spinup_available:
-                    print(
-                        "Only spinup discharge available; using spinup discharge for return period estimation."
-                    )
-                    discharge_for_return_periods = self.discharge_by_river(spinup_name)
-                else:
-                    print(
-                        f"Only {run_name!r} run discharge available; using run discharge for return period estimation."
-                    )
-                    discharge_for_return_periods = self.discharge_by_river(run_name)
 
+                _shape_config = self.config.get("hydrograph_shape", {})
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
                     discharge_by_river=discharge_for_return_periods,
                     return_periods=self.config["return_periods"],
@@ -811,191 +885,309 @@ class Floods(Module):
                     shape_window_days=self.config["hydrograph_shape"]["window_days"],
                     shape_tolerance=self.config["hydrograph_shape"]["tolerance"],
                 )
-                sfincs_inland_root_models.append(sfincs_inland_root_model)
 
-        for return_period in self.config["return_periods"]:
-            simulations: list[SFINCSSimulation] = []
-
-            if coastal:
-                sfincs_coastal_simulation: SFINCSSimulation = (
-                    sfincs_coastal_root_model.create_coastal_return_period_simulation(
-                        self.model.output_folder,
-                        return_period,
-                        coastal_forcing_locations,
-                        offset=coastal_offset,
-                        sea_level_rise=sea_level_rise,
-                        year=self.model.current_time.year,
+                if figure_root_model_location is None:
+                    figure_root_model_location = (
+                        sfincs_inland_root_model.root,
+                        sfincs_inland_root_model.name,
                     )
-                )
-                simulations.append(sfincs_coastal_simulation)
 
-            for sfincs_inland_root_model in sfincs_inland_root_models:
-                inflow_nodes = sfincs_inland_root_model.active_rivers
-                inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
-                    get_start_point
-                )
+                if return_periods_to_simulate:
+                    inflow_nodes: gpd.GeoDataFrame = (
+                        sfincs_inland_root_model.active_rivers.copy()
+                    )
+                    inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
+                        get_start_point
+                    )
 
-                # Build list of hydrograph DataFrames using the original node indices as column names
-                Q: list[pd.Series] = []
-                for node_idx, row in inflow_nodes[
-                    ~inflow_nodes["is_downstream_outflow"]
-                ].iterrows():
-                    hydro = row[f"hydrograph_{return_period}"]
-                    if hydro is None:
-                        raise ValueError(
-                            f"No hydrograph found for node {node_idx} and return period {return_period}."
+                    for return_period in return_periods_to_simulate:
+                        sfincs_inland_simulation: SFINCSSimulation = self._create_inland_return_period_simulation(
+                            sfincs_inland_root_model=sfincs_inland_root_model,
+                            return_period=return_period,
+                            inflow_nodes=inflow_nodes,
+                            rivers=rivers,
+                            discharge_for_return_periods=discharge_for_return_periods,
                         )
-                    # hydro is expected to be dict-like {iso_timestamp: Q} — convert to DataFrame with column named node_idx
-                    Q.append(pd.Series(hydro, name=node_idx))
-
-                for node_idx in inflow_nodes[
-                    inflow_nodes["is_downstream_outflow"]
-                ].index:
-                    upstream_rivers = rivers[
-                        (rivers["downstream_ID"] == node_idx)
-                        & (~rivers.index.isin(inflow_nodes.index))
-                    ]
-                    _Q = []
-                    for river_idx in upstream_rivers.index:
-                        if river_idx in discharge_for_return_periods:
-                            _Q.append(discharge_for_return_periods[river_idx])
-                        else:
-                            self.model.logger.warning(
-                                f"No hydrograph found for upstream river {river_idx} and return period {return_period}. Setting inflow to 0."
-                            )
-                            _Q.append(
-                                pd.Series(
-                                    [0] * len(Q[0]), index=Q[0].index, name=node_idx
-                                )
-                            )  # fill with zeros if no hydrograph is found
-
-                    Q.append(
-                        pd.Series(
-                            pd.concat(_Q, axis=1).mean(axis=0).sum(axis=0)
-                            if _Q
-                            else 0.0,
-                            index=Q[0].index,
-                            name=node_idx,
+                        self._run_and_spill_max_flood_depth(
+                            sfincs_inland_simulation,
+                            tile_dir
+                            / f"{sfincs_inland_root_model.name}_rp{return_period}.npy",
+                            tiles_by_return_period[return_period],
                         )
+                        del sfincs_inland_simulation
+                    del inflow_nodes
+
+                # release the root model (including its grid and subgrid data) before
+                # moving on to the next subbasin
+                sfincs_inland_root_model.close()
+                del sfincs_inland_root_model
+                gc.collect()
+
+            for return_period in return_periods_to_simulate:
+                self._write_return_period_map(
+                    return_period=return_period,
+                    tiles=tiles_by_return_period.pop(return_period),
+                    subbasins=subbasins,
+                    coastal_boundary_exclude_mask=coastal_boundary_exclude_mask
+                    if coastal
+                    else None,
+                    figure_root_model_location=figure_root_model_location,
+                )
+
+    def _load_discharge_for_return_periods(self, run_name: str) -> pd.DataFrame:
+        """Loads the discharge used to estimate the return period hydrographs.
+
+        Uses both the spinup and run discharge when available, otherwise only one of them.
+
+        Args:
+            run_name: The name of the run to use for estimating return periods.
+
+        Returns:
+            DataFrame with the discharge per river.
+        """
+        spinup_name = self.model.config["spinup_name"]
+        output_root = self.model.report_folder.parent.parent
+        spinup_folder = output_root / spinup_name / "report" / "hydrology.routing"
+        run_folder = output_root / run_name / "report" / "hydrology.routing"
+        spinup_available = spinup_folder.exists()
+        run_available = run_folder.exists() and run_name != spinup_name
+
+        if spinup_available and run_available:
+            return self.discharge_by_river_spinup_and_run(run_name)
+        elif spinup_available:
+            print(
+                "Only spinup discharge available; using spinup discharge for return period estimation."
+            )
+            return self.discharge_by_river(spinup_name)
+        else:
+            print(
+                f"Only {run_name!r} run discharge available; using run discharge for return period estimation."
+            )
+            return self.discharge_by_river(run_name)
+
+    def _create_inland_return_period_simulation(
+        self,
+        sfincs_inland_root_model: SFINCSRootModel,
+        return_period: int,
+        inflow_nodes: gpd.GeoDataFrame,
+        rivers: gpd.GeoDataFrame,
+        discharge_for_return_periods: pd.DataFrame,
+    ) -> SFINCSSimulation:
+        """Creates an inland SFINCS simulation forced with the hydrographs of a return period.
+
+        Args:
+            sfincs_inland_root_model: The inland root model, with estimated hydrographs.
+            return_period: The return period to simulate.
+            inflow_nodes: The active rivers of the root model, with the start point
+                of each river as geometry.
+            rivers: All rivers in the model domain.
+            discharge_for_return_periods: Discharge per river, used to set a constant
+                inflow for downstream outflow nodes.
+
+        Returns:
+            The SFINCS simulation with discharge forcing set.
+
+        Raises:
+            ValueError: If no hydrograph is found for a node and return period.
+        """
+        # Build list of hydrograph DataFrames using the original node indices as column names
+        Q: list[pd.Series] = []
+        for node_idx, row in inflow_nodes[
+            ~inflow_nodes["is_downstream_outflow"]
+        ].iterrows():
+            hydro = row[f"hydrograph_{return_period}"]
+            if hydro is None:
+                raise ValueError(
+                    f"No hydrograph found for node {node_idx} and return period {return_period}."
+                )
+            # hydro is expected to be dict-like {iso_timestamp: Q} — convert to DataFrame with column named node_idx
+            Q.append(pd.Series(hydro, name=node_idx))
+
+        for node_idx in inflow_nodes[inflow_nodes["is_downstream_outflow"]].index:
+            upstream_rivers = rivers[
+                (rivers["downstream_ID"] == node_idx)
+                & (~rivers.index.isin(inflow_nodes.index))
+            ]
+            _Q = []
+            for river_idx in upstream_rivers.index:
+                if river_idx in discharge_for_return_periods:
+                    _Q.append(discharge_for_return_periods[river_idx])
+                else:
+                    self.model.logger.warning(
+                        f"No hydrograph found for upstream river {river_idx} and return period {return_period}. Setting inflow to 0."
                     )
+                    _Q.append(
+                        pd.Series([0] * len(Q[0]), index=Q[0].index, name=node_idx)
+                    )  # fill with zeros if no hydrograph is found
 
-                # Concatenate the per-node series into a single DataFrame; index -> timestamps
-                Q: pd.DataFrame = pd.concat(Q, axis=1)
-                Q.index = pd.to_datetime(Q.index)
-
-                event = Event(
-                    kind="flood",
-                    name=f"rp_{return_period}",
-                    start_time=Q.index[0].to_pydatetime(),
-                    end_time=Q.index[-1].to_pydatetime(),
-                    create_max_intensity_map=True,
+            Q.append(
+                pd.Series(
+                    pd.concat(_Q, axis=1).mean(axis=0).sum(axis=0) if _Q else 0.0,
+                    index=Q[0].index,
+                    name=node_idx,
                 )
-
-                sfincs_inland_simulation: SFINCSSimulation = (
-                    sfincs_inland_root_model.create_simulation(
-                        event=event,
-                    )
-                )
-
-                sfincs_inland_simulation.set_discharge_forcing_from_nodes(
-                    nodes=inflow_nodes.to_crs(sfincs_inland_root_model.crs),
-                    timeseries=Q,
-                )
-                sfincs_inland_simulation.inflow_was_set = True
-
-                simulations.append(sfincs_inland_simulation)
-
-            simulation = MultipleSFINCSSimulations(simulations=simulations)
-            if simulations:
-                simulation.run(
-                    gpu=self.config["SFINCS"]["gpu"],
-                )
-                flood_depth_return_period: xr.DataArray = (
-                    simulation.read_max_flood_depth(self.config["minimum_flood_depth"])
-                )
-            else:
-                self.model.logger.warning(
-                    "No rivers found that are represented in grid and/or are not fully inside waterbodies. Creating dummy empty flood map."
-                )
-                dummy_sfincs_model = SFINCSRootModel(
-                    self.simulation_root, "dummy", logger=self.model.logger
-                )
-                dummy_mask = dummy_sfincs_model.create_mask(
-                    self.DEM_config,
-                    subbasins[~subbasins["is_downstream_outflow"]],
-                    self.config["grid_size_multiplier"],
-                )
-
-                flood_depth_return_period = dummy_mask.astype(np.float32)
-                flood_depth_return_period[:] = 0
-                flood_depth_return_period.attrs["_FillValue"] = np.nan
-
-            # mask floodplain with land polygons to remove inundation in the sea
-            if coastal and coastal_boundary_exclude_mask is not None:
-                flood_depth_return_period = flood_depth_return_period.rio.clip(
-                    coastal_boundary_exclude_mask.geometry,
-                    coastal_boundary_exclude_mask.crs,
-                    invert=False,
-                )
-
-            write_zarr(
-                flood_depth_return_period,
-                self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
-                crs=flood_depth_return_period.rio.crs,
             )
 
-            if sfincs_inland_root_models and self.config["write_figures"]:
-                depth_colors = [
-                    "#87CEFA",
-                    "#00BFFF",
-                    "#1E90FF",
-                    "#0000FF",
-                    "#FFD700",
-                    "#FF8C00",
-                    "#FF0000",
-                    "#8B0000",
-                ]
-                flood_cmap = LinearSegmentedColormap.from_list(
-                    "flood_depth", depth_colors
-                )
+        # Concatenate the per-node series into a single DataFrame; index -> timestamps
+        Q_df: pd.DataFrame = pd.concat(Q, axis=1)
+        Q_df.index = pd.to_datetime(Q_df.index)
 
-                fig, ax = sfincs_inland_root_models[0].sfincs_model.plot_basemap(
+        event = Event(
+            kind="flood",
+            name=f"rp_{return_period}",
+            start_time=Q_df.index[0].to_pydatetime(),
+            end_time=Q_df.index[-1].to_pydatetime(),
+            create_max_intensity_map=True,
+        )
+
+        sfincs_inland_simulation: SFINCSSimulation = (
+            sfincs_inland_root_model.create_simulation(
+                event=event,
+            )
+        )
+
+        sfincs_inland_simulation.set_discharge_forcing_from_nodes(
+            nodes=inflow_nodes.to_crs(sfincs_inland_root_model.crs),
+            timeseries=Q_df,
+        )
+        sfincs_inland_simulation.inflow_was_set = True
+        return sfincs_inland_simulation
+
+    def _run_and_spill_max_flood_depth(
+        self,
+        simulation: SFINCSSimulation,
+        tile_path: Path,
+        tiles: list[SpilledRaster],
+    ) -> None:
+        """Runs a simulation, spills its maximum flood depth to disk and releases it.
+
+        Args:
+            simulation: The SFINCS simulation to run.
+            tile_path: Path of the .npy file to spill the maximum flood depth to.
+            tiles: List to which the spilled maximum flood depth is appended.
+        """
+        simulation.run(gpu=self.config.get("SFINCS", {}).get("gpu", "auto"))
+        max_flood_depth: xr.DataArray = simulation.read_max_flood_depth(
+            self.config["minimum_flood_depth"]
+        )
+        tiles.append(SpilledRaster.spill(max_flood_depth, tile_path))
+        # DataArrays with a cached .rio accessor form a reference cycle, so
+        # they are only freed by the cyclic garbage collector.
+        del max_flood_depth
+        simulation.sfincs_root_model.close()
+        gc.collect()
+
+    def _write_return_period_map(
+        self,
+        return_period: int,
+        tiles: list[SpilledRaster],
+        subbasins: gpd.GeoDataFrame,
+        coastal_boundary_exclude_mask: gpd.GeoDataFrame | None,
+        figure_root_model_location: tuple[Path, str] | None,
+    ) -> None:
+        """Merges the spilled flood depth maps of a return period and writes the result.
+
+        Args:
+            return_period: The return period of the flood maps.
+            tiles: The spilled maximum flood depth maps of all simulations for this return period.
+            subbasins: The subbasins of the model domain, used to create an empty map
+                when there are no simulations.
+            coastal_boundary_exclude_mask: Land polygons used to remove inundation in the sea.
+                None if there is no coastal model.
+            figure_root_model_location: Root folder and name of the SFINCS root model used
+                as basemap for the figures. None if there are no inland models.
+        """
+        if len(tiles) == 1:
+            flood_depth_return_period: xr.DataArray = tiles[0].to_dataarray()
+        elif tiles:
+            flood_depth_return_period = merge_spilled_rasters_max(tiles)
+        else:
+            self.model.logger.warning(
+                "No rivers found that are represented in grid and/or are not fully inside waterbodies. Creating dummy empty flood map."
+            )
+            dummy_sfincs_model = SFINCSRootModel(
+                self.simulation_root, "dummy", logger=self.model.logger
+            )
+            dummy_mask = dummy_sfincs_model.create_mask(
+                self.DEM_config,
+                subbasins[~subbasins["is_downstream_outflow"]],
+                self.config["grid_size_multiplier"],
+            )
+
+            flood_depth_return_period = dummy_mask.astype(np.float32)
+            flood_depth_return_period[:] = 0
+            flood_depth_return_period.attrs["_FillValue"] = np.nan
+        assert flood_depth_return_period.rio.crs is not None
+
+        # the spilled maps are no longer needed, so remove them to free disk space
+        for tile in tiles:
+            tile.path.unlink(missing_ok=True)
+
+        # mask floodplain with land polygons to remove inundation in the sea
+        if coastal_boundary_exclude_mask is not None:
+            flood_depth_return_period = flood_depth_return_period.rio.clip(
+                coastal_boundary_exclude_mask.geometry,
+                coastal_boundary_exclude_mask.crs,
+                invert=False,
+            )
+
+        write_zarr(
+            flood_depth_return_period,
+            self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
+            crs=flood_depth_return_period.rio.crs,
+        )
+
+        if figure_root_model_location is not None and self.config["write_figures"]:
+            depth_colors = [
+                "#87CEFA",
+                "#00BFFF",
+                "#1E90FF",
+                "#0000FF",
+                "#FFD700",
+                "#FF8C00",
+                "#FF0000",
+                "#8B0000",
+            ]
+            flood_cmap = LinearSegmentedColormap.from_list("flood_depth", depth_colors)
+
+            figure_root, figure_model_name = figure_root_model_location
+            with SFINCSRootModel(
+                figure_root, figure_model_name, logger=self.model.logger
+            ).read() as figure_root_model:
+                fig, ax = figure_root_model.sfincs_model.plot_basemap(
                     fn_out=None,  # ty: ignore[invalid-argument-type]
                     variable="",
                     plot_geoms=False,
                     zoomlevel=12,
                     figsize=(11, 7),  # ty: ignore[invalid-argument-type]
                 )
-                flood_depth_return_period.plot(  # ty: ignore[missing-argument]
-                    x="x",
-                    y="y",
-                    ax=ax,
-                    vmin=0,
-                    vmax=float(flood_depth_return_period.max().values),
-                    cmap=flood_cmap,
-                    cbar_kwargs={"shrink": 0.6, "anchor": (0, 0)},
-                )
-                # Expand axes to the full catchment extent, not just the first subbasin
-                ax.set_xlim(
-                    float(flood_depth_return_period.x.min()),
-                    float(flood_depth_return_period.x.max()),
-                )
-                ax.set_ylim(
-                    float(flood_depth_return_period.y.min()),
-                    float(flood_depth_return_period.y.max()),
-                )
-                ax.set_title(
-                    f"Maximum Flood Depth — {return_period}-year Return Period"
-                )
-                figures_dir: Path = sfincs_inland_root_models[0]._root
-                fig.savefig(
-                    figures_dir / f"flood_depth_rp{return_period}.png",
-                    dpi=300,
-                    bbox_inches="tight",
-                )
-                plt.close(fig)
-
-            # simulation.cleanup()
+            flood_depth_return_period.plot(  # ty: ignore[missing-argument]
+                x="x",
+                y="y",
+                ax=ax,
+                vmin=0,
+                vmax=float(flood_depth_return_period.max().values),
+                cmap=flood_cmap,
+                cbar_kwargs={"shrink": 0.6, "anchor": (0, 0)},
+            )
+            # Expand axes to the full catchment extent, not just the first subbasin
+            ax.set_xlim(
+                float(flood_depth_return_period.x.min()),
+                float(flood_depth_return_period.x.max()),
+            )
+            ax.set_ylim(
+                float(flood_depth_return_period.y.min()),
+                float(flood_depth_return_period.y.max()),
+            )
+            ax.set_title(f"Maximum Flood Depth — {return_period}-year Return Period")
+            figures_dir: Path = self.simulation_root / figure_model_name / "figures"
+            figures_dir.mkdir(parents=True, exist_ok=True)
+            fig.savefig(
+                figures_dir / f"flood_depth_rp{return_period}.png",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            plt.close(fig)
 
     def save_discharge(self, discharge_m3_s_per_substep: TwoDArrayFloat32) -> None:
         """Saves the current discharge for the current timestep.

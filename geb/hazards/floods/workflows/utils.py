@@ -3,10 +3,11 @@
 import os
 import shutil
 import subprocess
+import warnings
 from datetime import datetime
 from os.path import isfile, join
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -18,6 +19,8 @@ from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.components.config.config_variables import SfincsConfigVariables
 from hydromt_sfincs.workflows import downscale_floodmap
 from matplotlib.colors import LinearSegmentedColormap
+from pyproj import CRS
+from rioxarray.merge import merge_arrays
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
 
@@ -749,3 +752,200 @@ def select_most_upstream_point(
     outflow_point: Point = most_upstream_point
 
     return outflow_point
+
+
+class SpilledRaster:
+    """A 2D (y, x) raster whose values are stored in a .npy file on disk.
+
+    Only the (small) coordinates and metadata are kept in memory, so that many
+    large rasters can be merged without holding all of them in RAM at once.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        x: np.ndarray,
+        y: np.ndarray,
+        crs: CRS,
+        attrs: dict[str, Any],
+        name: Any,
+        dtype: np.dtype,
+    ) -> None:
+        """Initializes a spilled raster.
+
+        Args:
+            path: Path to the .npy file with the raster values, in (y, x) order.
+            x: The x coordinates of the raster.
+            y: The y coordinates of the raster.
+            crs: The coordinate reference system of the raster.
+            attrs: The attributes of the original DataArray.
+            name: The name of the original DataArray.
+            dtype: The data type of the raster values.
+        """
+        self.path = path
+        self.x = x
+        self.y = y
+        self.crs = crs
+        self.attrs = attrs
+        self.name = name
+        self.dtype = dtype
+
+    @classmethod
+    def spill(cls, da: xr.DataArray, path: Path) -> SpilledRaster:
+        """Writes the values of a DataArray to disk and returns a lightweight handle.
+
+        Args:
+            da: The 2D DataArray with dimensions y and x to spill to disk.
+            path: The path of the .npy file to write.
+
+        Returns:
+            A SpilledRaster referring to the written file.
+        """
+        assert da.rio.crs is not None
+        da = da.transpose("y", "x")
+        np.save(path, np.asarray(da.values))
+        return cls(
+            path=path,
+            x=np.asarray(da["x"].values).copy(),
+            y=np.asarray(da["y"].values).copy(),
+            crs=da.rio.crs,
+            attrs=dict(da.attrs),
+            name=da.name,
+            dtype=da.dtype,
+        )
+
+    def load(self, mmap_mode: Literal["r"] | None = None) -> np.ndarray:
+        """Loads the raster values.
+
+        Args:
+            mmap_mode: If "r", the values are memory-mapped instead of read into memory.
+
+        Returns:
+            The raster values in (y, x) order.
+        """
+        return np.load(self.path, mmap_mode=mmap_mode)
+
+    def to_dataarray(self) -> xr.DataArray:
+        """Loads the raster fully into memory as a DataArray.
+
+        Returns:
+            The raster as a DataArray with CRS set.
+        """
+        da = xr.DataArray(
+            self.load(),
+            coords={"y": self.y, "x": self.x},
+            dims=("y", "x"),
+            attrs=self.attrs,
+            name=self.name,
+        )
+        return da.rio.write_crs(self.crs, inplace=True)
+
+
+def aligned_union_axis(
+    axes: list[np.ndarray],
+) -> tuple[np.ndarray, list[int]] | None:
+    """Computes the union of regularly spaced, mutually aligned coordinate axes.
+
+    Args:
+        axes: The coordinate axes to combine. All must have the same (signed) spacing
+            and be offset from each other by an integer number of cells.
+
+    Returns:
+        A tuple of the union axis and, for each input axis, the index in the union
+            axis of its first element. None if the axes are not regular and aligned.
+    """
+    step: float | None = None
+    for axis in axes:
+        if axis.size >= 2:
+            step = float(axis[1] - axis[0])
+            break
+    if step is None or step == 0:
+        return None
+
+    tolerance: float = abs(step) * 1e-3
+    reference_start: float = float(axes[0][0])
+    offsets: list[int] = []
+    for axis in axes:
+        if axis.size >= 2 and not np.allclose(
+            np.diff(axis), step, rtol=0, atol=tolerance
+        ):
+            return None
+        offset: float = (float(axis[0]) - reference_start) / step
+        rounded_offset: int = round(offset)
+        if abs(offset - rounded_offset) * abs(step) > tolerance:
+            return None
+        offsets.append(rounded_offset)
+
+    start: int = min(offsets)
+    end: int = max(offset + axis.size for offset, axis in zip(offsets, axes))
+    union_axis: np.ndarray = reference_start + (np.arange(start, end)) * step
+    return union_axis, [offset - start for offset in offsets]
+
+
+def merge_spilled_rasters_max(
+    tiles: list[SpilledRaster], block_rows: int = 2048
+) -> xr.DataArray:
+    """Merges rasters by taking the cell-wise maximum, ignoring NaN.
+
+    If all rasters share the same CRS and are on the same aligned grid (which is the
+    case for SFINCS models derived from the same DEM), the output is allocated once
+    and the inputs are streamed from disk in blocks of rows, so that memory use is
+    roughly the size of the output. Otherwise, falls back to rioxarray's merge_arrays.
+
+    Args:
+        tiles: The rasters to merge.
+        block_rows: Number of rows of an input raster to process at a time.
+
+    Returns:
+        The merged raster, with the same y orientation as the inputs.
+    """
+    first: SpilledRaster = tiles[0]
+    crs_equal: bool = all(
+        CRS.from_user_input(tile.crs) == CRS.from_user_input(first.crs)
+        for tile in tiles
+    )
+    x_union = aligned_union_axis([tile.x for tile in tiles])
+    y_union = aligned_union_axis([tile.y for tile in tiles])
+
+    if not crs_equal or x_union is None or y_union is None:
+        warnings.warn(
+            "Flood depth maps are not on a common aligned grid; falling back to "
+            "rioxarray merge_arrays, which requires all maps in memory.",
+            stacklevel=2,
+        )
+        flood_depths: list[xr.DataArray] = []
+        for tile in tiles:
+            # merge_arrays expects the origin to be top-left, so we flip the y-axis
+            flood_depths.append(tile.to_dataarray().isel(y=slice(None, None, -1)))
+        merged: xr.DataArray = merge_arrays(flood_depths, method="max")
+        return merged.isel(y=slice(None, None, -1))  # flip back
+
+    x_out, x_offsets = x_union
+    y_out, y_offsets = y_union
+
+    dtype: np.dtype = np.result_type(np.float32, *[tile.dtype for tile in tiles])
+    output: np.ndarray = np.full((y_out.size, x_out.size), np.nan, dtype=dtype)
+
+    for tile, y_offset, x_offset in zip(tiles, y_offsets, x_offsets):
+        values: np.ndarray = tile.load(mmap_mode="r")
+        n_rows, n_cols = values.shape
+        for row_start in range(0, n_rows, block_rows):
+            row_end: int = min(row_start + block_rows, n_rows)
+            window: np.ndarray = output[
+                y_offset + row_start : y_offset + row_end,
+                x_offset : x_offset + n_cols,
+            ]
+            np.fmax(window, values[row_start:row_end], out=window)
+        del values
+
+    attrs: dict[str, Any] = dict(first.attrs)
+    attrs["_FillValue"] = dtype.type(np.nan)
+    merged = xr.DataArray(
+        output,
+        coords={"y": y_out, "x": x_out},
+        dims=("y", "x"),
+        attrs=attrs,
+        name=first.name,
+    )
+    # inplace avoids a deep copy of the (large) output array
+    return merged.rio.write_crs(first.crs, inplace=True)
