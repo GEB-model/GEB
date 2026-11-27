@@ -221,6 +221,22 @@ class Floods(Module):
         """
         pass
 
+    def get_simulations_root(self, sfincs_root_model: SFINCSRootModel) -> Path:
+        """Gets the folder in which simulations of a root model are stored.
+
+        Simulations are always stored in the simulation root of the current model, also
+        when the root model itself is read from `base_model_path`.
+
+        Args:
+            sfincs_root_model: The root model for which simulations are created.
+
+        Returns:
+            Path to the folder that will contain the simulation folders.
+        """
+        folder: Path = self.simulation_root / sfincs_root_model.name / "simulations"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
     def get_utm_zone(self, region_file: Path | str) -> str:
         """Determine the UTM zone based on the centroid of the region geometry.
 
@@ -647,14 +663,15 @@ class Floods(Module):
                     flood_depth=flood_depth
                 )
 
-    def get_return_period_maps(self, run_name: str) -> None:
+    def get_return_period_maps(
+        self, run_name: str, overwrite_flood_maps: bool = False
+    ) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
 
         Args:
             run_name: The name of the run to use for estimating return periods (e.g., "spinup").
+            overwrite_flood_maps: Whether to overwrite existing flood maps for the specified return periods. Defaults to False.
 
-        Raises:
-            ValueError: If no hydrograph is found for a node and return period.
         """
         # load model settings
         coastal_only = self.config["coastal_only"]
@@ -745,17 +762,16 @@ class Floods(Module):
                 ].copy()
 
         return_periods_to_simulate: list[int] = []
-        if not build_only:
-            for return_period in self.config["return_periods"]:
-                flood_map_path: Path = (
-                    self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+        for return_period in self.config["return_periods"]:
+            flood_map_path: Path = (
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+            )
+            if not overwrite_flood_maps and flood_map_path.exists():
+                self.model.logger.info(
+                    f"Flood map for return period {return_period} already exists at {flood_map_path}. Skipping."
                 )
-                if not overwrite_flood_maps and flood_map_path.exists():
-                    self.model.logger.info(
-                        f"Flood map for return period {return_period} already exists at {flood_map_path}. Skipping."
-                    )
-                    continue
-                return_periods_to_simulate.append(return_period)
+                continue
+            return_periods_to_simulate.append(return_period)
 
         representative_year = self.config["representative_year"]
         if representative_year is None:
@@ -907,12 +923,6 @@ class Floods(Module):
                 del sfincs_inland_root_model
                 gc.collect()
 
-            if build_only:
-                self.model.logger.info(
-                    "Build only is True. Skipping flood map generation and simulation."
-                )
-                return
-
             for return_period in return_periods_to_simulate:
                 self._write_return_period_map(
                     return_period=return_period,
@@ -935,7 +945,7 @@ class Floods(Module):
         Returns:
             DataFrame with the discharge per river.
         """
-        spinup_name = self.model.config["general"]["spinup_name"]
+        spinup_name = self.model.config["spinup_name"]
         output_root = self.model.report_folder.parent.parent
         spinup_folder = output_root / spinup_name / "report" / "hydrology.routing"
         run_folder = output_root / run_name / "report" / "hydrology.routing"
@@ -1033,7 +1043,6 @@ class Floods(Module):
         sfincs_inland_simulation: SFINCSSimulation = (
             sfincs_inland_root_model.create_simulation(
                 event=event,
-                simulation_root=self.get_simulations_root(sfincs_inland_root_model),
             )
         )
 

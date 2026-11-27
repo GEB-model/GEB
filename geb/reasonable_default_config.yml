@@ -26,6 +26,7 @@ hazards:
     overwrite: auto
     coastal_only: false
     write_figures: false
+    representative_year: null
     return_periods:
       - 2
       - 5
