@@ -41,7 +41,7 @@ class FloodRiskModule:
             or self.model.config["agent_settings"]["households"]["adapt"]
         ):
             self.load_return_period_flood_maps()
-        self.load_flood_protection_standard()
+            self.load_flood_protection_standard()
         self.flood_in_last_year = False
 
     def load_flood_protection_standard(self) -> None:

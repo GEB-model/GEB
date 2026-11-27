@@ -3,13 +3,14 @@
 import glob
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import tqdm
 import xarray as xr
+from rasterio.enums import Resampling
 from rasterio.features import geometry_mask, rasterize
 from xarray.core.dataarray import DataArray
 
@@ -39,20 +40,26 @@ class EarlyWarningModule:
 
     def load_wlranges_and_measures(self) -> None:
         """
-        Loads the water level ranges and appropriate measures, and the implementation times for measures.
+        Load warning input settings independently of checkpointed household state.
+
+        Returns:
+            None.
 
         Raises:
-            ValueError: If the wl_ranges.json structure is invalid.
+            ValueError: If the wl_ranges.json structure is empty or invalid.
         """
-        self.households.var.implementation_times = read_params(
+        # Keep input settings outside the bucket replaced by checkpoint restores.
+        self.implementation_times: dict[str, float] = read_params(
             filepath=self.model.files["dict"]["measures/implementation_times"]
         )
-        wlranges_and_measures = read_params(
+        wlranges_and_measures: dict[str, dict[str, Any]] = read_params(
             filepath=self.model.files["dict"]["measures/wl_ranges"]
         )
 
         # Check whether the old format is being used
-        first_key = next(iter(wlranges_and_measures))
+        if not wlranges_and_measures:
+            raise ValueError("Water level ranges must contain at least one asset.")
+        first_key: str = next(iter(wlranges_and_measures))
 
         if first_key.isdigit():
             raise ValueError(
@@ -63,7 +70,7 @@ class EarlyWarningModule:
                 "}"
             )
 
-        self.households.var.wlranges_and_measures = {
+        self.wlranges_and_measures: dict[str, dict[int, Any]] = {
             asset_type: {
                 int(range_id): range_info for range_id, range_info in ranges.items()
             }
@@ -71,7 +78,7 @@ class EarlyWarningModule:
         }
         self.logger.info(
             "Loaded water level ranges with associated measures and their implementation times for %d asset types.",
-            len(self.households.var.wlranges_and_measures),
+            len(self.wlranges_and_measures),
         )
 
     def load_ensemble_flood_maps(self, date_time: datetime) -> xr.DataArray:
@@ -156,21 +163,12 @@ class EarlyWarningModule:
             f"Loading flood maps for {n_ensemble_members} ensemble members"
         )
 
-        start_time = self.model.config["hazards"]["floods"]["events"][0][
-            "start_time"
-        ].strftime("%Y%m%dT%H%M%S")
-        end_time = self.model.config["hazards"]["floods"]["events"][0][
-            "end_time"
-        ].strftime("%Y%m%dT%H%M%S")
-
         for member in tqdm.tqdm(
-            range(0, n_ensemble_members), desc="Processing ensemble members"
+            range(1, n_ensemble_members + 1), desc="Processing ensemble members"
         ):
-            flood_map_path = (
-                flood_maps_folder
-                / f"member_{member}"
-                / f"{start_time} - {end_time}_max.zarr"
-            )
+            flood_map_path = list(
+                (flood_maps_folder / f"member_{member}").glob("*_max.zarr")
+            )[0]
 
             # open flood map for this ensemble member
             flood_map_da = read_zarr(flood_map_path)
@@ -226,7 +224,7 @@ class EarlyWarningModule:
         date_time: datetime,
         warning_target: str = "residential_buildings",
         exceedance: bool = False,
-        asset_type: str | None = None,
+        asset_object: str | None = None,
     ) -> xr.DataArray:
         """Creates flood probability maps based on the ensemble of flood maps for different warning modes.
 
@@ -244,8 +242,14 @@ class EarlyWarningModule:
             ValueError: If the specified strategy is not recognized.
         """
         # Load the ensemble of flood maps for that specific date time
+        # TODO: check if it is not possible to use the crs from the config in SFINCS anymore
+        # ensemble_flood_maps = self.load_ensemble_flood_maps(date_time=date_time)
+        # crs = self.model.config["hazards"]["floods"]["crs"]
+
         ensemble_flood_maps = self.load_ensemble_flood_maps(date_time=date_time)
-        crs = self.model.config["hazards"]["floods"]["crs"]
+        crs = ensemble_flood_maps.rio.crs
+        if crs is None:
+            raise ValueError("The ensemble flood maps must have a CRS.")
 
         if exceedance:
             # Create output folder for exceedance probability maps
@@ -261,17 +265,17 @@ class EarlyWarningModule:
                 / "flood_prob_maps"
                 / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
             )
-        if warning_target not in self.households.var.wlranges_and_measures:
+        if warning_target not in self.wlranges_and_measures:
             if warning_target == "critical_infrastructure":
                 if (
-                    asset_type is None
-                    or asset_type not in self.households.var.wlranges_and_measures
+                    asset_object is None
+                    or asset_object not in self.wlranges_and_measures
                 ):
                     raise ValueError(
-                        f"Unknown asset type '{asset_type}' for critical infrastructure warning."
-                        f"Available asset types: {list(self.households.var.wlranges_and_measures.keys())}"
+                        f"Unknown asset type '{asset_object}' for critical infrastructure warning."
+                        f"Available asset types: {list(self.wlranges_and_measures.keys())}"
                     )
-                warning_target = asset_type
+                warning_target = asset_object
             else:
                 raise ValueError(
                     f"Unknown warning target '{warning_target}'. "
@@ -280,9 +284,7 @@ class EarlyWarningModule:
 
         ranges = []
 
-        for range_id, range_info in self.households.var.wlranges_and_measures[
-            warning_target
-        ].items():
+        for range_id, range_info in self.wlranges_and_measures[warning_target].items():
             if exceedance:
                 ranges.append((range_id, range_info["min"], None))
             else:
@@ -353,6 +355,18 @@ class EarlyWarningModule:
         Returns:
             GeoDataFrame or Series with flooded building information.
         """
+        if buildings.crs is None:
+            raise ValueError("Building geometries must have a CRS.")
+        if prob_map.rio.crs is None:
+            raise ValueError("The flood probability map must have a CRS.")
+
+        if prob_map.rio.crs != buildings.crs:
+            # Reproject probabilities before thresholding to preserve their values
+            prob_map = prob_map.squeeze(drop=True).rio.reproject(
+                buildings.crs,
+                resampling=Resampling.nearest,
+                nodata=np.nan,
+            )
         prob_map = prob_map >= prob_threshold  # convert to boolean mask
 
         buildings["flooded"] = False  # Initialize the flooded column
@@ -427,19 +441,59 @@ class EarlyWarningModule:
 
         return target_households["communication_weight"].values
 
+    # TODO: Adjust this to work for forecasts using a single event as well
     def compute_lead_time(self) -> float:
-        """Compute lead time in hours based on forecast start time and current model time.
+        """Compute lead time hours until the flood using the median of the first time of discharge exceedance of the forecast.
 
         Returns:
-            float: Lead time in hours.
+            Available time (hours). The median includes only members predicting an exceedance.
+
+        Raises:
+            ValueError: If timing is absent, belongs to another issuance, has no
+                exceedance, or uses incompatible timezone conventions.
+                Or if the median time of exceedance has already occurred.
         """
-        moment_of_flooding = self.model.config["hazards"]["floods"][
-            "moment_of_flooding"
-        ]
-        current_time = self.model.current_time
-        lead_time = (moment_of_flooding - current_time).total_seconds() / 3600
-        lead_time = max(lead_time, 0)  # Ensure non-negative lead time
-        return lead_time
+        if self.model.config["general"]["forecasts"]["long_term_analysis"]:
+            timing = self.model.forecast_flood_timing
+            current_time: datetime = self.model.current_time
+
+            if timing is None or timing["forecast_issue_date"] != current_time:
+                raise ValueError(
+                    "No discharge timing is available for the current forecast."
+                )
+            reference_time: datetime | int | None = timing["median_exceedance_time"]
+            if reference_time is None:
+                raise ValueError("No member predicts discharge threshold exceedance.")
+            if not isinstance(reference_time, datetime):
+                raise ValueError("Median discharge exceedance time must be a datetime.")
+            if (reference_time.tzinfo is None) != (current_time.tzinfo is None):
+                raise ValueError("Forecast and model times use incompatible timezones.")
+
+            lead_time_hours: float = (
+                reference_time - current_time
+            ).total_seconds() / 3600
+
+            if lead_time_hours <= 0:
+                if lead_time_hours == 0:
+                    self.logger.warning(
+                        "The forecasted discharge threshold exceedance time (median among members) is occurring now."
+                    )
+                else:
+                    raise ValueError(
+                        "The forecasted median discharge threshold exceedance has already "
+                        "occurred. Warning response cannot be evaluated for a past event."
+                    )
+            return lead_time_hours
+        else:
+            # CODE TO USE WHEN USING FORECASTS FOR A SINGLE EVENT
+            # TODO: Adjust this to work for forecasts using a single event as well
+            moment_of_flooding = self.model.config["hazards"]["floods"][
+                "moment_of_flooding"
+            ]
+            current_time = self.model.current_time
+            lead_time = (moment_of_flooding - current_time).total_seconds() / 3600
+            lead_time = max(lead_time, 0)  # Ensure non-negative lead time
+            return lead_time
 
     def pick_recommendations(
         self, available_measures: set[str], evacuate: bool, lead_time: float
@@ -456,7 +510,7 @@ class EarlyWarningModule:
             chosen: List of measures to recommend.
         """
         # Get implementation times for measures
-        implementation_times = self.households.var.implementation_times
+        implementation_times = self.implementation_times
 
         # Filter out empty strings and invalid measures to prevent KeyError
         valid_measures = {
@@ -672,9 +726,7 @@ class EarlyWarningModule:
             exceedance: Whether to create a probability map based on exceedance of a critical water thresholds or a probability of a waterlevel range.
         """
         # Get the range ids and initialize the warning_log
-        residential_wlranges = self.households.var.wlranges_and_measures[
-            "residential_buildings"
-        ]
+        residential_wlranges = self.wlranges_and_measures["residential_buildings"]
         range_ids = list(residential_wlranges.keys())
         warning_log = []
         warnings_folder = self.model.output_folder / "warning_logs"
@@ -764,7 +816,7 @@ class EarlyWarningModule:
             )
             building_fraction_hit_per_postal_code_map.to_parquet(
                 warnings_folder
-                / f"building_fraction_hit_per_postcode_{date_time.isoformat().replace(':', '').replace('-', '')}.parquet"
+                / f"building_fraction_hit_per_postcode_{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
             )
             self.logger.info(
                 f"Building fraction of buildings hit per postal code for forecast initialization date {date_time.isoformat()} saved as a parquet file."
@@ -790,7 +842,7 @@ class EarlyWarningModule:
         postal_codes_to_warn = postal_codes[postal_codes[warning_cols].any(axis=1)]
         postal_codes_to_warn.to_parquet(
             warnings_folder
-            / f"postal_codes_to_warn_{date_time.isoformat().replace(':', '').replace('-', '')}.parquet"
+            / f"postal_codes_to_warn_{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
         )
 
         # Communicate the warning to the households in the postal code and store the details in the warning log
@@ -846,6 +898,157 @@ class EarlyWarningModule:
                     / f"warning_log_water_levels_{date_time.isoformat().replace(':', '').replace('-', '')}.csv"
                 )
                 pd.DataFrame(warning_log).to_csv(path, index=False)
+
+    def critical_infrastructure_impact_assessment(
+        self,
+        date_time: datetime,
+        assets_config: dict[str, dict[str, Any]],
+        prob_threshold: float,
+        exceedance: bool = False,
+    ) -> gpd.GeoDataFrame:
+        """Assess infrastructure impacts on associated postal codes.
+
+        Each row describes one postcode, asset, water-level range and probability
+        threshold. A postcode can appear in multiple rows and household counts
+        must not be summed without accounting for overlapping associations.
+
+        Args:
+            date_time: Forecast initialization date and time.
+            assets_config: Asset settings with optional probability_threshold values.
+            prob_threshold: Default flood probability threshold (0 to 1).
+            exceedance: Whether probabilities represent water-level exceedance.
+
+        Returns:
+            Postal code geometries with asset probabilities and household impacts.
+
+        Raises:
+            ValueError: If a probability threshold is invalid or the map CRS is missing.
+        """
+        impacts: list[gpd.GeoDataFrame] = []
+        household_counts: pd.Series = (
+            self.households.var.households_with_postal_codes.groupby("postcode").size()
+        )
+        output_crs = self.households.postal_codes.crs
+
+        for asset_object, settings in assets_config.items():
+            configured_thresholds = settings.get(
+                "probability_threshold", prob_threshold
+            )
+
+            # Check if the config has all the required information
+            thresholds: list[float] = (
+                configured_thresholds
+                if isinstance(configured_thresholds, list)
+                else [configured_thresholds]
+            )
+            if not thresholds or any(not 0 <= value <= 1 for value in thresholds):
+                raise ValueError(
+                    f"Probability thresholds for '{asset_object}' must be between 0 and 1."
+                )
+
+            # TODO: change this so we dont have to save this in the bucket
+            # Get the asset object from the 'saver' household critical infrastructure asset
+            assets: gpd.GeoDataFrame = self.households.critical_infrastructure_assets[
+                asset_object
+            ]
+            asset_object_path: Path = (
+                self.model.input_folder
+                / "geom"
+                / "assets"
+                / f"postal_codes_with_critical_infrastructure_{asset_object}.geoparquet"
+            )
+            postal_assets: gpd.GeoDataFrame = read_geom(asset_object_path)[
+                ["postcode", "asset_id", "geometry"]
+            ].to_crs(output_crs)
+            probability_maps: xr.DataArray = self.create_flood_probability_maps(
+                warning_target="critical_infrastructure",
+                asset_object=asset_object,
+                date_time=date_time,
+                exceedance=exceedance,
+            )
+            if probability_maps.rio.crs is None:
+                raise ValueError("Flood probability maps must have a CRS.")
+            # Sample a representative point for each asset
+            points: gpd.GeoSeries = assets.to_crs(
+                probability_maps.rio.crs
+            ).geometry.representative_point()
+            x: xr.DataArray = xr.DataArray(points.x.to_numpy(), dims="asset")
+            y: xr.DataArray = xr.DataArray(points.y.to_numpy(), dims="asset")
+            left, bottom, right, top = probability_maps.rio.bounds()
+            inside: np.ndarray = (
+                (x.values >= left)
+                & (x.values <= right)
+                & (y.values >= bottom)
+                & (y.values <= top)
+            )
+            for range_id in probability_maps.range_id.values:
+                probability_map: xr.DataArray = probability_maps.sel(
+                    range_id=range_id
+                ).squeeze(drop=True)
+                probabilities: np.ndarray = probability_map.sel(
+                    x=x, y=y, method="nearest"
+                ).values
+                probabilities = np.where(inside, probabilities, np.nan)
+                asset_probabilities: pd.Series = pd.Series(
+                    probabilities, index=assets["asset_id"]
+                )
+                # Keep separate rows for each asset and threshold
+                for threshold in thresholds:
+                    result: gpd.GeoDataFrame = postal_assets.copy()
+                    result["asset_object"] = asset_object
+                    result["range_id"] = range_id
+                    result["probability_threshold"] = threshold
+                    result["asset_probability"] = result["asset_id"].map(
+                        asset_probabilities
+                    )
+                    result["affected"] = (
+                        result["asset_probability"] >= threshold
+                    ).astype("boolean")
+                    result.loc[result["asset_probability"].isna(), "affected"] = pd.NA
+                    counts: pd.Series = (
+                        result["postcode"].map(household_counts).fillna(0).astype(int)
+                    )
+                    result["n_affected_households"] = counts.where(
+                        result["affected"].fillna(False), 0
+                    ).astype("Int64")
+                    result.loc[result["affected"].isna(), "n_affected_households"] = (
+                        pd.NA
+                    )
+                    impacts.append(result)
+
+        output: gpd.GeoDataFrame = (
+            gpd.GeoDataFrame(
+                pd.concat(impacts, ignore_index=True),
+                geometry="geometry",
+                crs=output_crs,
+            )
+            if impacts
+            else gpd.GeoDataFrame(
+                columns=[
+                    "postcode",
+                    "asset_id",
+                    "asset_type",
+                    "range_id",
+                    "probability_threshold",
+                    "asset_probability",
+                    "affected",
+                    "n_affected_households",
+                    "geometry",
+                ],
+                geometry="geometry",
+                crs=output_crs,
+            )
+        )
+        # Save postcode geometries and impact results together
+        output_folder: Path = (
+            self.model.output_folder / "critical_infrastructure_impacts"
+        )
+        output_folder.mkdir(parents=True, exist_ok=True)
+        timestamp: str = date_time.strftime("%Y%m%dT%H%M%S")
+        output.to_parquet(
+            output_folder / f"postal_code_impacts_{timestamp}.geoparquet", index=False
+        )
+        return output
 
     def critical_infrastructure_warning_strategy(
         self,

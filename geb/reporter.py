@@ -1846,6 +1846,8 @@ class Reporter:
                     if "function" in config and config["function"] is None:
                         if config["type"] in ("dataframe", "geodataframe"):
                             continue
+                        if "_chunk_data" not in config:
+                            continue
                         if config["type"] == "agents":
                             chunk_time_size: int = config["_chunk_data"].shape[0]
                         elif config["type"] in ("grid", "HRU"):

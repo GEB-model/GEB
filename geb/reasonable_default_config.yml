@@ -56,7 +56,7 @@ hazards:
       gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
     detect_floods_from_discharge: false # If True, floods are detected based on discharge thresholds at a specific location.
     discharge_threshold: 30  # discharge threshold in m3/s for flood detection
-    probability_threshold_discharge: 0.5  # probability threshold for flood detection based on discharge
+    probability_threshold_discharge: 0.1  # probability threshold for flood detection based on discharge
     threshold_location: 
     - lon
     - lat  # [lon, lat] of the location where the discharge threshold is applied.
@@ -133,9 +133,6 @@ agent_settings:
         critical_infrastructure: 
           enabled: false  # Enable water level based warnings for critical infrastructure  
           get_critical_facilities: false # If True, critical facilities (vulnerable and emergency) are extracted from OSM using the catchment polygon as boundary
-          asset_type: 
-            - 'energy_substations'
-
     expected_utility:
       flood_risk_calculations:
         risk_perception:

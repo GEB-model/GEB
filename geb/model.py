@@ -107,6 +107,9 @@ class GEBModel(Module):
 
         self.plantFATE = []  # Empty list to hold plantFATE models. If forests are not used, this will be empty
         self._timing_start_time: float | None = None
+        self.forecast_flood_timing: dict[str, datetime.datetime | int | None] | None = (
+            None
+        )
 
         self.discharge_log: list = []  # Empty list to hold discharge logs for each timestep. This will be used for flood detection and warning system
 
@@ -368,7 +371,85 @@ class GEBModel(Module):
 
     def run_forecasts_long_term_analysis(
         self, forecast_issue_datetime: datetime.datetime
-    ) -> None:
+    ) -> bool:
+        """Run long-term model simulation using forecasts.
+
+        Args:
+            forecast_issue_datetime: Datetime that the forecast was issued.
+
+        Returns:
+            True after the flood-simulation pass completes, or False when no
+            current forecast records exist or the probability threshold is not exceeded.
+            Saves member first exceedances and their conditional median/range in
+            the forecast_timing output directory, using model timestamps.
+
+        Raises:
+            ValueError: If forecast timing records are invalid.
+        """
+
+        def _summarize_forecast_timing(
+            forecast_records: pd.DataFrame, forecast_issue_date: datetime.datetime
+        ) -> tuple[pd.DataFrame, dict[str, datetime.datetime | int | None]]:
+            """Summarize first exceedance per member for a single forecast issuance.
+
+            Args:
+                forecast_records: Daily records with member, issuance, and first
+                    exceedance timestamps. Missing exceedances remain missing.
+                forecast_issue_date: Issuance to select, in model time.
+
+            Returns:
+                Per-member timing table and conditional median and range summary.
+                Members without exceedance count toward the total, but not the median.
+
+            Raises:
+                ValueError: If required columns or valid member identifiers are absent.
+            """
+            # Check that the required columns are present in the forecast records
+            required_columns: set[str] = {
+                "forecast_issue_date",
+                "member",
+                "first_exceedance_time",
+            }
+            if not required_columns.issubset(forecast_records.columns):
+                raise ValueError("Forecast records lack required timing columns.")
+            selected: pd.DataFrame = forecast_records.loc[
+                pd.to_datetime(forecast_records["forecast_issue_date"])
+                == pd.Timestamp(forecast_issue_date)
+            ].copy()
+            if selected["member"].isna().any():
+                raise ValueError("Forecast records must have member identifiers.")
+            selected["first_exceedance_time"] = pd.to_datetime(
+                selected["first_exceedance_time"]
+            )
+
+            # Group by member and find the first exceedance time for each member
+            member_times: pd.DataFrame = selected.groupby("member", as_index=False)[
+                "first_exceedance_time"
+            ].min()
+            member_times.insert(0, "forecast_issue_date", forecast_issue_date)
+            valid_times: pd.Series = member_times["first_exceedance_time"].dropna()
+
+            # Summarize the timing of exceedances across members
+            summary: dict[str, datetime.datetime | int | None] = {
+                "forecast_issue_date": forecast_issue_date,
+                "median_exceedance_time": valid_times.median().to_pydatetime()
+                if not valid_times.empty
+                else None,
+                "earliest_exceedance_time": valid_times.min().to_pydatetime()
+                if not valid_times.empty
+                else None,
+                "latest_exceedance_time": valid_times.max().to_pydatetime()
+                if not valid_times.empty
+                else None,
+                "members_with_exceedance": len(valid_times),
+                "total_members": len(member_times),
+            }
+            return member_times, summary
+
+        # Initialize the forecast flood timing to None before running the multiverse
+        self.forecast_flood_timing = None
+
+        # Run the multiverse hindcasts for discharge detection
         self.logger.info(
             f"Running multiverse for discharge detection on {forecast_issue_datetime}..."
         )
@@ -377,46 +458,62 @@ class GEBModel(Module):
             forecast_issue_datetime=forecast_issue_datetime,
         )
 
-        # Once the is back to the original timeline, check the probability the discharge is above the threshold
-        forecast_log = pd.DataFrame(self.discharge_log)
+        # After running the multiverse hindcasts in discharge_detection mode, save the discharge log to a CSV file for further analysis
+        forecast_log: pd.DataFrame = pd.DataFrame(self.discharge_log)
         forecast_log.to_csv(self.output_folder / "forecast_log.csv", index=False)
+        if forecast_log.empty:
+            return False
 
-        # Load in discharge_threshold after which there is a flood from the config file
-        discharge_threshold: int = self.model.config["hazards"]["floods"][
+        # Get the discharge threshold from the configuration for flood detection
+        discharge_threshold: float = self.config["hazards"]["floods"][
             "discharge_threshold"
         ]
 
-        # Get the forecast_log for the current forecast_issue_datetime
-        # current_forecast = forecast_log[
-        #     forecast_log["forecast_issue_date"] == forecast_issue_datetime.date()
-        # ]
-        current_forecast = forecast_log[
+        # Filter the forecast log for the current forecast issue date
+        current_forecast: pd.DataFrame = forecast_log[
             forecast_log["forecast_issue_date"] == pd.Timestamp(forecast_issue_datetime)
         ]
+        if current_forecast.empty:
+            return False
 
-        if not current_forecast.empty:
-            member_max = current_forecast.groupby("member")["discharge"].max()
+        # Summarize the timing of exceedances across members
+        member_timing: pd.DataFrame
+        timing_summary: dict[str, datetime.datetime | int | None]
+        member_timing, timing_summary = _summarize_forecast_timing(
+            current_forecast, forecast_issue_datetime
+        )
+        timing_output_folder: Path = self.output_folder / "forecast_timing"
+        timing_output_folder.mkdir(parents=True, exist_ok=True)
+        forecast_label: str = forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
+        member_timing.to_csv(
+            timing_output_folder / f"{forecast_label}_members.csv", index=False
+        )
+        pd.DataFrame([timing_summary]).to_csv(
+            timing_output_folder / f"{forecast_label}_summary.csv", index=False
+        )
 
-            probability = (member_max > discharge_threshold).mean()
-
-        # Load in the probability threshold for flood detection based on discharge from the config file
+        # Get the maximum discharge for each member and calculate the probability of exceeding the threshold
+        member_max: pd.Series = current_forecast.groupby("member")["discharge"].max()
+        probability: float = float((member_max > discharge_threshold).mean())
         probability_threshold_discharge: float = self.config["hazards"]["floods"][
             "probability_threshold_discharge"
         ]
-
         if probability > probability_threshold_discharge:
             self.logger.info(
-                f"Discharge is forecasted to be higher than threshold for forecast issued at {forecast_issue_datetime} with probability {probability:.2f}."
+                f"Discharge is forecasted to be higher than threshold for forecast issued at {forecast_issue_datetime} with probability {probability:.2f}\nRunning flood simulation mode."
             )
-            # Run SFINCS for the forecast members that exceed the probability threshold
             self.multiverse_hindcasts(
                 multiverse_mode="flood_simulation",
                 forecast_issue_datetime=forecast_issue_datetime,
             )
+            # Publish only after restoring the model from all forecast members
+            self.forecast_flood_timing = timing_summary
+            return timing_summary["median_exceedance_time"] is not None
+        return False
 
     def multiverse_hindcasts(
         self,
-        multiverse_mode: Literal["discharge_detection", "flood_simulation"],
+        multiverse_mode: None | Literal["discharge_detection", "flood_simulation"],
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = False,
     ) -> None | dict[Any, float]:
@@ -462,6 +559,7 @@ class GEBModel(Module):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
+        original_reporter: Reporter = self.reporter  # store original reporter
         original_is_activated: bool = (
             self.reporter.is_activated
         )  # store original reporter state
@@ -478,14 +576,13 @@ class GEBModel(Module):
         forecast_end_dt: datetime.datetime | None = None
         forecast_data: dict[str, xr.DataArray] = {}
         self.logger.info(
-            f"Starting to load forecast data for {len(self.forcing.loaders)} loaders"
+            f"Starting to load {self.config['general']['forecasts']['type']} data for {len(self.forcing.loaders)} loaders"
         )
 
-        # TODO: adjust the file path to hindcasts
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 forecast_file_path = self.files["other"][
-                    f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['processing']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+                    f"{self.config['general']['forecasts']['type']}/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['processing']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
                 ]
                 forecast_data[loader_name] = read_zarr(forecast_file_path)
 
@@ -536,22 +633,45 @@ class GEBModel(Module):
                         da=forecast_data[loader_name].sel(member=member),
                     )
 
-            self.logger.info(f"Running forecast member {member}")
+            self.logger.info(
+                f"Running forecast member {member} in {multiverse_mode} mode"
+            )
 
-            # # make reporter AFTER updating n_timesteps
-            # self.reporter = Reporter(
-            #     self,
-            #     self.report_folder / "multiverse_hindcasts" / self.multiverse_name,
-            #     clean=True,
-            # )  # create a new reporter for the alternate universe
+            # make reporter AFTER updating n_timesteps
+            self.reporter = Reporter(
+                self,
+                self.report_folder
+                / "multiverse_hindcasts"
+                / multiverse_mode
+                / self.multiverse_name,
+                clean=True,
+            )  # create a new reporter for the alternate universe
+
+            # DEBUGGING
+            # print("Reporter active:", self.reporter.is_activated)
+            # print("Report folder:", self.reporter.report_folder)
+
+            # for module_name, variables in self.reporter.variables_to_report.items():
+            #     for report_name, settings in variables.items():
+            #         print(
+            #             module_name,
+            #             report_name,
+            #             "variable:",
+            #             settings.get("varname"),
+            #             "function:",
+            #             settings.get("function"),
+            #             "substeps:",
+            #             settings.get("substeps"),
+            #         )
 
             print("Going into step to end...")
             self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
+            self.reporter.finalize()  # finalize the reporter for one member in the multiverse
 
             # TODO: maybe here store the discharge info required for running SFINCS for each member, so that it is not recomputed after the prob check?
             if return_mean_discharge:
                 mean_discharge[member] = (
-                    self.hydrology.routing.grid.var.discharge_m3_s.mean()
+                    self.hydrology.routing.var.discharge_m3_s.mean()
                 ).item()  # calculate the mean discharge for the member
 
             # restore the model to the state before the forecast for the next member
@@ -561,7 +681,7 @@ class GEBModel(Module):
                 store_location=store_location,
                 timestep=store_timestep,
                 n_timesteps=self.n_timesteps,
-                reporter=self.reporter,  # just set the old reporter
+                reporter=original_reporter,  # just set the old reporter
                 config=self.config,  # just the old config
             )  # restore the initial state of the multiverse
 
@@ -573,7 +693,7 @@ class GEBModel(Module):
             store_location=store_location,
             timestep=store_timestep,
             n_timesteps=store_n_timesteps,
-            reporter=self.reporter,  # just set the old reporter
+            reporter=original_reporter,  # just set the old reporter
             config=self.config,  # just the old config
         )  # restore the initial state of the multiverse
 
@@ -587,6 +707,7 @@ class GEBModel(Module):
                 loader.unset_forecast()  # unset forecast mode
 
         self.multiverse_name: None = None  # reset the multiverse name
+        self.multiverse_mode: None = None  # reset the multiverse mode
         if return_mean_discharge:
             return mean_discharge  # return the mean discharge for each member
         else:
@@ -699,8 +820,9 @@ class GEBModel(Module):
             # forecast issue dates are extracted from self.files['other'] keys
             # which are stored as: forecasts/PROVIDER/ENSEMBLE/YYYYMMDDTHHMMSS/...
             provider: str = self.config["general"]["forecasts"]["provider"]
+            type: str = self.config["general"]["forecasts"]["type"]
             ensemble: str = self.config["general"]["forecasts"]["processing"]
-            forecast_prefix: str = f"forecasts/{provider}/{ensemble}/"
+            forecast_prefix: str = f"{type}/{provider}/{ensemble}/"
             # TODO: change it to include forecast_product here as well according to how it is set in forcing/ecmwf.py
 
             other_files: dict[str, Path] = self.files.get("other", {})
@@ -761,20 +883,38 @@ class GEBModel(Module):
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
 
+                    run_warning_system: bool = False
                     if self.config["general"]["forecasts"]["long_term_analysis"]:
                         self.logger.info(
                             f"Running long-term forecast analysis for forecast date time {self.current_time.isoformat()}..."
                         )
-                        self.run_forecasts_long_term_analysis(forecast_datetime)
+                        run_warning_system = self.run_forecasts_long_term_analysis(
+                            forecast_datetime
+                        )
                     else:
-                        self.multiverse_forecasts(
-                            forecast_issue_datetime=forecast_datetime,
-                            return_mean_discharge=True,
-                        )  # run the multiverse for the current timestep
+                        # self.multiverse_forecasts(
+                        #     forecast_issue_datetime=forecast_datetime,
+                        #     return_mean_discharge=True,
+                        # )  # run the multiverse for the current timestep
+                        if self.config["agent_settings"]["households"][
+                            "warning_response"
+                        ]:
+                            forecast_maps: Path = (
+                                self.output_folder
+                                / "flood_maps"
+                                / f"forecast_{forecast_datetime:%Y%m%dT%H%M%S}"
+                            )
+                            run_warning_system = any(
+                                forecast_maps.glob("member_*/*_max.zarr")
+                            )
 
-                    # TODO: add a flag to only run this part if the model identifies a flood based on the discharge hazard and probability thresholdand runs SFINCS
-                    # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
-                    if self.config["agent_settings"]["households"]["warning_response"]:
+                    # Warning strategies require the flood-simulation pass triggered by detection.
+                    if (
+                        run_warning_system
+                        and self.config["agent_settings"]["households"][
+                            "warning_response"
+                        ]
+                    ):
                         self.logger.info(
                             f"Running flood early warning system for date time {self.current_time.isoformat()}..."
                         )
@@ -801,13 +941,13 @@ class GEBModel(Module):
                         if warning_config["warning_target"]["critical_infrastructure"][
                             "enabled"
                         ]:
-                            asset_types = warning_config["warning_target"][
+                            assets_config = warning_config["warning_target"][
                                 "critical_infrastructure"
-                            ]["asset_type"]
+                            ]["assets_list"]
 
-                            self.agents.households.early_warning_module.critical_infrastructure_warning_strategy(
+                            self.agents.households.early_warning_module.critical_infrastructure_impact_assessment(
                                 date_time=self.current_time,
-                                asset_types=asset_types,
+                                assets_config=assets_config,
                                 prob_threshold=prob_threshold,
                                 exceedance=True,
                             )
@@ -826,7 +966,11 @@ class GEBModel(Module):
 
         t0: float = time()
         self.agents.step()
-        if self.simulate_hydrology:
+        if self.simulate_hydrology and (
+            self.multiverse_name is None
+            or not self.config["general"]["forecasts"]["long_term_analysis"]
+            or self.multiverse_mode == "discharge_detection"
+        ):
             self.hydrology.step()
 
         self.hazard_driver.step()
@@ -919,6 +1063,9 @@ class GEBModel(Module):
 
         if load_data_from_store:
             self.store.load(path=checkpoint_path, omit=omit)
+
+            if self.config["agent_settings"]["households"]["warning_response"]:
+                self.agents.households.assign_households_and_buildings_to_postal_codes()
 
         # in spinup mode, save the spinup time range to the store for later verification
         # in run mode, verify that the spinup time range matches the stored time range

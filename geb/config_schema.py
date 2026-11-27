@@ -428,6 +428,10 @@ class HouseholdsConfig(BaseModel):
     warning_response: bool = Field(
         False, description="Whether households respond to warnings."
     )
+    warning_system: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Warning settings, including per-asset infrastructure sources and probability thresholds.",
+    )
     water_demand: WaterDemandConfig = Field(
         default_factory=WaterDemandConfig, description="Water demand configuration."
     )

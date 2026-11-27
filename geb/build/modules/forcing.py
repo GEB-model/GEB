@@ -1963,6 +1963,84 @@ class Forcing(BuildModelBase):
         ) -> str:
             return f"{base_folder}/ECMWF/{_get_forecast_model_folder(forecast_model)}/{date_str}"
 
+        def _interpolate_forcing_to_historical_grid(
+            forcing_name: str,
+            da: xr.DataArray,
+        ) -> xr.DataArray:
+            """Interpolates a forcing variable DataArray to the model grid.
+
+            Args:
+                forcing_name: The name of the forcing variable.
+                da: The xarray DataArray containing the forcing data to interpolate.
+
+            Returns:
+                The interpolated xarray DataArray.
+
+            """
+            grid_mask = self.other[f"climate/{forcing_name}_mask"]
+            interpolated_da = (
+                da.interp(  # Interpolate forecast data to match the target grid
+                    x=grid_mask.x,  # Target longitude coordinates
+                    y=grid_mask.y,  # Target latitude coordinates
+                    method="linear",  # Use linear interpolation
+                )
+            )
+            # convert back to float32
+            interpolated_da = interpolated_da.astype(
+                np.float32
+            )  # Convert back to float32 to save memory
+
+            nan_percentage: float = float(
+                interpolated_da.isnull().mean().compute().item()
+                * 100  # Calculate percentage of NaN values
+            )
+            assert nan_percentage < 5, (  # Assert that less than 5% of data is missing
+                f"More than 5% of the data is missing for variable '{forcing_name}' "
+                f"({nan_percentage:.2f}% missing) after regridding. Check the area and try to "
+                "increase the buffer around the forecasts (fc_area_buffer), as probably not "
+                "the whole area is downloaded"
+            )
+            # fill the nan values using interpolate_na_along_dim and interpolate_na in space
+            if nan_percentage > 0:  # Check if there are any NaN values to fill
+                print(
+                    f"Found {nan_percentage:.2f}% missing values for variable '{forcing_name}' after regridding. Interpolating missing values."
+                )  # Log warning about missing values
+                interpolated_da = interpolated_da.interpolate_na(
+                    dim="y", method="nearest"
+                )
+                interpolated_da = interpolated_da.interpolate_na(
+                    dim="x", method="nearest"
+                )
+                interpolated_da = interpolated_da.interpolate_na(
+                    dim="time", method="nearest"
+                )
+
+                # fill nans in last timesteps (due to de-accumulation) with mean of recent known values
+                recent_mean: xr.DataArray = (  # Calculate mean of recent time steps for gap filling
+                    interpolated_da.isel(
+                        time=slice(-25, -1)
+                    ).mean(  # Select last 25 time steps (excluding the very last one)
+                        dim="time", skipna=True, keep_attrs=True
+                    )  # Calculate mean, skipping NaN values
+                )
+                # Fill any remaining NaNs with the recent mean
+                interpolated_da = interpolated_da.fillna(
+                    recent_mean
+                )  # Fill remaining NaN values with calculated mean
+
+                nan_percentage_after: float = float(
+                    interpolated_da.isnull().mean().compute().item()
+                    * 100  # Check percentage of NaN values after interpolation
+                )
+                assert (
+                    nan_percentage_after == 0
+                ), (  # Assert that all NaN values have been filled
+                    f"Failed to interpolate all missing values for variable '{forcing_name}'. "
+                    f"{nan_percentage_after:.2f}% missing values remain."
+                )
+
+            return interpolated_da
+
         def _save_ecmwf_forcing(
             forecast_ds: xr.Dataset,
             base_name: str,
@@ -1971,6 +2049,7 @@ class Forcing(BuildModelBase):
         ) -> None:
             pr = forecast_ds["tp"].rename("precipitation")
             pr = pr.where(pr >= 0, 0)
+            pr = _interpolate_forcing_to_historical_grid("pr_kg_per_m2_per_s", pr)
             self.set_pr_kg_per_m2_per_s(
                 pr,
                 name=f"{base_name}/pr_kg_per_m2_per_s_{date_str}",
@@ -1978,51 +2057,70 @@ class Forcing(BuildModelBase):
                 source="ECMWF",
             )
 
+            tas = _interpolate_forcing_to_historical_grid(
+                "tas_2m_K", forecast_ds["t2m"]
+            )
             self.set_tas_2m_K(
-                forecast_ds["t2m"].rename("tas"),
+                tas.rename("tas"),
                 name=f"{base_name}/tas_2m_K_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
+            dew_point_tas = _interpolate_forcing_to_historical_grid(
+                "dewpoint_tas_2m_K", forecast_ds["d2m"]
+            )
             self.set_dewpoint_tas_2m_K(
-                forecast_ds["d2m"].rename("dew_point_tas"),
+                dew_point_tas.rename("dew_point_tas"),
                 name=f"{base_name}/dewpoint_tas_2m_K_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
+            rsds = _interpolate_forcing_to_historical_grid(
+                "rsds_W_per_m2", forecast_ds["ssrd"]
+            )
             self.set_rsds_W_per_m2(
-                forecast_ds["ssrd"].rename("rsds"),
+                rsds.rename("rsds"),
                 name=f"{base_name}/rsds_W_per_m2_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
+            rlds = _interpolate_forcing_to_historical_grid(
+                "rlds_W_per_m2", forecast_ds["strd"]
+            )
             self.set_rlds_W_per_m2(
-                forecast_ds["strd"].rename("rlds"),
+                rlds.rename("rlds"),
                 name=f"{base_name}/rlds_W_per_m2_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
+            ps = _interpolate_forcing_to_historical_grid("ps_pascal", forecast_ds["sp"])
             self.set_ps_pascal(
-                forecast_ds["sp"].rename("ps"),
+                ps.rename("ps"),
                 name=f"{base_name}/ps_pascal_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
+            u10 = _interpolate_forcing_to_historical_grid(
+                "wind_u10m_m_per_s", forecast_ds["u10"]
+            )
             self.set_wind_10m_m_per_s(
-                forecast_ds["u10"].rename("u10"),
+                u10.rename("u10"),
                 direction="u",
                 name=f"{base_name}/wind_u10m_m_per_s_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
+            v10 = _interpolate_forcing_to_historical_grid(
+                "wind_v10m_m_per_s", forecast_ds["v10"]
+            )
             self.set_wind_10m_m_per_s(
-                forecast_ds["v10"].rename("v10"),
+                v10.rename("v10"),
                 direction="v",
                 name=f"{base_name}/wind_v10m_m_per_s_{date_str}",
                 create_plots=create_plots,

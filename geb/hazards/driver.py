@@ -10,7 +10,7 @@ import pandas as pd
 import xarray as xr
 import yaml
 
-from geb.geb_types import ThreeDArrayFloat32, TwoDArrayFloat32
+from geb.geb_types import TwoDArrayFloat32
 from geb.hazards.event import Event
 from geb.hazards.floods import Floods
 from geb.module import Module
@@ -18,6 +18,45 @@ from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
+
+
+def first_discharge_exceedance(
+    discharge_m3_s: np.ndarray,
+    threshold_m3_s: float,
+    start_time: datetime,
+    timestep_length: timedelta,
+) -> datetime | None:
+    """Find the first sampled discharge strictly above a threshold.
+
+    Args:
+        discharge_m3_s: One-dimensional discharge samples (m³/s).
+        threshold_m3_s: Discharge threshold (m³/s).
+        start_time: Start of the model timestep, in model time.
+        timestep_length: Duration covered by the equally spaced samples.
+
+    Returns:
+        First exceedance time, or None if no sample exceeds the threshold.
+        Samples follow the interval-start convention used by SFINCS forcing.
+
+    Raises:
+        ValueError: If samples, threshold, or timestep duration are invalid.
+    """
+    # Validate inputs
+    if discharge_m3_s.ndim != 1 or discharge_m3_s.size == 0:
+        raise ValueError("Discharge must be a nonempty one-dimensional array.")
+    if not np.isfinite(discharge_m3_s).all():
+        raise ValueError("Discharge samples must all be finite.")
+    if not np.isfinite(threshold_m3_s) or threshold_m3_s < 0:
+        raise ValueError("Discharge threshold must be finite and nonnegative.")
+    if timestep_length <= timedelta(0):
+        raise ValueError("Timestep duration must be positive.")
+
+    # Get the indices of the samples that exceed the threshold
+    indices: np.ndarray = np.flatnonzero(discharge_m3_s > threshold_m3_s)
+    if indices.size == 0:
+        return None
+    substep_length = timestep_length / discharge_m3_s.size
+    return start_time + int(indices[0]) * substep_length
 
 
 class HazardDriver(Module):
@@ -47,9 +86,8 @@ class HazardDriver(Module):
                 end_time=event["end_time"],
                 create_max_intensity_map=True,
             )
-            for event in self.config["floods"]["events"]
+            for event in (self.config["floods"]["events"] or [])
         ]
-        # TODO: adjust this for when detect_floods_from_discharge is active, then None is not iterable (event needs to be empty in the config file [None] for the step to return nothing)
 
         if (
             not self.model.in_spinup
@@ -122,225 +160,168 @@ class HazardDriver(Module):
     def step(self) -> None:
         """Steps the hazard driver.
 
-        If flood simulation is enabled in the configuration, it runs the SFINCS model for each flood event
-        that ends during the current timestep.
-
         Raises:
-            ValueError: If a flood event is scheduled during the spinup period, an error is raised as flood events cannot be simulated during spinup.
+            ValueError: If a flood simulation is requested during spinup or the
+                forecast window does not end after its issue date.
         """
         if self.model.config["hazards"]["floods"]["simulate"]:
-            if self.model.config["hazards"]["floods"]["events"] is None:
-                return
-
-            # TODO: adjust it to work for Veerle's case as well, right now only entering when we are in multiverse and forecasts use is set to true
-            if (
-                self.model.config["hazards"]["floods"]["detect_floods_from_discharge"]
-                and self.model.config["general"]["forecasts"]["use"]
+            # Get the configuration for flood detection and simulation
+            # This is used to help distinguish between forecast and regular flood detection
+            forecasts_enabled: bool = self.model.config["general"]["forecasts"]["use"]
+            forecast_detection: bool = (
+                forecasts_enabled
                 and self.model.multiverse_name is not None
+                and self.model.multiverse_mode == "discharge_detection"
+            )
+            regular_detection: bool = (
+                not forecasts_enabled and self.model.multiverse_name is None
+            )
+            detection_enabled: bool = self.config["floods"][
+                "detect_floods_from_discharge"
+            ]
+            detection_allowed: bool = (
+                self.next_detection_time is None
+                or self.model.current_time >= self.next_detection_time
+            )
+
+            if (
+                detection_enabled
+                and (forecast_detection or regular_detection)
+                and not self.model.in_spinup
+                and detection_allowed
             ):
-                print("Detecting floods from forecasted discharge...")
-                if self.model.in_spinup:
-                    return
-                else:
-                    if (
-                        self.next_detection_time
-                        and self.model.current_time < self.next_detection_time
-                    ):
-                        print(
-                            "Flood has recently happened, no detection"
-                        )  # Within 10 days of the first flood, no second flood can happen
-                    else:
-                        if (
-                            self.model.multiverse_name is None
-                            or self.model.multiverse_mode == "discharge_detection"
-                        ):
-                            discharge_grid: ThreeDArrayFloat32 = (
-                                self.model.hydrology.grid.decompress(
-                                    np.vstack(
-                                        list(self.floods.var.discharge_per_timestep)
-                                    )
-                                )
-                            )
+                # Sample all substeps of the current timestep to later check for exceedances
+                discharge_current_timestep: TwoDArrayFloat32 = (
+                    self.floods.var.discharge_per_timestep[-1]
+                )
+                discharge_grid: xr.DataArray = xr.DataArray(
+                    data=self.model.hydrology.grid.decompress(
+                        discharge_current_timestep
+                    ),
+                    coords={
+                        "substep": np.arange(discharge_current_timestep.shape[0]),
+                        "y": self.model.hydrology.grid.lat,
+                        "x": self.model.hydrology.grid.lon,
+                    },
+                    dims=["substep", "y", "x"],
+                    name="discharge",
+                ).rio.write_crs(self.model.crs)
 
-                            discharge_grid_current_timestep: TwoDArrayFloat32 = (
-                                discharge_grid[-1]
-                            )  # Extract discharge from last timestep
+                # Get the discharge for all substeps at the threshold location and check for exceedances
+                threshold_location: tuple[float, float] = self.config["floods"][
+                    "threshold_location"
+                ]
+                station_discharge: xr.DataArray = discharge_grid.sel(
+                    x=threshold_location[0],
+                    y=threshold_location[1],
+                    method="nearest",
+                ).compute()
 
-                            # Convert discharge grid to an xarray DataArray
-                            discharge_grid: xr.DataArray = xr.DataArray(
-                                data=discharge_grid_current_timestep,
-                                coords={
-                                    "y": self.model.hydrology.grid.lat,
-                                    "x": self.model.hydrology.grid.lon,
-                                },
-                                dims=["y", "x"],
-                                name="forcing",
-                            )
+                threshold_m3_s: float = self.config["floods"]["discharge_threshold"]
+                maximum_discharge_m3_s: float = float(
+                    station_discharge.max(dim="substep", skipna=False).values
+                )
 
-                            discharge_grid: xr.DataArray = discharge_grid.rio.write_crs(
-                                self.model.crs
-                            )
+                # Check at which substep the discharge first exceeds the threshold, if at all
+                # This will later be used to compute the lead time of the event
+                first_exceedance_time: datetime | None = first_discharge_exceedance(
+                    station_discharge.values,
+                    threshold_m3_s,
+                    self.model.current_time,
+                    self.model.current_time
+                    + self.model.timestep_length
+                    - self.model.current_time,
+                )
 
-                            # Get location of the threshold from config file
-                            threshold_location: tuple[float, float] = self.model.config[
-                                "hazards"
-                            ]["floods"]["threshold_location"]
-                            x, y = threshold_location
-
-                            # Extract discharge from the previously extracted location
-                            discharge_location: xr.DataArray = discharge_grid.sel(
-                                x=x, y=y, method="nearest"
-                            ).compute()
-
-                            if self.model.multiverse_name is None:
-                                self.model.discharge_log.append(
-                                    {
-                                        "time": self.model.current_time,
-                                        "discharge": float(discharge_location.values),
-                                    }
-                                )
-                            else:
-                                if self.model.multiverse_mode == "discharge_detection":
-                                    print(
-                                        "Appending forecasted discharge values for flood detection..."
-                                    )
-                                    self.model.discharge_log.append(
-                                        {
-                                            "forecast_issue_date": self.model.forecast_issue_datetime,
-                                            "time": self.model.current_time,
-                                            "discharge": float(
-                                                discharge_location.values
-                                            ),
-                                            "member": self.model.forecast_member,
-                                        }
-                                    )
-                                    return
-                                    # do not run SFINCS if we are in a multiverse, as we first need to check the probability of discharge being above the threshold
-
-                        # Load in discharge_threshold after which there is a flood from the config file
-                        threshold: int = self.model.config["hazards"]["floods"][
-                            "discharge_threshold"
-                        ]
-
-                        if (
-                            self.model.multiverse_name is not None
-                            and self.model.multiverse_mode == "flood_simulation"
-                        ):
-                            print(
-                                f"Running multiverse in flood simulation mode, using forecast issued at {self.model.forecast_issue_datetime} for member {self.model.forecast_member}."
-                            )
-                            time_of_flood_detected = self.model.forecast_issue_datetime
-
-                        elif (
-                            self.model.multiverse_name is None
-                            and discharge_location > threshold
-                        ):
-                            time_of_flood_detected = self.model.current_time
-
-                        else:
-                            time_of_flood_detected = None
-
-                        if time_of_flood_detected is not None:
-                            start_time = time_of_flood_detected
-                            # start_time = time_of_flood_detected - timedelta(days=5) # Here we assume a flood duration of 10 days
-                            end_time = time_of_flood_detected + timedelta(days=5)
-                            # TODO: adjust this to Jens new logic of self.flood_events (add in this list instead of memory?)
-
-                            # new_event_mem = {
-                            #     "start_time": start_time,
-                            #     "end_time": end_time,
-                            # }
-
-                            # new_event_yaml = {
-                            #     "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                            #     "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                            # }
-
-                            new_event = {
-                                "start_time": start_time,
-                                "end_time": end_time,
-                            }
-
-                            hazards_cfg = self.model.config.setdefault("hazards", {})
-                            floods_cfg = hazards_cfg.setdefault("floods", {})
-                            events_mem = floods_cfg.setdefault("events", [])
-
-                            # event_exists_mem = any(
-                            #     e["start_time"] == new_event_mem["start_time"]
-                            #     and e["end_time"] == new_event_mem["end_time"]
-                            #     for e in events_mem
-                            # )
-
-                            event_exists_mem = any(
-                                e["start_time"] == new_event["start_time"]
-                                and e["end_time"] == new_event["end_time"]
-                                for e in events_mem
-                            )
-
-                            if not event_exists_mem:
-                                events_mem.append(new_event.copy())
-                                # events_mem.append(new_event_mem)
-                                print(
-                                    f"Flood event with start_time {new_event['start_time']} and end_time {new_event['end_time']} added to in-memory config."
-                                )
-                            else:
-                                print("Flood event already in in-memory config.")
-
-                            config_path = Path.cwd() / "model.yml"
-
-                            with open(config_path, "r") as f:
-                                config_yaml = yaml.safe_load(f) or {}
-
-                            hazards_yaml = config_yaml.setdefault("hazards", {})
-                            floods_yaml = hazards_yaml.setdefault("floods", {})
-                            events_yaml = floods_yaml.setdefault("events", [])
-
-                            event_exists_yaml = any(
-                                e.get("start_time") == new_event["start_time"]
-                                and e.get("end_time") == new_event["end_time"]
-                                for e in events_yaml
-                            )
-
-                            # event_exists_yaml = any(
-                            #     e.get("start_time") == new_event_yaml["start_time"]
-                            #     and e.get("end_time") == new_event_yaml["end_time"]
-                            #     for e in events_yaml
-                            # )
-
-                            if not event_exists_yaml:
-                                events_yaml.append(new_event.copy())
-                                # events_yaml.append(new_event_yaml)
-
-                                tmp_path = config_path.with_suffix(".tmp")
-                                with open(tmp_path, "w") as f:
-                                    yaml.safe_dump(config_yaml, f, sort_keys=False)
-
-                                tmp_path.replace(config_path)
-                                print(
-                                    f"Flood event with start_time {new_event['start_time']} and end_time {new_event['end_time']} added to added to model.yml."
-                                )
-                            else:
-                                print("Flood event already in model.yml.")
-
-                            # self.next_detection_time = (
-                            #     self.model.current_time + timedelta(days=10)
-                            # )
-
-                    end_time: datetime = datetime.combine(
-                        self.model.config["general"]["end_time"], datetime.min.time()
+                if forecast_detection:
+                    self.model.discharge_log.append(
+                        {
+                            "forecast_issue_date": self.model.forecast_issue_datetime,
+                            "time": self.model.current_time,
+                            "discharge": maximum_discharge_m3_s,
+                            "member": self.model.forecast_member,
+                            "first_exceedance_time": first_exceedance_time,
+                        }
                     )
+                    return
 
-                    if self.model.current_time == end_time:
-                        df_all: pd.DataFrame = pd.DataFrame(self.model.discharge_log)
-                        df_all.to_csv(
-                            Path(self.model.output_folder) / "discharge_timeseries.csv",
-                            index=False,
+                self.model.discharge_log.append(
+                    {
+                        "time": self.model.current_time,
+                        "discharge": maximum_discharge_m3_s,
+                    }
+                )
+
+                # If the discharge exceeds the threshold, schedule a flood event for simulation
+                if first_exceedance_time is not None:
+                    start_time: datetime = self.model.current_time
+                    end_time: datetime = start_time + timedelta(days=10)
+                    event_already_scheduled: bool = any(
+                        event.start_time == start_time and event.end_time == end_time
+                        for event in self.flood_events
+                    )
+                    if not event_already_scheduled:
+                        self.flood_events.append(
+                            Event(
+                                kind="flood",
+                                name=(
+                                    f"{start_time.strftime('%Y%m%dT%H%M%S')} - "
+                                    f"{end_time.strftime('%Y%m%dT%H%M%S')}"
+                                ),
+                                start_time=start_time,
+                                end_time=end_time,
+                                create_max_intensity_map=True,
+                            )
                         )
 
-            if self.model.multiverse_mode == "flood_simulation":
+                    new_event: dict[str, datetime] = {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                    }
+                    if self.config["floods"].get("events") is None:
+                        self.config["floods"]["events"] = []
+                    events_in_memory: list[dict[str, datetime]] = self.config["floods"][
+                        "events"
+                    ]
+                    if new_event not in events_in_memory:
+                        events_in_memory.append(new_event.copy())
+
+                    config_path: Path = Path.cwd() / "model.yml"
+                    with config_path.open("r") as config_file:
+                        config_yaml: dict = yaml.safe_load(config_file) or {}
+                    floods_yaml: dict = config_yaml.setdefault(
+                        "hazards", {}
+                    ).setdefault("floods", {})
+                    if floods_yaml.get("events") is None:
+                        floods_yaml["events"] = []
+                    events_in_yaml: list[dict[str, datetime]] = floods_yaml["events"]
+                    if new_event not in events_in_yaml:
+                        events_in_yaml.append(new_event.copy())
+                        # Replace atomically to avoid leaving a partially written config.
+                        temporary_config_path: Path = config_path.with_suffix(".tmp")
+                        with temporary_config_path.open("w") as config_file:
+                            yaml.safe_dump(config_yaml, config_file, sort_keys=False)
+                        temporary_config_path.replace(config_path)
+
+            if regular_detection and detection_enabled and not self.model.in_spinup:
+                reporting_end_time: datetime = datetime.combine(
+                    self.model.config["general"]["end_time"], datetime.min.time()
+                )
+                if self.model.current_time == reporting_end_time:
+                    discharge_log: pd.DataFrame = pd.DataFrame(self.model.discharge_log)
+                    discharge_log.to_csv(
+                        Path(self.model.output_folder) / "discharge_timeseries.csv",
+                        index=False,
+                    )
+
+            if (
+                self.model.multiverse_name is None
+                or not self.model.config["general"]["forecasts"]["long_term_analysis"]
+            ):
                 for event in self.flood_events:
                     event: Event = copy.deepcopy(event)
-
+                    if self.model.multiverse_name is not None:
+                        event.name = f"{self.model.multiverse_name}/{event.name}"
                     assert isinstance(event.start_time, datetime), (
                         f"Start time {event.start_time} must be a datetime object."
                     )
@@ -354,12 +335,6 @@ class HazardDriver(Module):
                     routing_substeps: int = self.floods.var.discharge_per_timestep[
                         0
                     ].shape[0]
-
-                    if self.model.multiverse_name:
-                        event_name: str = self.model.multiverse_name + "/" + event.name
-                        event.name = (
-                            event_name  # Update the event name with the multiverse name
-                        )
 
                     # since we are at the end of the timestep, we need to check if the current time plus the timestep length is greater than or equal to the start time of the event
                     timestep_end_time: datetime = (
@@ -396,6 +371,44 @@ class HazardDriver(Module):
                             raise ValueError(msg)
 
                         print(
-                            f"Running floods for event from {event.start_time} to {event.end_time} for member {self.model.forecast_member}"
+                            f"Running floods for event from {event.start_time} to {event.end_time}"
                         )
                         self.floods.run_single_event(event)
+
+            if self.model.multiverse_mode == "flood_simulation":
+                if self.model.in_spinup:
+                    raise ValueError(
+                        "Forecast flood simulations cannot run during spinup."
+                    )
+
+                # Stored forcing is already complete, run SFINCS once per member.
+                if self.model.current_time != self.model.forecast_issue_datetime:
+                    return
+
+                forecast_start_time: datetime = self.model.forecast_issue_datetime
+                # Include the entire final hydrological timestep saved in the reports
+                forecast_end_time: datetime = (
+                    self.model.simulation_end + self.model.timestep_length
+                )
+                if forecast_end_time <= forecast_start_time:
+                    raise ValueError(
+                        "The forecast simulation window must end after its issue date."
+                    )
+
+                forecasted_event: Event = Event(
+                    kind="flood",
+                    name=(
+                        f"{self.model.multiverse_name}/"
+                        f"{forecast_start_time.strftime('%Y%m%dT%H%M%S')} - "
+                        f"{forecast_end_time.strftime('%Y%m%dT%H%M%S')}"
+                    ),
+                    start_time=forecast_start_time,
+                    end_time=forecast_end_time,
+                    create_max_intensity_map=True,
+                )
+                self.model.logger.info(
+                    "Running forecast flood simulation from "
+                    f"{forecasted_event.start_time} to {forecasted_event.end_time} "
+                    f"for member {self.model.forecast_member}."
+                )
+                self.floods.run_single_event(forecasted_event)

@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
 import geopandas as gpd
 import numpy as np
@@ -49,8 +49,6 @@ class HouseholdVariables(Bucket):
     risk_perc_max: float
     risk_perc_min: float
     risk_decr: float
-    wlranges_and_measures: dict[str, Any]
-    implementation_times: Any
     rail_curve: pd.DataFrame
     warning_trigger: DynamicArray
     evacuated: DynamicArray
@@ -700,107 +698,180 @@ class Households(AgentBaseClass):
         self.flood_risk_perceptions.append(df)
 
     def load_critical_infrastructure(self) -> None:
-        """Load critical infrastructure elements (vulnerable and emergency facilities, energy substations) and assign them to postal codes.
+        """Load configured infrastructure assets and assign them to postal codes.
 
-        NOTE: This function is currently disabled due to missing infrastructure data.
+        Raises:
+            ValueError: If a source is invalid or a configured asset type has no assets.
         """
-        asset_types = self.model.config["agent_settings"]["households"][
+        # Load the configuration for critical infrastructure assets
+        CI_config: dict = self.model.config["agent_settings"]["households"][
             "warning_system"
-        ]["warning_target"]["critical_infrastructure"]["asset_type"]
-        # Load postal codes
-        postal_codes = self.postal_codes.copy()
+        ]["warning_target"]["critical_infrastructure"]
+        assets_config: dict = CI_config["assets_list"]
 
-        # Get critical facilities (vulnerable and emergency) and update buildings with relevant attributes
-        # TODO move loading of critical facilities to build phase and save it as a file, instead of loading it from OSM every time in the spinup
-        if self.model.config["agent_settings"]["households"]["warning_system"][
-            "warning_target"
-        ]["critical_infrastructure"]["get_critical_facilities"]:
-            self.get_critical_facilities()
+        if not isinstance(assets_config, dict):
+            raise ValueError(
+                "Critical infrastructure assets must be mapped to their sources."
+            )
 
-        # Assign critical facilities to postal codes
-        for asset_type in asset_types:
-            assets = read_geom(self.model.files["geom"][f"assets/{asset_type}"])
+        # If configured, extract and classify the selected OSM facilities
+        # TODO: Enable cache to this to avoid donwloading every time
+        # DISABLING for now
+        if CI_config["get_critical_assets"]:
+            self.get_critical_assets()
+
+        # For each asset type, load the assets from the specified source and assign them to postal codes
+        postal_codes: gpd.GeoDataFrame = self.postal_codes.copy()
+        facilities: gpd.GeoDataFrame | None = None
+
+        # TODO: move this to the initialization of households
+        self.critical_infrastructure_assets: dict[str, gpd.GeoDataFrame] = {}
+        for asset_object, settings in assets_config.items():
+            source: str | None = settings.get("source")
+            # Load each type from its explicitly configured source
+            if source == "osm":
+                if facilities is None:
+                    facilities = read_geom(
+                        self.model.input_folder
+                        / "geom"
+                        / "assets"
+                        / "critical_facilities.geoparquet"
+                    )
+                assets: gpd.GeoDataFrame = facilities[
+                    facilities["asset_object"] == asset_object
+                ].copy()
+            elif source == "model_files":
+                key: str | None = settings.get("key")
+                if not isinstance(key, str) or not key:
+                    raise ValueError(
+                        f"Asset type '{asset_object}' requires a model_files key."
+                    )
+                assets = read_geom(self.model.files["geom"][key])
+            else:
+                raise ValueError(
+                    f"Unsupported source '{source}' for asset: '{asset_object}'."
+                )
+            if assets.empty:
+                raise ValueError(
+                    f"No critical infrastructure found for asset: '{asset_object}'."
+                )
+            # Normalize the identifier across data sources
+            if "asset_id" not in assets.columns:
+                identifier_column: str = "id" if source == "osm" else "fid"
+                if identifier_column not in assets.columns:
+                    raise ValueError(
+                        f"Asset '{asset_object}' requires an asset_id or {identifier_column} column."
+                    )
+                assets = assets.rename(columns={identifier_column: "asset_id"})
+
+            self.critical_infrastructure_assets[asset_object] = assets
+            # Associate the selected assets with postal codes
             self.assign_critical_infrastructure_to_postal_codes(
-                assets, asset_type, postal_codes
+                assets, asset_object, postal_codes
             )
 
-    def get_critical_facilities(self) -> None:
-        """Extract critical infrastructure elements (vulnerable and emergency facilities) from OSM using the catchment polygon as boundary."""
-        catchment_boundary = read_geom(self.model.files["geom"]["catchment_boundary"])
+    def get_critical_assets(self) -> None:
+        """Extract and classify critical assets from OpenStreetMap.
 
-        # OSM needs a shapely geometry in EPSG:4326
-        catchment_boundary = catchment_boundary.to_crs(epsg=4326)
-        catchment_boundary = catchment_boundary.geometry.iloc[0]
+        The combined GeoParquet contains a facility type and a broad group for
+        each feature. IDs are assigned within the downloaded dataset.
 
-        # Define the crs for the output data
-        wanted_crs = self.model.config["hazards"]["floods"]["crs"]
+        Raises:
+            ValueError: If the catchment has no geometry or an OSM type is unsupported.
+        """
+        # Load the catchment boundary and reproject to EPSG:4326 for OSM queries
+        boundary: gpd.GeoDataFrame = read_geom(
+            self.model.files["geom"]["catchment_boundary"]
+        ).to_crs(epsg=4326)
 
-        # Define the queries for vulnerable and emergency facilities
-        # These queries are based on OSM tags, you can modify them as needed
-        # OSMnx considers an AND statement across different tag keys, so we need to split queries and then combine them later
-        queries: dict[str, dict[str, bool | str | list[str]]] = {
-            "vulnerable_facilities_query": {
-                "amenity": [
-                    "hospital",
-                    "school",
-                    "kindergarten",
-                    "nursing_home",
-                    "childcare",
-                ]
-            },
-            "emergency_facilities_query1": {"amenity": ["fire_station", "police"]},
-            "emergency_facilities_query2": {"emergency": ["ambulance_station"]},
+        if boundary.empty or boundary.geometry.is_empty.all():
+            raise ValueError("The catchment boundary has no geometry.")
+
+        catchment_geometry = boundary.geometry.union_all()
+        wanted_crs: str = self.model.config["hazards"]["floods"]["crs"]
+
+        # Define OSM queries for different facility types and their corresponding groups
+        queries = [
+            (
+                {
+                    "amenity": [
+                        "hospital",
+                        "school",
+                        "kindergarten",
+                        "nursing_home",
+                        "childcare",
+                    ]
+                },
+                "amenity",
+                "vulnerable",
+            ),
+            ({"amenity": ["fire_station", "police"]}, "amenity", "emergency"),
+            ({"emergency": ["ambulance_station"]}, "emergency", "emergency"),
+        ]
+
+        # Select only facility types explicitly configured to use OSM
+        asset_config: dict = self.model.config["agent_settings"]["households"][
+            "warning_system"
+        ]["warning_target"]["critical_infrastructure"]["assets_list"]
+        osm_assets: set[str] = {
+            asset_object
+            for asset_object, settings in asset_config.items()
+            if isinstance(settings, dict) and settings.get("source") == "osm"
         }
-
-        # Extract the wanted facilities from OSM using the queries
-        gdf = {}
-        for key, query in queries.items():
-            gdf[key] = ox.features_from_polygon(catchment_boundary, query)
-
-        # Combine emergency facilities from all queries
-        all_critical_facilities = gpd.GeoDataFrame(
-            pd.concat(
-                [
-                    gdf["emergency_facilities_query1"],
-                    gdf["emergency_facilities_query2"],
-                    gdf["vulnerable_facilities_query"],
-                ],
-                ignore_index=True,
+        supported_assets: set[str] = {
+            asset_object
+            for tags, _, _ in queries
+            for values in tags.values()
+            for asset_object in values
+        }
+        unsupported_assets: set[str] = osm_assets - supported_assets
+        if unsupported_assets:
+            raise ValueError(
+                f"Unsupported OSM asset object: {sorted(unsupported_assets)}"
             )
+        if not osm_assets:
+            self.logger.info("No critical asset object configured for OSM extraction.")
+            return
+
+        ox.settings.use_cache = True
+        # Query OSM for each set of tags and combine the results into a single GeoDataFrame.
+        facilities_by_query: list[gpd.GeoDataFrame] = []
+        for tags, type_column, facility_group in queries:
+            selected_types: list[str] = [
+                value for value in tags[type_column] if value in osm_types
+            ]
+            if not selected_types:
+                continue
+            facilities: gpd.GeoDataFrame = ox.features_from_polygon(
+                catchment_geometry, {type_column: selected_types}
+            ).copy()
+            facilities["facility_type"] = facilities[type_column]
+            facilities["asset_object"] = asset_object
+            facilities["asset_type"] = asset_type
+            facilities_by_query.append(facilities)
+
+        all_facilities: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            pd.concat(facilities_by_query, ignore_index=True), crs="EPSG:4326"
         )
 
-        # Reproject the facilities to the wanted CRS and save them
-        all_critical_facilities.insert(0, "id", all_critical_facilities.index + 1)
-        all_critical_facilities.to_crs(wanted_crs, inplace=True)
+        # Select only the relevant columns and assign unique IDs
+        all_facilities = all_facilities[["geometry", "asset_object", "asset_type"]]
+        all_facilities.insert(0, "asset_id", range(1, len(all_facilities) + 1))
+        all_facilities = all_facilities.to_crs(wanted_crs)
 
         # TODO: change this to write_geom
-        save_path = (
+        save_path: Path = (
             self.model.input_folder
             / "geom"
             / "assets"
             / "critical_facilities.geoparquet"
         )
-        all_critical_facilities.to_parquet(save_path)
-        print(f"Loaded {len(all_critical_facilities)} critical facilities.")
 
-        # Update buildings with critical infrastructure attributes
-        buildings = self.update_buildings_w_critical_infrastructure(
-            all_critical_facilities
-        )
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        all_facilities.to_parquet(save_path)
+        self.logger.info("Loaded %s critical facilities.", len(all_facilities))
 
-        # Save updated buildings with critical infrastructure attributes
-        save_path = (
-            self.model.input_folder
-            / "geom"
-            / "assets"
-            / "buildings_with_critical_facilities.geoparquet"
-        )
-        buildings.to_parquet(save_path)
-
-        # Update the buildings (global variable) for later use
-        self.buildings = pd.DataFrame(buildings).drop("geometry", axis=1)
-        # self.buildings = buildings
-
+    # TODO: this function is not used anywhere, but it might be useful in the future if we want to update building attributes based on critical infrastructure data
     def update_buildings_w_critical_infrastructure(
         self, critical_infrastructure: gpd.GeoDataFrame
     ) -> gpd.GeoDataFrame:
@@ -849,9 +920,16 @@ class Households(AgentBaseClass):
         return buildings
 
     def assign_critical_infrastructure_to_postal_codes(
-        self, assets: gpd.GeoDataFrame, asset_type: str, postal_codes: gpd.GeoDataFrame
+        self,
+        assets: gpd.GeoDataFrame,
+        asset_object: str,
+        postal_codes: gpd.GeoDataFrame,
     ) -> None:
-        """Assign critical infrastructure assets to postal codes based on spatial proximity. Every postal code gets assigned to the nearest asset.
+        """Assign each postal code to the nearest supported infrastructure asset.
+
+        Distances are measured in meters from postal code polygons to asset
+        centroids. Equidistant assets are all retained. Other asset types are
+        skipped pending network analysis.
 
         Args:
             assets: GeoDataFrame of critical infrastructure assets.
@@ -859,57 +937,82 @@ class Households(AgentBaseClass):
             postal_codes: GeoDataFrame of postal codes.
 
         Raises:
-            ValueError: If the asset type is not recognized.
+            ValueError: If identifiers, geometries, or coordinate systems are invalid.
         """
-        if asset_type == "energy_substations":
-            postal_codes_with_assets = gpd.sjoin_nearest(
-                postal_codes,
-                assets[["fid", "geometry"]],
-                how="left",
-                distance_col="distance",
+        # TODO: make these stated global variables
+        emergency_facilities = [
+            "fire_station",
+            "police",
+            "ambulance_station",
+            "hospital",
+        ]
+        basic_services = [
+            "energy_substations",
+            "water_treatment_plants",
+            "wastewater_treatment_plants",
+        ]
+
+        # Leave vulnerable facilities for the planned network analysis
+        if (
+            asset_object not in emergency_facilities
+            and asset_object not in basic_services
+        ):
+            self.model.logger.info(
+                "Skipping postal code assignment for %s; network analysis is not implemented.",
+                asset_object,
             )
-            # Rename the fid_right column for clarity
-            postal_codes_with_assets.rename(
-                columns={"fid_right": "asset_id"},
-                inplace=True,
+            return
+
+        # Check if the postal codes are in a projected coordinate reference system (CRS) for accurate distance calculations
+        if not postal_codes.crs.is_projected:
+            self.model.logger.warning(
+                "Postal codes use a geographic CRS. Centroids and distances may be inaccurate."
             )
 
-        elif asset_type == "critical_facilities":
-            critical_facilities_centroid = assets.copy()
-            critical_facilities_centroid["geometry"] = (
-                critical_facilities_centroid.geometry.centroid
-            )
+        # Make sure the assets have the same CRS as the postal codes
+        asset_centroids: gpd.GeoDataFrame = assets[["asset_id", "geometry"]].to_crs(
+            postal_codes.crs
+        )
 
-            # Spatial join to assign postal codes to critical facilities based on their centroid
-            critical_facilities_with_postal_codes = gpd.sjoin(
-                critical_facilities_centroid[
-                    ["id", "addr:city", "amenity", "name", "source", "geometry"]
-                ],
-                postal_codes[["postcode", "geometry"]],
-                how="left",
-                predicate="within",
-            )
-            critical_facilities_with_postal_codes.drop(
-                columns=["index_right"], inplace=True
-            )
+        # Compute centroids of the asset geometries for distance calculations
+        asset_centroids["geometry"] = asset_centroids.geometry.centroid
 
-            # Rename the id column for clarity and drop fid so it can save to gpkg
-            postal_codes_with_assets = critical_facilities_with_postal_codes.rename(
-                columns={"id": "asset_id"}
-            )
-        else:
-            raise ValueError(
-                f"Invalid asset type: {asset_type}. Must be 'energy_substations' or 'critical_facilities'. Will be elaborated later to include more types of critical infrastructure assets."
-            )
-        # TODO: need to improve this with Thiessen polygons or similar
+        # Preserve all equally near assets and return geometries in the original CRS
+        postal_codes_with_assets: gpd.GeoDataFrame = gpd.sjoin_nearest(
+            postal_codes, asset_centroids, how="left", distance_col="distance"
+        ).to_crs(postal_codes.crs)
+
+        # critical_facilities_centroid = assets.copy()
+        # critical_facilities_centroid["geometry"] = (
+        #     critical_facilities_centroid.geometry.centroid
+        # )
+
+        # # Spatial join to assign postal codes to critical facilities based on their centroid
+        # critical_facilities_with_postal_codes = gpd.sjoin(
+        #     critical_facilities_centroid[
+        #         ["id", "addr:city", "amenity", "name", "source", "geometry"]
+        #     ],
+        #     postal_codes[["postcode", "geometry"]],
+        #     how="left",
+        #     predicate="within",
+        # )
+        # critical_facilities_with_postal_codes.drop(
+        #     columns=["index_right"], inplace=True
+        # )
+
+        # # Rename the id column for clarity and drop fid so it can save to gpkg
+        # postal_codes_with_assets = critical_facilities_with_postal_codes.rename(
+        #     columns={"id": "asset_id"}
+        # )
 
         # Save the postal codes with associated critical infrastructure assets to a file
-        path = (
+        path: Path = (
             self.model.input_folder
             / "geom"
             / "assets"
-            / f"postal_codes_with_critical_infrastructure_{asset_type}.geoparquet"
+            / f"postal_codes_with_critical_infrastructure_{asset_object}.geoparquet"
         )
+        path.parent.mkdir(parents=True, exist_ok=True)
         postal_codes_with_assets.to_parquet(path)
 
     def decide_household_strategy(self) -> None:

@@ -301,6 +301,85 @@ class Floods(Module):
 
         return sfincs_model
 
+    def _stored_runoff_forcing(self, event: Event) -> xr.DataArray:
+        """Read first-pass member runoff for a flood event.
+
+        Args:
+            event: Flood event whose complete time range must be covered.
+
+        Returns:
+            Runoff per routing substep (meters), arranged as (time, y, x).
+
+        Raises:
+            FileNotFoundError: If the saved runoff report does not exist.
+            ValueError: If the variable, dimensions, timestamps, or coverage
+                are invalid.
+        """
+        runoff_path: Path = (
+            self.model.report_folder
+            / "multiverse_hindcasts"
+            / "discharge_detection"
+            / str(self.model.multiverse_name)
+            / "hydrology"
+            / "sfincs_overland_runoff_m.zarr"
+        )
+        if not runoff_path.exists():
+            raise FileNotFoundError(f"Saved runoff report not found: {runoff_path}")
+
+        runoff: xr.DataArray = read_zarr(runoff_path)
+
+        if runoff.name != "sfincs_overland_runoff_m":
+            raise ValueError(f"Expected 'sfincs_overland_runoff_m' in {runoff_path}.")
+        if set(runoff.dims) != {"time", "y", "x"}:
+            raise ValueError("Saved runoff must have time, y, and x dimensions.")
+
+        # Transpose to (time, y, x) for consistency with SFINCS forcing expectations
+        runoff = runoff.transpose("time", "y", "x")
+        timestamps: pd.DatetimeIndex = pd.DatetimeIndex(runoff.time.values)
+
+        if len(timestamps) < 2 or timestamps.hasnans:
+            raise ValueError("Saved runoff requires at least two valid timestamps.")
+
+        substep: pd.Timedelta = timestamps[1] - timestamps[0]
+        if (
+            substep <= pd.Timedelta(0)
+            or not (timestamps[1:] - timestamps[:-1] == substep).all()
+        ):
+            raise ValueError(
+                "Saved runoff timestamps must be increasing and regularly spaced."
+            )
+
+        # Reports label interval midpoints; existing SFINCS forcing labels starts of intervals. Shift timestamps to match SFINCS expectations.
+        runoff = runoff.assign_coords(time=timestamps - substep / 2)
+
+        # Repeat the final value at the endpoint, as the memory-based path does.
+        final_endpoint: xr.DataArray = runoff.isel(time=[-1]).assign_coords(
+            time=[timestamps[-1] + substep / 2]
+        )
+        runoff = xr.concat([runoff, final_endpoint], dim="time")
+        timestamps = pd.DatetimeIndex(runoff.time.values)
+
+        if timestamps[0] > event.start_time or timestamps[-1] < event.end_time:
+            raise ValueError(
+                f"Saved runoff in {runoff_path} does not cover "
+                f"{event.start_time} through {event.end_time}."
+            )
+
+        # Retain the samples bracketing the event when boundaries fall between steps.
+        start_index: int = (
+            int(timestamps.searchsorted(np.datetime64(event.start_time), side="right"))
+            - 1
+        )
+        end_index: int = (
+            int(timestamps.searchsorted(np.datetime64(event.end_time), side="left")) + 1
+        )
+        runoff = runoff.isel(time=slice(start_index, end_index))
+
+        if runoff.rio.crs is None:
+            runoff = runoff.rio.write_crs(self.model.crs)
+
+        return runoff
+
     def set_forcing(
         self,
         sfincs_model: SFINCSRootModel,
@@ -324,6 +403,14 @@ class Floods(Module):
         Raises:
             ValueError: If the forcing method is unknown.
         """
+        # Determine whether to use stored runoff grid based on the forcing method and forecast analysis configuration
+        use_stored_runoff_grid: bool = (
+            self.config["forcing_method"] == "accumulated_runoff"
+            and self.model.config["general"]["forecasts"]["long_term_analysis"]
+            and self.model.multiverse_mode == "flood_simulation"
+            and self.model.multiverse_name is not None
+        )
+
         # Save the flood depth to a zarr file
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
             event=event,
@@ -333,58 +420,62 @@ class Floods(Module):
             ],
         )
 
-        routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
-        if self.config["forcing_method"] == "headwater_points":
-            forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(
-                    list(self.var.discharge_per_timestep)
-                    + [
-                        self.var.discharge_per_timestep[-1][-1]
-                    ]  # add last timestep again (ensuring stable forcing during last hour)
-                )
-            )
-        elif self.config["forcing_method"] == "accumulated_runoff":
-            forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(
-                    list(self.var.runoff_m_per_timestep)
-                    + [self.var.runoff_m_per_timestep[-1][-1]]
-                )  # add last timestep again (ensuring stable forcing during last hour)
-            )
+        if use_stored_runoff_grid:
+            forcing_grid: xr.DataArray = self._stored_runoff_forcing(event)
         else:
-            raise ValueError(
-                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
+            routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
+            if self.config["forcing_method"] == "headwater_points":
+                forcing_grid = self.hydrology.grid.decompress(
+                    np.vstack(
+                        list(self.var.discharge_per_timestep)
+                        + [
+                            self.var.discharge_per_timestep[-1][-1]
+                        ]  # add last timestep again (ensuring stable forcing during last hour)
+                    )
+                )
+            elif self.config["forcing_method"] == "accumulated_runoff":
+                forcing_grid = self.hydrology.grid.decompress(
+                    np.vstack(
+                        list(self.var.runoff_m_per_timestep)
+                        + [self.var.runoff_m_per_timestep[-1][-1]]
+                    )  # add last timestep again (ensuring stable forcing during last hour)
+                )
+            else:
+                raise ValueError(
+                    f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
+                )
+
+            substep_size: timedelta = self.model.timestep_length / routing_substeps
+
+            # convert the forcing grid to an xarray DataArray
+            forcing_grid: xr.DataArray = xr.DataArray(
+                data=forcing_grid,
+                coords={
+                    "time": pd.date_range(
+                        end=self.model.current_time
+                        + self.model.timestep_length,  # end of the current timestep
+                        periods=len(self.var.discharge_per_timestep) * routing_substeps
+                        + 1,
+                        freq=substep_size,
+                    ),
+                    "y": self.hydrology.grid.lat,
+                    "x": self.hydrology.grid.lon,
+                },
+                dims=["time", "y", "x"],
+                name="forcing",
             )
 
-        substep_size: timedelta = self.model.timestep_length / routing_substeps
+            # ensure that we have forcing data for the entire event period
+            assert (
+                pd.to_datetime(forcing_grid.time.values[-1]).to_pydatetime()
+                >= event.end_time
+            )
+            assert (
+                pd.to_datetime(forcing_grid.time.values[0]).to_pydatetime()
+                <= event.start_time
+            )
 
-        # convert the forcing grid to an xarray DataArray
-        forcing_grid: xr.DataArray = xr.DataArray(
-            data=forcing_grid,
-            coords={
-                "time": pd.date_range(
-                    end=self.model.current_time
-                    + self.model.timestep_length,  # end of the current timestep
-                    periods=len(self.var.discharge_per_timestep) * routing_substeps + 1,
-                    freq=substep_size,
-                ),
-                "y": self.hydrology.grid.lat,
-                "x": self.hydrology.grid.lon,
-            },
-            dims=["time", "y", "x"],
-            name="forcing",
-        )
-
-        # ensure that we have forcing data for the entire event period
-        assert (
-            pd.to_datetime(forcing_grid.time.values[-1]).to_pydatetime()
-            >= event.end_time
-        )
-        assert (
-            pd.to_datetime(forcing_grid.time.values[0]).to_pydatetime()
-            <= event.start_time
-        )
-
-        forcing_grid: xr.DataArray = forcing_grid.rio.write_crs(self.model.crs)
+            forcing_grid: xr.DataArray = forcing_grid.rio.write_crs(self.model.crs)
 
         if self.config["forcing_method"] == "headwater_points":
             simulation.set_headwater_forcing_from_grid(  # ty:ignore[unresolved-attribute]
@@ -439,7 +530,7 @@ class Floods(Module):
             ValueError: If neither 'export_max_intensity' nor 'export_final_intensity' is True in the event.
             ValueError: If both 'export_max_intensity' and 'export_final_intensity' are True in the event.
         """
-        print("running single event")
+        print("Running single event...")
         assert event.kind == "flood", (
             f"Expected event type 'flood', but got '{event.kind}'"
         )
@@ -625,6 +716,7 @@ class Floods(Module):
         filename: Path = (
             self.model.output_folder / "flood_maps" / (event.name + postfix + ".zarr")
         )
+        self.model.logger.info(f"Saving flood map to {filename}...")
 
         flood_depth: xr.DataArray = write_zarr(
             da=flood_depth,
@@ -635,7 +727,9 @@ class Floods(Module):
         # This check is done to compute damages (using ERA5) only after multiverse is finished
         if self.model.multiverse_name is None:
             if self.model.config["general"]["forecasts"]["use"]:
-                print("Multiverse no longer active, now compute flood damages...")
+                self.model.logger.info(
+                    "Multiverse no longer active, now compute flood damages..."
+                )
             # Check if damage simulation is enabled before calculating damages
             if self.model.config["hazards"]["damage"]["simulate"]:
                 self.model.agents.households.flood_risk_module.flood(
@@ -1042,6 +1136,24 @@ class Floods(Module):
                 all_rivers=all_rivers,
             )
             start_time = discharge.index[0] + pd.DateOffset(years=10)
+        elif (
+            self.model.config["general"]["forecasts"]["long_term_analysis"]
+            and self.model.multiverse_mode == "flood_simulation"
+            and self.model.multiverse_name is not None
+        ):
+            self.model.logger.info(
+                "Long-term analysis is enabled, obtaining discharge from report files for each member."
+            )
+            discharge = get_discharge_per_river(
+                folder=self.model.report_folder
+                / "multiverse_hindcasts"
+                / "discharge_detection"
+                / self.model.multiverse_name
+                / "hydrology.routing",
+                rivers=rivers,
+                all_rivers=all_rivers,
+            )
+            start_time = discharge.index[0]
         else:
             discharge = get_discharge_per_river(
                 rivers=rivers,
